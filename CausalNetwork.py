@@ -7,6 +7,9 @@ from networkx.drawing.nx_agraph import write_dot, graphviz_layout
 from typing import List, Union, Dict
 from collections import deque
 import matplotlib.pyplot as plt
+import re
+
+detex_pattern = re.compile(r"([^${}&\\]+)+")
 
 
 class SCM:
@@ -23,8 +26,8 @@ class SCM:
         self.functions = functions
         self.noise_models = noise_models
         if variable_names is not None:
-            self.var_names = np.array(variable_names)
-            self.var_names_draw = None
+            self.var_names = np.array(["".join(re.findall(detex_pattern, name)) for name in variable_names])
+            self.var_names_draw = np.array(variable_names)
         else:
             self.var_names = np.asarray(["X_" + str(i) + "" for i in range(self.nr_variables)])
             self.var_names_draw = np.asarray([r"$X_{" + str(i) + r"}$" for i in range(self.nr_variables)])
@@ -52,7 +55,7 @@ class SCM:
         return self.graph[item]
 
     def __str__(self):
-        return self.to_str()
+        return self.str()
 
     def sample_graph(self, n, seed=None):
         if seed is not None:
@@ -70,33 +73,29 @@ class SCM:
 
     def traverse_from_roots(self):
         next_nodes_queue = deque([self.roots])
-        visited_nodes = []
+        visited_nodes = set()
         while next_nodes_queue:
             next_nodes = next_nodes_queue.popleft()
             for nn in next_nodes:
                 next_nodes_queue.append(self.graph.successors(nn))
                 if nn not in visited_nodes:
                     yield nn
-                    visited_nodes.append(nn)
+                    visited_nodes.add(nn)
 
     def plot(self, node_size=1000, **kwargs):
         pos = graphviz_layout(self.graph, prog='dot')
         plt.title('Causal Network')
-        if self.var_names_draw is not None:
-            var_names = self.var_names_draw
-        else:
-            var_names = self.var_names
-        labels_dict = {label: draw_label for label, draw_label in zip(range(self.nr_variables), var_names)}
+        labels_dict = {label: draw_label for label, draw_label in zip(range(self.nr_variables), self.var_names_draw)}
         nx.draw(self.graph, pos, labels=labels_dict, with_labels=True, node_size=node_size, **kwargs)
         plt.show()
 
-    def to_str(self):
+    def str(self):
         lines = [f"Structural Causal Model of {self.nr_variables} variables: " + ", ".join(self.var_names),
                  'Defined by the Structural Assignment Functions as follows:']
         max_var_name_space = max([len(var_name) for var_name in self.var_names])
         for node in range(self.nr_variables):
             dep_var_names = [self.graph.nodes[pred]['label'] for pred in self.graph.predecessors(node)]
-            line = f"{str(self.var_names[node]).rjust(max_var_name_space)} := {self.graph.nodes[node]['function'].to_str(dep_var_names)}"
+            line = f"{str(self.var_names[node]).rjust(max_var_name_space)} := {self.graph.nodes[node]['function'].str(dep_var_names)}"
             lines.append(line)
         lines.append("For a plot of the causal graph call 'plot' on the SCM object.")
         return "\n".join(lines)
