@@ -4,27 +4,28 @@ from CausalNetwork import SCM
 
 if __name__ == '__main__':
 
-    print(PolynomialAssignment([0, 1], [34, 5, .3], [3, 4, 6]))
     cn = SCM(
-        parents=[[],
-                 [0],
-                 [0, 1],
-                 [1, 2],
-                 [0, 2]
-                 ],
-        functions=[LinearAssignment(1),
-                   LinearAssignment(1, 1, 2),
-                   LinearAssignment(1, 1, 3, 2),
-                   PolynomialAssignment([0, 1], [0, 1, 1 / 2], [0, 0, 4]),
-                   LinearAssignment(1, 1, 3 / 2, 2.)
-                   ],
-        noise_models=[NoiseGenerator("standard_normal")] * 5,
-        variable_names=["$X_0$", "$X_1$", "$X_2$", "$X_3$", "Y"]
-
+        assignment_dict={"X_0": [[],
+                                 LinearAssignment(1),
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
+                         "X_1": [["X_0"],
+                                 LinearAssignment(1, 1, 2),
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
+                         "X_2": [["X_0", "X_1"],
+                                 LinearAssignment(1, 1, 3, 2),
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
+                         "X_3": [["X_1", "X_2"],
+                                 PolynomialAssignment([0, 1], [0, 1, 1 / 2], [0, 0, 4]),
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
+                         "Y": [["X_0", "X_2"],
+                               PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 1]),
+                               NoiseGenerator("negative_binomial", n=30, p=0.5)]},
+        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$", "X_2": "$X_2$", "X_3": "$X_3$"}
     )
     for node in cn.traverse_from_roots():
         print(node)
     cn.plot()
-    sample = cn.sample_graph(10)
+    sample = cn.sample(1000, ["Y"])
     print(sample)
+    print(sample.mean(axis=0))
     print(cn)

@@ -66,7 +66,7 @@ class LinearAssignment(BaseAssignment):
         if variable_names is None:
             variable_names = [f"x_{i}" for i in range(len(self.coefficients))]
         variable_names = ["N"] + variable_names
-        rep = f"{round(self.offset, 2)} + {round(self.noise_factor, 2)} N"
+        rep = f"{f'{round(self.offset, 2)} + ' if self.offset != 0 else ''}{round(self.noise_factor, 2)} N"
         for i, c in enumerate(self.coefficients):
             if c != 0:
                 rep += f" + {round(c, 2)} {variable_names[i + 1]}"

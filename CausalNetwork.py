@@ -1,55 +1,40 @@
 import numpy as np
 import pandas as pd
-
+import logging
 import networkx as nx
 from networkx.drawing.nx_agraph import write_dot, graphviz_layout
 
 from typing import List, Union, Dict
-from collections import deque
+from collections import deque, defaultdict
 import matplotlib.pyplot as plt
-import re
-
-detex_pattern = re.compile(r"([^${}&\\]+)+")
 
 
 class SCM:
     def __init__(self,
-                 parents: List[List[int]],
-                 functions: List[object],
-                 noise_models: List[object],
-                 variable_names: List[str] = None):
+                 assignment_dict: Dict[any, List[Union[List[any], object, object]]],
+                 variable_tex_names: Dict = None):
 
         self.roots = []
-        self.nr_variables = len(parents)
+        self.nr_variables = len(assignment_dict)
 
-        self.parents = parents
-        self.functions = functions
-        self.noise_models = noise_models
-        if variable_names is not None:
-            self.var_names = np.array(["".join(re.findall(detex_pattern, name)) for name in variable_names])
-            self.var_names_draw = np.array(variable_names)
-        else:
-            self.var_names = np.asarray(["X_" + str(i) + "" for i in range(self.nr_variables)])
-            self.var_names_draw = np.asarray([r"$X_{" + str(i) + r"}$" for i in range(self.nr_variables)])
+        self.var_names = np.array(list(assignment_dict.keys()))
+        if variable_tex_names is not None:
+            for name in self.var_names:
+                if name not in variable_tex_names:
+                    variable_tex_names[name] = name
+        self.var_names_draw_dict = variable_tex_names
 
-        self.node_attributes = ["function", "noise", "data", "label"]
+        self.var_name_to_node = dict()
+        self.node_attributes = ["function", "noise"]
 
         self.graph = nx.DiGraph()
-
-        for i, (name, parent_list, function, noise) in enumerate(
-                zip(
-                    self.var_names,
-                    self.parents,
-                    self.functions,
-                    self.noise_models
-                )
-        ):
-            self.graph.add_node(i, function=function, noise=noise, data=None, label=name)
-            if parent_list:
-                for parent in parent_list:
-                    self.graph.add_edge(parent, i)
+        for node_name, (parents_list, function, noise_model) in assignment_dict.items():
+            self.graph.add_node(node_name, function=function, noise=noise_model)
+            if parents_list:
+                for parent in parents_list:
+                    self.graph.add_edge(parent, node_name)
             else:
-                self.roots.append(i)
+                self.roots.append(node_name)
 
     def __getitem__(self, item):
         return self.graph[item]
@@ -57,19 +42,39 @@ class SCM:
     def __str__(self):
         return self.str()
 
-    def sample_graph(self, n, seed=None):
+    def _causal_iterator(self, variables=None):
+        if variables is None:
+            return self.traverse_from_roots()
+
+        vars_to_sample = defaultdict(int)
+        var_present = []
+        for variable in variables:
+            if variable not in self.var_names:
+                logging.warning(f"Variable name {variable} unknown to naming list. Omitting it.")
+            else:
+                var_present.append(variable)
+                vars_to_sample[variable] = 0
+        queue = deque(var_present)
+        while queue:
+            nn = queue.popleft()
+            for parent in self.graph.predecessors(nn):
+                vars_to_sample[parent] += 1
+                queue.append(parent)
+        return (key for (key, value) in sorted(vars_to_sample.items(), key=lambda x: x[1], reverse=True))
+
+    def sample(self, n, variables=None, seed=None):
         if seed is not None:
             np.random.seed(seed)
-
-        sample = pd.DataFrame([], index=range(n), columns=self.var_names)
-        for node in self.traverse_from_roots():
+        var_names = self.var_names if variables is None else variables
+        sample = dict()
+        for node in self._causal_iterator(variables):
             node_attr = self.graph.nodes[node]
-            node_attr["data"] = node_attr["function"](
+            data = node_attr["function"](
                 node_attr["noise"](n),
-                *(self.graph.nodes[pred]["data"] for pred in self.graph.predecessors(node))
+                *(sample[pred] for pred in self.graph.predecessors(node))
             )
-            sample.loc[:, node_attr['label']] = node_attr["data"]
-        return sample
+            sample[node] = data
+        return pd.DataFrame.from_dict(sample)
 
     def traverse_from_roots(self):
         next_nodes_queue = deque([self.roots])
@@ -85,18 +90,16 @@ class SCM:
     def plot(self, node_size=1000, **kwargs):
         pos = graphviz_layout(self.graph, prog='dot')
         plt.title('Causal Network')
-        labels_dict = {label: draw_label for label, draw_label in zip(range(self.nr_variables), self.var_names_draw)}
-        nx.draw(self.graph, pos, labels=labels_dict, with_labels=True, node_size=node_size, **kwargs)
+        nx.draw(self.graph, pos, labels=self.var_names_draw_dict, with_labels=True, node_size=node_size, **kwargs)
         plt.show()
 
     def str(self):
         lines = [f"Structural Causal Model of {self.nr_variables} variables: " + ", ".join(self.var_names),
-                 'Defined by the Structural Assignment Functions as follows:']
+                 'Defined by the Structural Assignment Functions:']
         max_var_name_space = max([len(var_name) for var_name in self.var_names])
-        for node in range(self.nr_variables):
-            dep_var_names = [self.graph.nodes[pred]['label'] for pred in self.graph.predecessors(node)]
-            line = f"{str(self.var_names[node]).rjust(max_var_name_space)} := {self.graph.nodes[node]['function'].str(dep_var_names)}"
+        for node in self.graph.nodes:
+            parents_vars = [pred for pred in self.graph.predecessors(node)]
+            line = f"{str(node).rjust(max_var_name_space)} := {self.graph.nodes[node]['function'].str(parents_vars)}"
             lines.append(line)
         lines.append("For a plot of the causal graph call 'plot' on the SCM object.")
         return "\n".join(lines)
-
