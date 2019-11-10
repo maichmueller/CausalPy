@@ -46,23 +46,25 @@ class SCM:
         if variables is None:
             return self.traverse_from_roots()
         visited_nodes = set()
-        vars_to_sample_level = defaultdict(int)
+        vars_to_sample_priority = defaultdict(int)
         var_present = []
         for variable in variables:
             if variable not in self.var_names:
-                logging.warning(f"Variable name {variable} unknown to naming list. Omitting it.")
+                logging.warning(f"Variable name '{variable}' unknown to naming list. Omitting it.")
             else:
                 var_present.append(variable)
-                vars_to_sample_level[variable] = 0
         queue = deque(var_present)
         while queue:
             nn = queue.popleft()
             if nn not in visited_nodes:
                 for parent in self.graph.predecessors(nn):
-                    vars_to_sample_level[parent] = max(vars_to_sample_level[parent], vars_to_sample_level[nn] + 1)
+                    vars_to_sample_priority[parent] = max(
+                        vars_to_sample_priority[parent],
+                        vars_to_sample_priority[nn] + 1
+                    )
                     queue.append(parent)
                 visited_nodes.add(nn)
-        return (key for (key, value) in sorted(vars_to_sample_level.items(), key=lambda x: x[1], reverse=True))
+        return (key for (key, value) in sorted(vars_to_sample_priority.items(), key=lambda x: x[1], reverse=True))
 
     def sample(self, n, variables=None, seed=None):
         if seed is not None:

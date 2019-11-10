@@ -1,6 +1,7 @@
 from Assignments import LinearAssignment, PolynomialAssignment
 from NoiseModels import NoiseGenerator
 from CausalNetwork import SCM
+import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
 
@@ -25,7 +26,8 @@ if __name__ == '__main__':
     for node in cn.traverse_from_roots():
         print(node)
     cn.plot()
-    sample = cn.sample(1000, ["Y"])
+    sample = cn.sample(1000, ["Y"])["Y"].hist(bins=100)
+    plt.show()
     print(sample)
     print(sample.mean(axis=0))
     print(cn)
