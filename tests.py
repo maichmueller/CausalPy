@@ -1,6 +1,6 @@
 import unittest
 from unittest import TestCase
-from Assignments import LinearAssignment
+from assignments import LinearAssignment
 import numpy as np
 
 

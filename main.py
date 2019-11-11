@@ -1,33 +1,30 @@
-from Assignments import LinearAssignment, PolynomialAssignment
-from NoiseModels import NoiseGenerator
-from CausalNetwork import SCM
+from assignments import LinearAssignment, PolynomialAssignment
+from noise_models import NoiseGenerator
+from scm import SCM
 import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
 
     cn = SCM(
-        assignment_dict={"X_0": [[],
+        assignment_dict={"X_0": ([],
                                  LinearAssignment(1),
-                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
-                         "X_1": [["X_0"],
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)),
+                         "X_1": (["X_0"],
                                  LinearAssignment(1, 1, 2),
-                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
-                         "X_2": [["X_0", "X_1"],
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)),
+                         "X_2": (["X_0", "X_1"],
                                  LinearAssignment(1, 1, 3, 2),
-                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
-                         "X_3": [["X_1", "X_2"],
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)),
+                         "X_3": (["X_1", "X_2"],
                                  PolynomialAssignment([0, 1], [0, 1, 1 / 2], [0, 0, 4]),
-                                 NoiseGenerator("negative_binomial", n=30, p=0.5)],
-                         "Y": [["X_0", "X_2"],
+                                 NoiseGenerator("negative_binomial", n=30, p=0.5)),
+                         "Y": (["X_0", "X_2"],
                                PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 1]),
-                               NoiseGenerator("negative_binomial", n=30, p=0.5)]},
+                               NoiseGenerator("negative_binomial", n=30, p=0.5))},
         variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$", "X_2": "$X_2$", "X_3": "$X_3$"}
     )
-    for node in cn.traverse_from_roots():
-        print(node)
     cn.plot()
-    sample = cn.sample(1000, ["Y"])["Y"].hist(bins=100)
-    plt.show()
+    sample = cn.sample(100000)
     print(sample)
     print(sample.mean(axis=0))
     print(cn)
