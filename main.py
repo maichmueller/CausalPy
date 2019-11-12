@@ -1,7 +1,6 @@
-from assignments import LinearAssignment, PolynomialAssignment
-from noise_models import NoiseGenerator
-from scm import SCM
-import matplotlib.pyplot as plt
+from src.assignments import LinearAssignment, PolynomialAssignment
+from src.noise_models import NoiseGenerator
+from src.scm import SCM
 
 if __name__ == '__main__':
 

@@ -2,23 +2,25 @@ import numpy as np
 import pandas as pd
 import logging
 import networkx as nx
-from networkx.drawing.nx_agraph import write_dot, graphviz_layout
+from networkx.drawing.nx_agraph import graphviz_layout
 
-from typing import List, Union, Dict, Tuple
+from typing import List, Union, Dict, Tuple, Iterable
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 
-from assignments import BaseAssignment
-from noise_models import NoiseGenerator
+from src.assignments import BaseAssignment
+from src.noise_models import NoiseGenerator
 
 
 class SCM:
     def __init__(self,
-                 assignment_dict: Dict[any, Tuple[List[any], BaseAssignment, NoiseGenerator]],
+                 assignment_dict: Dict[any, Tuple[Iterable, BaseAssignment, NoiseGenerator]],
                  variable_tex_names: Dict = None,
                  function_key: str = "function",
-                 noise_key: str = "noise"):
+                 noise_key: str = "noise",
+                 scm_name: str = "Structural Causal Model"):
 
+        self.scm_name = scm_name
         # the root variables which are causally happening at first.
         self.roots = []
         self.nr_variables = len(assignment_dict)
@@ -34,7 +36,7 @@ class SCM:
         self.var_names_draw_dict = variable_tex_names
 
         # the attribute list that any given node in the graph has.
-        self.function_key, self.noise_key = ["function", "noise"]
+        self.function_key, self.noise_key = function_key, noise_key
 
         # a backup dictionary of the original assignments of the intervened variables,
         # in order to undo the interventions later.
@@ -81,6 +83,7 @@ class SCM:
                 *(sample[pred] for pred in self.graph.predecessors(node))
             )
             sample[node] = data
+        np.random.seed(None)  # reset random seed
         return pd.DataFrame.from_dict(sample)
 
     def intervene(self, interventions: Dict[any, Union[Dict, List, Tuple, np.ndarray]]):
@@ -162,10 +165,20 @@ class SCM:
             else:
                 logging.warning(f"Variable '{var}' not found in intervention backup. Omitting it.")
 
-    def plot(self, node_size: int = 1000, **kwargs):
+    def plot(self, node_size: int = 500, **kwargs):
         pos = graphviz_layout(self.graph, prog='dot')
-        plt.title('Causal Network')
-        nx.draw(self.graph, pos=pos, labels=self.var_names_draw_dict, with_labels=True, node_size=node_size, **kwargs)
+        plt.title(self.scm_name)
+        figsize = kwargs.pop("figsize") if "figsize" in kwargs else (8, 8)
+        dpi = kwargs.pop("dpi") if "dpi" in kwargs else 200
+
+        plt.figure(figsize=figsize, dpi=dpi)
+        nx.draw(self.graph,
+                pos=pos,
+                labels=self.var_names_draw_dict,
+                with_labels=True,
+                node_size=node_size,
+                alpha=0.5,
+                **kwargs)
         plt.show()
 
     def str(self):

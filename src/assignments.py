@@ -39,7 +39,15 @@ class BaseAssignment(ABC):
         raise NotImplementedError("Assignment subclasses must provide '__call__' method.")
 
     @abstractmethod
-    def str(self, variable_names=None):
+    def __len__(self):
+        """
+        Method to return the number of variables the assignment takes.
+        :return:
+        """
+        raise NotImplementedError("Assignment subclasses must provide '__len__' method.")
+
+    @abstractmethod
+    def function_str(self, variable_names=None):
         """
         Method to convert the assignment functor to console printable output of the form: f(N, x_0,...) = ...
 
@@ -47,10 +55,18 @@ class BaseAssignment(ABC):
         Each position will be i of the list will be the name of the ith positional variable argument in __call__.
         :return: str, the converted identifier of the function.
         """
-        raise NotImplementedError("Assignment subclasses must provide 'to_str' method.")
+        raise NotImplementedError("Assignment subclasses must provide 'function_str' method.")
 
     def __str__(self):
         return self.str()
+
+    def str(self, variable_names=None):
+        if variable_names is None:
+            variable_names = [f"x_{i}" for i in range(len(self))]
+        variable_names = ["N"] + variable_names
+        assignment = self.function_str(variable_names)
+        prefix = f"f({', '.join(variable_names)}) = "
+        return prefix + assignment
 
 
 class LinearAssignment(BaseAssignment):
@@ -62,16 +78,15 @@ class LinearAssignment(BaseAssignment):
     def __call__(self, noise, *args):
         return self.offset + self.noise_factor * noise + self.coefficients @ args
 
-    def str(self, variable_names=None):
-        if variable_names is None:
-            variable_names = [f"x_{i}" for i in range(len(self.coefficients))]
-        variable_names = ["N"] + variable_names
+    def __len__(self):
+        return 1 + len(self.coefficients)
+
+    def function_str(self, variable_names=None):
         rep = f"{f'{round(self.offset, 2)} + ' if self.offset != 0 else ''}{round(self.noise_factor, 2)} N"
         for i, c in enumerate(self.coefficients):
             if c != 0:
                 rep += f" + {round(c, 2)} {variable_names[i + 1]}"
-        prefix = f"f({', '.join(variable_names)}) = "
-        return prefix + rep
+        return rep
 
 
 class PolynomialAssignment(BaseAssignment):
@@ -89,10 +104,10 @@ class PolynomialAssignment(BaseAssignment):
         # args[0] is assumed to be the noise
         return sum((poly(arg) for poly, arg in zip(self.polynomials, args)))
 
-    def str(self, variable_names=None):
-        if variable_names is None:
-            variable_names = [f"x_{i}" for i in range(len(self.polynomials))]
-        variable_names = ["N"] + variable_names
+    def __len__(self):
+        return len(self.polynomials)
+
+    def function_str(self, variable_names=None):
         assignment = []
         for poly, var in zip(self.polynomials, variable_names):
             coeffs = poly.coef
@@ -101,5 +116,4 @@ class PolynomialAssignment(BaseAssignment):
                 if c != 0:
                     this_assign.append(f"{round(c, 2)} {var}{f'**{deg}' if deg != 1 else ''}")
             assignment.append(" + ".join(this_assign))
-        prefix = f"f({', '.join(variable_names)}) = "
-        return prefix + " + ".join(assignment)
+        return " + ".join(assignment)
