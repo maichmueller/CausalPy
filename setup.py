@@ -21,7 +21,8 @@ setup_requirements = ["pytest-runner"]
 test_requirements = ["pytest"]
 
 extras_requirements = {
-    "tests": [""]
+    "plot": ["pygraphviz"],
+    "tests": ["pytest"]
 }
 author = (
     "Michael Aichmueller"
