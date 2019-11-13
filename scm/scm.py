@@ -4,17 +4,17 @@ import logging
 import networkx as nx
 from networkx.drawing.nx_agraph import graphviz_layout
 
-from typing import List, Union, Dict, Tuple, Iterable
+from typing import List, Union, Dict, Tuple, Iterable, Set, Type, Mapping
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 
-from src.assignments import BaseAssignment
-from src.noise_models import NoiseGenerator
+from scm.assignments import BaseAssignment
+from scm.noise_models import NoiseGenerator
 
 
 class SCM:
     def __init__(self,
-                 assignment_dict: Dict[any, Tuple[Iterable, BaseAssignment, NoiseGenerator]],
+                 assignment_map: Mapping[object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]],
                  variable_tex_names: Dict = None,
                  function_key: str = "function",
                  noise_key: str = "noise",
@@ -22,32 +22,34 @@ class SCM:
 
         self.scm_name = scm_name
         # the root variables which are causally happening at first.
-        self.roots = []
-        self.nr_variables = len(assignment_dict)
+        self.roots: List = []
+        self.nr_variables = len(assignment_map)
 
-        self.var_names = np.array(list(assignment_dict.keys()))
+        self.var_names = np.array(list(assignment_map.keys()))
         # supply any variable name, that has not been assigned a different TeX name, itself as TeX name.
         # This prevents missing labels in the plot method.
         if variable_tex_names is not None:
             for name in self.var_names:
                 if name not in variable_tex_names:
                     variable_tex_names[name] = name
-        # the variable names as they can be used by the plot function to draw the names in TeX mode.
-        self.var_names_draw_dict = variable_tex_names
+            # the variable names as they can be used by the plot function to draw the names in TeX mode.
+            self.var_names_draw_dict: Dict = variable_tex_names
+        else:
+            self.var_names_draw_dict = dict()
 
         # the attribute list that any given node in the graph has.
         self.function_key, self.noise_key = function_key, noise_key
 
         # a backup dictionary of the original assignments of the intervened variables,
         # in order to undo the interventions later.
-        self.interventions_attr_backup = dict()
-        self.interventions_edge_backup = dict()
+        self.interventions_attr_backup: Dict = dict()
+        self.interventions_edge_backup: Dict = dict()
 
         # build the graph:
         # any node will be given the attributes of function and noise to later sample from and also an incoming edge
         # from its causal parent to itself. We will store the causal root nodes separately.
         self.graph = nx.DiGraph()
-        for node_name, (parents_list, function, noise_model) in assignment_dict.items():
+        for node_name, (parents_list, function, noise_model) in assignment_map.items():
             self.graph.add_node(node_name, **{self.function_key: function, self.noise_key: noise_model})
             if parents_list:
                 for parent in parents_list:
@@ -86,7 +88,7 @@ class SCM:
         np.random.seed(None)  # reset random seed
         return pd.DataFrame.from_dict(sample)
 
-    def intervene(self, interventions: Dict[any, Union[Dict, List, Tuple, np.ndarray]]):
+    def intervene(self, interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]):
         """
         Method to apply the do-calculus on the specified variables.
 
@@ -192,7 +194,7 @@ class SCM:
             lines.append(line)
         return "\n".join(lines)
 
-    def _filter_variable_names(self, variables):
+    def _filter_variable_names(self, variables: Iterable):
         """
         Filter out variable names, that are not currently in the graph. Warn for each variable that wasn't present.
         Returns a generator which iterates over all variables that have been found in the graph.
@@ -205,7 +207,7 @@ class SCM:
             else:
                 logging.warning(f"Variable '{variable}' not found in graph. Omitting it.")
 
-    def _causal_iterator(self, variables=None):
+    def _causal_iterator(self, variables: List = None):
         """
         Provide a causal iterator through the graph starting from the roots going to the variables needed. This iterator
         passes only the ancestors of the variables and thus is helpful in filtering out all the variables that have no
@@ -217,8 +219,8 @@ class SCM:
         """
         if variables is None:
             return nx.topological_sort(self.graph)
-        visited_nodes = set()
-        vars_to_sample_priority = defaultdict(int)
+        visited_nodes: Set = set()
+        vars_to_sample_priority: Dict = defaultdict(int)
         queue = deque([var for var in self._filter_variable_names(variables)])
         while queue:
             nn = queue.popleft()

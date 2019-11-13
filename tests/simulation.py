@@ -1,6 +1,6 @@
 from functools import reduce
 
-from src import noise_models as nm, scm, assignments as assigns
+from scm import NoiseGenerator, SCM, LinearAssignment
 import numpy as np
 from collections import Counter, defaultdict
 from tqdm.auto import tqdm
@@ -10,13 +10,13 @@ if __name__ == '__main__':
     # =====================
     # PARAMETERS
     # --------------------
-    nr_genes = 20000
+    nr_genes = 2000
 
-    levels_of_dependency = 20
+    levels_of_dependency = 7
 
-    connect_perc_max = 0.3
-    connect_perc_min = 0.05
-    connect_perc_incr = 0.1
+    connect_perc_max = 0.2
+    connect_perc_min = 0.01
+    connect_perc_incr = 0.05
     connect_perc_samelevel = 0.1
     max_connected_levels = 3
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
     nr_genes_per_level = {level: genes for (level, genes) in sorted(nr_genes_per_level.items(), key=lambda x: x[0])}
     genes_to_level = dict()
-    levels_to_genes = defaultdict(list)
+    levels_to_genes: dict = defaultdict(list)
     curr_offset = 0
     for level, amount_genes in nr_genes_per_level.items():
         for name in gene_names[curr_offset:curr_offset + amount_genes]:
@@ -61,8 +61,9 @@ if __name__ == '__main__':
         curr_offset += amount_genes
 
     assignment_dict = dict()
-    for gene in (pbar := tqdm(gene_names)):
-        pbar.set_description(f"Processing {gene}")
+    gene_names_pbar = tqdm(gene_names)
+    for gene in gene_names_pbar:
+        gene_names_pbar.set_description(f"Processing {gene}")
         gene_level = genes_to_level[gene]
         # the gene's neighbours on the current level
         parent_pool = levels_to_genes[gene_level]
@@ -81,12 +82,12 @@ if __name__ == '__main__':
         # offset is a random number in [0, 20]
         # noise coefficient is always 1
         # coefficients for parents are chosen at random from [0, 2]
-        offset = np.random.rand() * np.random.randint(0, 2)
-        noise_coeff = 1
+        offset = 0
+        noise_coeff = 0.01
         nr_coeffs = len(parents[gene_level])
-        coeffs = [np.random.rand(nr_coeffs) * np.random.choice([-1, 1], size=nr_coeffs)]
-        # the final assignment function will be a linear one
-        func = assigns.LinearAssignment
+        signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs // 2 + 1))[:nr_coeffs]
+        coeffs = [np.random.rand(nr_coeffs) * np.array(signs)]
+
         for this_level in range(gene_level - 1, max(0, gene_level - max_connected_levels) - 1, - 1):
             parent_pool = levels_to_genes[this_level]
             parents[this_level] = np.random.choice(
@@ -102,17 +103,21 @@ if __name__ == '__main__':
                 replace=False
             )
             nr_coeffs = len(parents[this_level])
-            coeffs += [np.random.rand(nr_coeffs) * np.random.choice([-1, 1], size=nr_coeffs)]
+            signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs//2 + 1))[:nr_coeffs]
+            coeffs += [0.01 * np.random.rand(nr_coeffs) * np.array(signs)]
 
         assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values()),
-                                 func(noise_coeff, offset, *np.concatenate(coeffs)),
-                                 nm.NoiseGenerator("normal",
-                                                   loc=np.random.rand() * 20, scale=np.random.rand() * 5)]
+                                 LinearAssignment(noise_coeff, offset, *np.concatenate(coeffs)),
+                                 NoiseGenerator("normal",
+                                                loc=0, scale=np.random.rand() * .0001)]
 
-    cn = scm.SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    print(cn)
-    cn.plot()
-    sample = cn.sample(100000)
-
+    cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
+    # print(cn)
+    # cn.plot()
+    sample = cn.sample(10000)
     print(sample)
     print(np.vstack([sample.max(), sample.min()]))
+    rng = np.random.default_rng()
+    sample_exp = rng.poisson(np.exp(sample))
+    print(sample_exp)
+    print(np.vstack([sample_exp.max(), sample_exp.min()]))
