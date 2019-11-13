@@ -168,6 +168,23 @@ class SCM:
                 logging.warning(f"Variable '{var}' not found in intervention backup. Omitting it.")
 
     def plot(self, node_size: int = 500, **kwargs):
+        """
+        Plot the causal graph of the scm in a dependency oriented way.
+
+        Because a causal graph is a DAG and can thus have undirectional cycles (but not directional cycles) a tree
+        structure seems can't be unambigously computed. Therefore this method relies on graphviz to compute a
+        feasible representation of the causal graph.
+        The graphviz package has been marked as an optional package for this module and therefore needs to be installed
+        by the user.
+        Note, that (at least on Ubuntu) graphviz demands further libraries to be supplied, thus the following
+        command will install the necessary dependencies, if graphviz couldn't be found.
+        Open a terminal and type:
+
+            ``sudo apt-get install graphviz libgraphviz-dev pkg-config``
+
+        :param node_size: int, the size of the node circles in the graph. Bigger values imply bigger circles.
+        :param kwargs: arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
+        """
         pos = graphviz_layout(self.graph, prog='dot')
         plt.title(self.scm_name)
         figsize = kwargs.pop("figsize") if "figsize" in kwargs else (8, 8)
@@ -184,6 +201,11 @@ class SCM:
         plt.show()
 
     def str(self):
+        """
+        Computes a string representation of the assignment functions for each variable and also mentions on which
+        variables an intervention has been applied.
+        :return: str, the representation.
+        """
         lines = [f"Structural Causal Model of {self.nr_variables} variables: " + ", ".join(self.var_names),
                  f"Following variables have been intervened on: {list(self.interventions_attr_backup.keys())}",
                  'Current Assignment Functions are:']
@@ -197,7 +219,9 @@ class SCM:
     def _filter_variable_names(self, variables: Iterable):
         """
         Filter out variable names, that are not currently in the graph. Warn for each variable that wasn't present.
+
         Returns a generator which iterates over all variables that have been found in the graph.
+
         :param variables: list, the variables to be filtered
         :return: generator, generates the filtered variables in sequence.
         """
@@ -209,9 +233,10 @@ class SCM:
 
     def _causal_iterator(self, variables: List = None):
         """
-        Provide a causal iterator through the graph starting from the roots going to the variables needed. This iterator
-        passes only the ancestors of the variables and thus is helpful in filtering out all the variables that have no
-        causal effect on the desired variables.
+        Provide a causal iterator through the graph starting from the roots going to the variables needed.
+
+        This iterator passes only the ancestors of the variables and thus is helpful in filtering out all the variables
+        that have no causal effect on the desired variables.
 
         :param variables: list, the names of all the variables that are to be considered. Names that cannot be found
         in the naming list of the graph will be ignored (warning raised).
@@ -220,16 +245,16 @@ class SCM:
         if variables is None:
             return nx.topological_sort(self.graph)
         visited_nodes: Set = set()
-        vars_to_sample_priority: Dict = defaultdict(int)
+        vars_causal_priority: Dict = defaultdict(int)
         queue = deque([var for var in self._filter_variable_names(variables)])
         while queue:
             nn = queue.popleft()
             if nn not in visited_nodes:
                 for parent in self.graph.predecessors(nn):
-                    vars_to_sample_priority[parent] = max(
-                        vars_to_sample_priority[parent],
-                        vars_to_sample_priority[nn] + 1
+                    vars_causal_priority[parent] = max(
+                        vars_causal_priority[parent],
+                        vars_causal_priority[nn] + 1
                     )
                     queue.append(parent)
                 visited_nodes.add(nn)
-        return (key for (key, value) in sorted(vars_to_sample_priority.items(), key=lambda x: x[1], reverse=True))
+        return (key for (key, value) in sorted(vars_causal_priority.items(), key=lambda x: x[1], reverse=True))
