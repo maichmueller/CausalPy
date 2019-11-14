@@ -1,6 +1,6 @@
 from functools import reduce
 
-from scm import NoiseGenerator, SCM, LinearAssignment
+from scm import *
 import numpy as np
 from collections import Counter, defaultdict
 from tqdm.auto import tqdm
@@ -10,9 +10,9 @@ if __name__ == '__main__':
     # =====================
     # PARAMETERS
     # --------------------
-    nr_genes = 2000
+    nr_genes = 100
 
-    levels_of_dependency = 7
+    levels_of_dependency = 5
 
     connect_perc_max = 0.2
     connect_perc_min = 0.01
@@ -107,13 +107,16 @@ if __name__ == '__main__':
             coeffs += [0.01 * np.random.rand(nr_coeffs) * np.array(signs)]
 
         assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values()),
-                                 LinearAssignment(noise_coeff, offset, *np.concatenate(coeffs)),
+                                 LinkerAssignment(
+                                     sigmoid,
+                                     LinearAssignment(noise_coeff, offset, *np.concatenate(coeffs))
+                                 ),
                                  NoiseGenerator("normal",
                                                 loc=0, scale=np.random.rand() * .0001)]
 
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
     # print(cn)
-    # cn.plot()
+    cn.plot()
     sample = cn.sample(10000)
     print(sample)
     print(np.vstack([sample.max(), sample.min()]))

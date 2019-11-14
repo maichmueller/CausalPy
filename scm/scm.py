@@ -13,12 +13,14 @@ from scm.noise_models import NoiseGenerator
 
 
 class SCM:
-    def __init__(self,
-                 assignment_map: Mapping[object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]],
-                 variable_tex_names: Dict = None,
-                 function_key: str = "function",
-                 noise_key: str = "noise",
-                 scm_name: str = "Structural Causal Model"):
+    def __init__(
+            self,
+            assignment_map: Mapping[object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]],
+            variable_tex_names: Dict = None,
+            function_key: str = "function",
+            noise_key: str = "noise",
+            scm_name: str = "Structural Causal Model"
+    ):
 
         self.scm_name = scm_name
         # the root variables which are causally happening at first.
@@ -63,7 +65,12 @@ class SCM:
     def __str__(self):
         return self.str()
 
-    def sample(self, n, variables=None, seed=None):
+    def sample(
+            self,
+            n,
+            variables=None,
+            seed=None
+    ):
         """
         Sample method to generate data for the given variables. If no list of variables is supplied, the method will
         simply generate data for all variables.
@@ -88,7 +95,10 @@ class SCM:
         np.random.seed(None)  # reset random seed
         return pd.DataFrame.from_dict(sample)
 
-    def intervene(self, interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]):
+    def intervene(
+            self,
+            interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]
+    ):
         """
         Method to apply the do-calculus on the specified variables.
 
@@ -144,7 +154,10 @@ class SCM:
                 self.graph.add_edge(parent, var)
             self.graph.add_node(var, **attr_dict)
 
-    def undo_interventions(self, variables: Union[List, Tuple, np.ndarray] = None):
+    def undo_interventions(
+            self,
+            variables: Union[List, Tuple, np.ndarray] = None
+    ):
         """
         Method to undo previously done interventions.
 
@@ -167,37 +180,45 @@ class SCM:
             else:
                 logging.warning(f"Variable '{var}' not found in intervention backup. Omitting it.")
 
-    def plot(self, node_size: int = 500, **kwargs):
+    def plot(
+            self,
+            node_size: int = 500,
+            figsize: Tuple[int, int] = (6, 4),
+            dpi: int = 150,
+            **kwargs
+    ):
         """
         Plot the causal graph of the scm in a dependency oriented way.
 
-        Because a causal graph is a DAG and can thus have undirectional cycles (but not directional cycles) a tree
-        structure seems can't be unambigously computed. Therefore this method relies on graphviz to compute a
+        Because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a tree
+        structure can't be computed unambiguously. Therefore this method relies on graphviz to compute a
         feasible representation of the causal graph.
         The graphviz package has been marked as an optional package for this module and therefore needs to be installed
         by the user.
         Note, that (at least on Ubuntu) graphviz demands further libraries to be supplied, thus the following
-        command will install the necessary dependencies, if graphviz couldn't be found.
+        command will install the necessary dependencies, if graphviz couldn't be found on your system.
         Open a terminal and type:
 
             ``sudo apt-get install graphviz libgraphviz-dev pkg-config``
 
         :param node_size: int, the size of the node circles in the graph. Bigger values imply bigger circles.
+        :param figsize: tuple, the size of the figure to be passed to matplotlib
+        :param dpi: int, the dots per inch for matplotlib
         :param kwargs: arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
         """
         pos = graphviz_layout(self.graph, prog='dot')
         plt.title(self.scm_name)
-        figsize = kwargs.pop("figsize") if "figsize" in kwargs else (8, 8)
-        dpi = kwargs.pop("dpi") if "dpi" in kwargs else 200
 
         plt.figure(figsize=figsize, dpi=dpi)
-        nx.draw(self.graph,
-                pos=pos,
-                labels=self.var_names_draw_dict,
-                with_labels=True,
-                node_size=node_size,
-                alpha=0.5,
-                **kwargs)
+        nx.draw(
+            self.graph,
+            pos=pos,
+            labels=self.var_names_draw_dict,
+            with_labels=True,
+            node_size=node_size,
+            alpha=0.5,
+            **kwargs
+        )
         plt.show()
 
     def str(self):
@@ -216,7 +237,10 @@ class SCM:
             lines.append(line)
         return "\n".join(lines)
 
-    def _filter_variable_names(self, variables: Iterable):
+    def _filter_variable_names(
+            self,
+            variables: Iterable
+    ):
         """
         Filter out variable names, that are not currently in the graph. Warn for each variable that wasn't present.
 
@@ -231,7 +255,10 @@ class SCM:
             else:
                 logging.warning(f"Variable '{variable}' not found in graph. Omitting it.")
 
-    def _causal_iterator(self, variables: List = None):
+    def _causal_iterator(
+            self,
+            variables: Iterable = None
+    ):
         """
         Provide a causal iterator through the graph starting from the roots going to the variables needed.
 

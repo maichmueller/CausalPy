@@ -1,6 +1,7 @@
 import numpy as np
 from numpy.polynomial import polynomial
-from typing import List, Union, Dict
+from scipy.special import expit
+from typing import List, Union, Dict, Type, Callable
 from abc import ABC, abstractmethod
 
 
@@ -18,7 +19,6 @@ class BaseAssignment(ABC):
 
     See details of these functions for further explanation.
     """
-
     @abstractmethod
     def __call__(self,
                  noise: Union[float, np.ndarray],
@@ -117,3 +117,35 @@ class PolynomialAssignment(BaseAssignment):
                     this_assign.append(f"{round(c, 2)} {var}{f'**{deg}' if deg != 1 else ''}")
             assignment.append(" + ".join(this_assign))
         return " + ".join(assignment)
+
+
+class LinkerAssignment(BaseAssignment):
+    def __init__(
+            self,
+            linker_func: Callable,
+            assignment_func: Type[BaseAssignment],
+            *assign_args,
+            **assign_kwargs
+    ):
+        self.linker = linker_func
+        self.assign_func = assignment_func(*assign_args, **assign_kwargs)
+
+    def __call__(
+            self,
+            *args,
+            **kwargs
+    ):
+        return self.linker(self.assign_func(*args, **kwargs))
+
+    def __len__(self):
+        return len(self.assign_func)
+
+    def function_str(
+            self,
+            variable_names=None
+    ):
+        return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
+
+
+def sigmoid(x):
+    return expit(x)
