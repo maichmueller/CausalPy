@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.polynomial import polynomial
 from scipy.special import expit
-from typing import List, Union, Dict, Type, Callable
+from typing import List, Union, Dict, Type, Callable, TypeVar
 from abc import ABC, abstractmethod
 
 
@@ -69,6 +69,9 @@ class BaseAssignment(ABC):
         return prefix + assignment
 
 
+AssignmentType = TypeVar("AssignmentType", bound=BaseAssignment)
+
+
 class LinearAssignment(BaseAssignment):
     def __init__(self, noise_factor, offset=0, *coefficients):
         self.noise_factor = noise_factor
@@ -123,12 +126,10 @@ class LinkerAssignment(BaseAssignment):
     def __init__(
             self,
             linker_func: Callable,
-            assignment_func: Type[BaseAssignment],
-            *assign_args,
-            **assign_kwargs
+            assignment_func: AssignmentType
     ):
         self.linker = linker_func
-        self.assign_func = assignment_func(*assign_args, **assign_kwargs)
+        self.assign_func = assignment_func
 
     def __call__(
             self,
@@ -146,6 +147,9 @@ class LinkerAssignment(BaseAssignment):
     ):
         return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
 
+def id(x):
+    return x
 
 def sigmoid(x):
-    return expit(x)
+    print("Sigmoid:", x)
+    return expit(x/2)
