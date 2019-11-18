@@ -13,12 +13,9 @@ from scm.noise_models import NoiseGenerator
 
 
 class SCM:
-    AssignmentType = TypeVar("AssignmentType", bound=BaseAssignment)
-    NoiseType = TypeVar("NoiseType", bound=NoiseGenerator)
-
     def __init__(
             self,
-            assignment_map: Mapping[object, Tuple[Iterable, Type[AssignmentType], Type[NoiseType]]],
+            assignment_map: Mapping[object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]],
             variable_tex_names: Dict = None,
             function_key: str = "function",
             noise_key: str = "noise",
@@ -185,6 +182,7 @@ class SCM:
 
     def plot(
             self,
+            draw_labels: bool = True,
             node_size: int = 500,
             figsize: Tuple[int, int] = (6, 4),
             dpi: int = 150,
@@ -215,12 +213,15 @@ class SCM:
         else:
             pos = graphviz_layout(self.graph, prog='dot')
         plt.title(self.scm_name)
-
+        if draw_labels:
+            labels = self.var_names_draw_dict
+        else:
+            labels = {}
         plt.figure(figsize=figsize, dpi=dpi)
         nx.draw(
             self.graph,
             pos=pos,
-            labels=self.var_names_draw_dict,
+            labels=labels,
             with_labels=True,
             node_size=node_size,
             alpha=alpha,
