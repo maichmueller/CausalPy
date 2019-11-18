@@ -2,13 +2,22 @@ from functools import reduce
 
 from scm import *
 import numpy as np
+import pandas as pd
 from collections import Counter, defaultdict
 from tqdm.auto import tqdm
 from functools import partial
 
 
 def population_perc(h):
-    return h**2
+    return h ** 2
+
+
+def chance_modifier(level, max_chance):
+    return max_chance / (10 ** level)
+
+
+def alternating_signs(length):
+    return np.array([-1, 1] * (length // 2) if length % 2 == 0 else ([-1, 1] * (length // 2 + 1))[:length])
 
 
 if __name__ == '__main__':
@@ -16,125 +25,76 @@ if __name__ == '__main__':
     # =====================
     # PARAMETERS
     # --------------------
-    nr_genes = 1000
+    nr_genes = 100
 
     gene_names = [r"G_" + str(i) + "" for i in range(nr_genes)]
-    master_gene = gene_names[0]
-    nr_dep_levels = max(5, int(np.log(nr_genes)))
 
+    master_genes = gene_names[0:3]
+    nr_dep_levels = max(min(nr_genes, 5), int(np.log(nr_genes)))
+
+    max_connection_chance = 0.9
 
     levels_of_dependency = 5
 
-    connect_perc_max = 0.2
-    connect_perc_min = 0.01
-    connect_perc_incr = 0.05
-    connect_perc_samelevel = 0.1
-    max_connected_levels = 3
-
     # =====================
 
+    population_per_level = np.diff((np.power(np.linspace(0, 1, nr_dep_levels), 2) * nr_genes)).astype(int)
+    population_per_level = np.array([len(master_genes)] + population_per_level.tolist())
+    population_per_level[-1] += nr_genes - population_per_level.sum()
+    chance_per_level = {level: chance_modifier(level, max_connection_chance) for level in range(nr_dep_levels)}
 
-    dependency_levels = np.diff((np.power(np.linspace(0, 1, nr_dep_levels), 2) * nr_genes))
-
-    mid = int(levels_of_dependency / 2)
-    perc_genes_per_level = {mid: 1 / 2}
-    if levels_of_dependency % 2 == 1:
-        for i in range(1, mid + 1):
-            perc_genes_per_level[mid - i] = ((1 / 2) ** (i + 1)) / 2
-            perc_genes_per_level[mid + i] = ((1 / 2) ** (i + 1)) / 2
-    else:
-        perc_genes_per_level[0] = ((1 / 2) ** (mid + 1)) / 2
-        for i in range(1, mid):
-            perc_genes_per_level[mid - i] = ((1 / 2) ** (i + 1)) / 2
-            perc_genes_per_level[mid + i] = ((1 / 2) ** (i + 1)) / 2
-    rem_perc = 1 - sum(perc_genes_per_level.values())
-    perc_genes_per_level[mid] += rem_perc
-
-    nr_genes_per_level = {level: int(perc * nr_genes) for level, perc in perc_genes_per_level.items()}
-    if sum(nr_genes_per_level.values()) < nr_genes:
-        selection = Counter(
-            np.random.choice(
-                levels_of_dependency,
-                p=list(perc_genes_per_level.values()),
-                size=nr_genes - sum(nr_genes_per_level.values())
-            )
-        )
-        for s, v in selection.items():
-            nr_genes_per_level[s] += v
-
-    gene_names = [r"G_" + str(i) + "" for i in range(nr_genes)]
-    gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
-    nr_genes_per_level = {level: genes for (level, genes) in sorted(nr_genes_per_level.items(), key=lambda x: x[0])}
     genes_to_level = dict()
     levels_to_genes: dict = defaultdict(list)
     curr_offset = 0
-    for level, amount_genes in nr_genes_per_level.items():
+    for level, amount_genes in enumerate(population_per_level):
         for name in gene_names[curr_offset:curr_offset + amount_genes]:
             genes_to_level[name] = level
             levels_to_genes[level].append(name)
         curr_offset += amount_genes
+    for level, genes in levels_to_genes.items():
+        levels_to_genes[level] = np.array(genes)
 
     assignment_dict = dict()
+
     gene_names_pbar = tqdm(gene_names)
     for gene in gene_names_pbar:
         gene_names_pbar.set_description(f"Processing {gene}")
         gene_level = genes_to_level[gene]
-        # the gene's neighbours on the current level
-        parent_pool = levels_to_genes[gene_level]
 
-        # the index of the current gene in the sorted(!!) list
-        start_index = parent_pool.index(gene) + 1
-        nr_neighbours = len(parent_pool)
-        end_index_neighbours = start_index + max(2, int(connect_perc_samelevel * nr_neighbours))
-        # take the next {connect_perc_samelevel} % of genes in the list of genes on this level. By doing so I can avoid
-        # running into accidental cycle creations within my graph. Since parents (prev_level adjacent nodes) are chosen
-        # by random, this doesn't hurt the randomness of the overall association, even if it happens deterministically
-        # on the same dependency level.
-        parents = {gene_level: parent_pool[start_index:end_index_neighbours]}
+        parents = dict()
 
         # defining the coefficients for the linear function.
         # offset is a random number in [0, 20]
         # noise coefficient is always 1
         # coefficients for parents are chosen at random from [0, 2]
         offset = 0
-        noise_coeff = 0.01
-        nr_coeffs = len(parents[gene_level])
-        signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs // 2 + 1))[:nr_coeffs]
-        coeffs = [np.random.rand(nr_coeffs) * np.array(signs)]
+        noise_coeff = 1
+        coeffs = []
 
-        for this_level in range(gene_level - 1, max(0, gene_level - max_connected_levels) - 1, - 1):
+        for this_level in range(gene_level - 1, -1, - 1):
             parent_pool = levels_to_genes[this_level]
-            parents[this_level] = np.random.choice(
-                parent_pool,
-                size=max(
-                    1,
-                    int(
-                        min(
-                            connect_perc_max,
-                            connect_perc_min + connect_perc_incr * (gene_level - this_level)
-                        ) * len(parent_pool)
-                    )),
-                replace=False
-            )
+            parent_mask = np.random.binomial(1, chance_per_level[this_level], size=len(parent_pool)).astype(bool)
+            parents[this_level] = parent_pool[parent_mask]
             nr_coeffs = len(parents[this_level])
-            signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs//2 + 1))[:nr_coeffs]
-            coeffs += [0.01 * np.random.rand(nr_coeffs) * np.array(signs)]
+            signs = alternating_signs(nr_coeffs)
+            coeffs += [1.5 * np.random.rand(nr_coeffs) * signs]
 
-        assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values()),
-                                 LinkerAssignment(
-                                     sigmoid,
-                                     LinearAssignment(noise_coeff, offset, *np.concatenate(coeffs))
-                                 ),
+        if coeffs:
+            coeffs = np.concatenate(coeffs)
+
+        assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values(), []),
+                                 LinearAssignment(noise_coeff, offset, *coeffs),
                                  NoiseGenerator("normal",
-                                                loc=0, scale=np.random.rand() * 10)]
+                                                loc=0, scale=np.random.rand() * 1)]
 
-    cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    # print(cn)
-    # cn.plot()
-    sample = cn.sample(10000)
-    print(sample)
-    print(np.vstack([sample.max(), sample.min()]))
-    rng = np.random.default_rng()
-    sample_exp = rng.poisson(np.exp(sample))
-    print(sample_exp)
-    print(np.vstack([sample_exp.max(), sample_exp.min()]))
+gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
+cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
+print(cn)
+cn.plot(alpha=0.5)
+sample = cn.sample(100000)
+print(sample)
+print(np.vstack([sample.max(), sample.min()]))
+rng = np.random.default_rng()
+sample_exp = pd.DataFrame(rng.poisson(np.exp(sample)), columns=sample.columns, dtype=int)
+print(sample_exp)
+print(np.vstack([sample_exp.max(), sample_exp.min()]))

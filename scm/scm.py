@@ -188,6 +188,7 @@ class SCM:
             node_size: int = 500,
             figsize: Tuple[int, int] = (6, 4),
             dpi: int = 150,
+            alpha=0.5,
             **kwargs
     ):
         """
@@ -222,7 +223,7 @@ class SCM:
             labels=self.var_names_draw_dict,
             with_labels=True,
             node_size=node_size,
-            alpha=0.5,
+            alpha=alpha,
             **kwargs
         )
         plt.show()
