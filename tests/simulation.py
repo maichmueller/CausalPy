@@ -100,18 +100,18 @@ def simulate(
 def analyze_distributions(
         scm_net,
         sample=None,
-        gene=None,
+        genes=None,
         figsize=(20, 20),
         bins=50
 ):
-    if gene is None:
+    if genes is None:
         genes = [g for i, g in enumerate(scm_net.get_variables()) if i < 100]
     if sample is None:
         rs = np.random.RandomState()
         sample = scm_net.sample(10000)
         sample = pd.DataFrame(rs.poisson(np.exp(sample)), columns=sample.columns)
 
-    sample.hist(bins=bins, figsize=figsize)
+    sample[genes].hist(bins=bins, figsize=figsize)
     plt.show()
 
     def quadr_poly(mu, phi):
@@ -131,25 +131,11 @@ def analyze_distributions(
     plt.plot(mean_sorted, quadr_poly(mean_sorted, *popt), color="red")
     plt.title("Mean-Variance-Relationship")
     plt.show()
-    # nr_genes = len(genes)
-    # sqrt = np.sqrt(nr_genes)
-    # is_int_sqrt = sqrt == (nr_genes // sqrt)
-    # if is_int_sqrt:
-    #     sqrt = int(sqrt)
-    #     subplots = (sqrt, sqrt)
-    # else:
-    #     sqrt = int(sqrt)
-    #     subplots = (sqrt, sqrt + 1)
-    #
-    # fig, ax = plt.subplots(subplots, figsize=figsize)
-    # for i, g in enumerate(genes):
-    #
-    #     ax[i % sqrt, i // sqrt].plot()
 
 
 if __name__ == '__main__':
 
-    causal_net = simulate(500, 2)
+    causal_net = simulate(1000, 2)
     print(causal_net)
     causal_net.plot(False, node_size=50, alpha=0.5)
     analyze_distributions(scm_net=causal_net)
