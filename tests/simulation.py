@@ -2,132 +2,160 @@ from functools import reduce
 
 from scm import *
 import numpy as np
+import pandas as pd
 from collections import Counter, defaultdict
 from tqdm.auto import tqdm
-from functools import partial
+from matplotlib import pyplot as plt
+from scipy.optimize import curve_fit
 
-if __name__ == '__main__':
 
+def population_perc(h):
+    return h ** 2
+
+
+def chance_modifier(level, max_chance):
+    return max_chance / (10 ** level)
+
+
+def alternating_signs(length):
+    return np.array([-1, 1] * (length // 2) if length % 2 == 0 else ([-1, 1] * (length // 2 + 1))[:length])
+
+
+def simulate(
+        nr_genes=500,
+        master_genes=None,
+        levels_of_dependency=5,
+        max_connection_chance=0.9,
+):
     # =====================
     # PARAMETERS
     # --------------------
-    nr_genes = 15
-
     gene_names = [r"G_" + str(i) + "" for i in range(nr_genes)]
-    gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
+    if master_genes is None:
+        master_genes = gene_names[0:3]
+    elif isinstance(master_genes, int):
+        master_genes = gene_names[0:master_genes]
+    elif isinstance(master_genes, np.ndarray):
+        if master_genes.dtype not in [bool, int]:
+            raise ValueError("'master_genes' parameter dtype needs to be boolean or integer.")
+        master_genes = gene_names[master_genes]
+    else:
+        raise ValueError("'master_genes' parameter type not supported.")
 
-    levels_of_dependency = 5
-
-    master_connectivity = 0.9
-    connect_perc_max = 0.1
-    connect_perc_min = 0.001
-    connect_perc_incr = 0.005
-    connect_perc_samelevel = 0.01
-    max_connected_levels = 3
+    nr_dep_levels = max(min(nr_genes, 5), int(np.log(nr_genes)))
 
     # =====================
 
-    mid = int(levels_of_dependency / 2)
-    perc_genes_per_level = {mid: 1 / 2}
-    dep_range = range(1, mid + 1) if levels_of_dependency % 2 == 1 else range(1, mid)
-    for i in dep_range:
-        perc_genes_per_level[mid - i] = ((1 / 2) ** (i + 1)) / 2
-        perc_genes_per_level[mid + i] = ((1 / 2) ** (i + 1)) / 2
-    else:
-        for i in range(1, mid):
-            perc_genes_per_level[mid - i] = ((1 / 2) ** (i + 1)) / 2
-            perc_genes_per_level[mid + i] = ((1 / 2) ** (i + 1)) / 2
-    rem_perc = 1 - sum(perc_genes_per_level.values())
-    perc_genes_per_level[mid] += rem_perc
+    population_per_level = np.diff((np.power(np.linspace(0, 1, nr_dep_levels), 2) * nr_genes)).astype(int)
+    population_per_level = np.array([len(master_genes)] + population_per_level.tolist())
+    population_per_level[-1] += nr_genes - population_per_level.sum()
+    chance_per_level = {level: chance_modifier(level, max_connection_chance) for level in range(nr_dep_levels)}
 
-    nr_genes_per_level = {level: int(perc * nr_genes) for level, perc in perc_genes_per_level.items()}
-    nr_genes_per_level[0] = 1
-    if sum(nr_genes_per_level.values()) < nr_genes:
-        selection = Counter(
-            np.random.choice(
-                levels_of_dependency,
-                p=list(perc_genes_per_level.values()),
-                size=nr_genes - sum(nr_genes_per_level.values())
-            )
-        )
-        for s, v in selection.items():
-            nr_genes_per_level[s] += v
-
-    nr_genes_per_level = {level: genes for (level, genes) in sorted(nr_genes_per_level.items(), key=lambda x: x[0])}
     genes_to_level = dict()
     levels_to_genes: dict = defaultdict(list)
     curr_offset = 0
-    for level, amount_genes in nr_genes_per_level.items():
+    for level, amount_genes in enumerate(population_per_level):
         for name in gene_names[curr_offset:curr_offset + amount_genes]:
             genes_to_level[name] = level
             levels_to_genes[level].append(name)
         curr_offset += amount_genes
+    for level, genes in levels_to_genes.items():
+        levels_to_genes[level] = np.array(genes)
 
     assignment_dict = dict()
+
     gene_names_pbar = tqdm(gene_names)
     for gene in gene_names_pbar:
         gene_names_pbar.set_description(f"Processing {gene}")
         gene_level = genes_to_level[gene]
-        if gene_level == 0:
-            noise_coeff = 1
-            offset = 0
-            coeffs = []
-            parents = {}
-        else:
-            connectivity = connect_perc_samelevel
-            # the gene's neighbours on the current level
-            parent_pool = levels_to_genes[gene_level]
 
-            # the index of the current gene in the sorted(!!) list
-            start_index = parent_pool.index(gene) + 1
-            nr_neighbours = len(parent_pool)
-            end_index_neighbours = start_index + max(2, int(connectivity * nr_neighbours))
-            # take the next {connect_perc_samelevel} % of genes in the list of genes on this level. By doing so I can avoid
-            # running into accidental cycle creations within my graph. Since parents (prev_level adjacent nodes) are chosen
-            # by random, this doesn't hurt the randomness of the overall association, even if it happens deterministically
-            # on the same dependency level.
-            parents = {gene_level: parent_pool[start_index:end_index_neighbours]}
+        parents = dict()
 
-            # defining the coefficients for the linear function.
-            # offset is a random number in [0, 20]
-            # noise coefficient is always 1
-            # coefficients for parents are chosen at random from [0, 2]
-            offset = 0
-            noise_coeff = 0.01
-            nr_coeffs = len(parents[gene_level])
-            signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs // 2 + 1))[:nr_coeffs]
-            coeffs = [10. * np.random.rand(nr_coeffs) * np.array(signs)]
+        # defining the coefficients for the linear function.
+        # offset is a random number in [0, 20]
+        # noise coefficient is always 1
+        # coefficients for parents are chosen at random from [0, 2]
+        offset = 0
+        noise_coeff = 1
+        coeffs = []
 
-            for this_level in range(gene_level - 1, max(1, gene_level - max_connected_levels) - 1, - 1):
-                parent_pool = levels_to_genes[this_level]
-                parents[this_level] = np.random.choice(
-                    parent_pool,
-                    size=max(
-                        1,
-                        int(
-                            min(
-                                connect_perc_max,
-                                connect_perc_min + connect_perc_incr * (gene_level - this_level)
-                            ) * len(parent_pool)
-                        )),
-                    replace=False
-                )
-                nr_coeffs = len(parents[this_level])
-                signs = [-1, 1] * (nr_coeffs // 2) if nr_coeffs % 2 == 0 else ([-1, 1] * (nr_coeffs // 2 + 1))[:nr_coeffs]
-                coeffs += [.1 * np.random.rand(nr_coeffs) * np.array(signs)]
+        for this_level in range(gene_level - 1, -1, - 1):
+            parent_pool = levels_to_genes[this_level]
+            parent_mask = np.random.binomial(1, chance_per_level[this_level], size=len(parent_pool)).astype(bool)
+            parents[this_level] = parent_pool[parent_mask]
+            nr_coeffs = len(parents[this_level])
+            signs = alternating_signs(nr_coeffs)
+            coeffs += [1.5 * np.random.rand(nr_coeffs) * signs]
 
-        assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values(), initial=[]),
-                                 LinearAssignment(noise_coeff, offset, *np.concatenate(coeffs)),
+        if coeffs:
+            coeffs = np.concatenate(coeffs)
+
+        assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values(), []),
+                                 LinearAssignment(noise_coeff, offset, *coeffs),
                                  NoiseGenerator("normal",
-                                                loc=0, scale=np.random.rand() * 0.001)]
+                                                loc=0, scale=np.random.rand() * 1)]
 
+
+    gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    # print(cn)
-    cn.plot()
-    sample = cn.sample(10000)
-    print(sample)
-    print(np.vstack([sample.max(), sample.min()]))
-    rng = np.random.default_rng()
-    sample_exp = rng.poisson(np.exp(sample))
-    print(sample_exp)
-    print(np.vstack([sample_exp.max(), sample_exp.min()]))
+    return cn
+
+
+def analyze_distributions(
+        scm_net,
+        sample=None,
+        gene=None,
+        figsize=(20, 20),
+        bins=50
+):
+    if gene is None:
+        genes = [g for i, g in enumerate(scm_net.get_variables()) if i < 100]
+    if sample is None:
+        rs = np.random.RandomState()
+        sample = scm_net.sample(10000)
+        sample = pd.DataFrame(rs.poisson(np.exp(sample)), columns=sample.columns)
+
+    sample.hist(bins=bins, figsize=figsize)
+    plt.show()
+
+    def quadr_poly(x, a, b):
+        return a * np.power(x, 2) + b
+
+    mean = sample.mean(axis=0)
+    var = sample.var(axis=0)
+    plt.scatter(mean, var, color="black")
+    plt.xlabel("Mean")
+    plt.ylabel("Variance")
+    popt, _ = curve_fit(
+        quadr_poly,
+        mean,
+        var
+    )
+    mean_sorted = np.sort(mean)
+    plt.plot(mean_sorted, quadr_poly(mean_sorted, *popt), color="red")
+    plt.title("Mean-Variance-Relationship")
+    plt.show()
+    # nr_genes = len(genes)
+    # sqrt = np.sqrt(nr_genes)
+    # is_int_sqrt = sqrt == (nr_genes // sqrt)
+    # if is_int_sqrt:
+    #     sqrt = int(sqrt)
+    #     subplots = (sqrt, sqrt)
+    # else:
+    #     sqrt = int(sqrt)
+    #     subplots = (sqrt, sqrt + 1)
+    #
+    # fig, ax = plt.subplots(subplots, figsize=figsize)
+    # for i, g in enumerate(genes):
+    #
+    #     ax[i % sqrt, i // sqrt].plot()
+
+
+if __name__ == '__main__':
+
+    causal_net = simulate(50, 3)
+    print(causal_net)
+    causal_net.plot(alpha=0.5)
+    analyze_distributions(scm_net=causal_net)
+
+

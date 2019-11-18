@@ -226,7 +226,6 @@ class SCM:
             alpha=alpha,
             **kwargs
         )
-        plt.show()
 
     def str(self):
         """
@@ -243,6 +242,13 @@ class SCM:
             line = f"{str(node).rjust(max_var_space)} := {self.graph.nodes[node][self.function_key].str(parents_vars)}"
             lines.append(line)
         return "\n".join(lines)
+
+    def get_variables(self, causal_order=True):
+        if causal_order:
+            for var in self._causal_iterator():
+                yield var
+        else:
+            return self.graph.nodes
 
     def _filter_variable_names(
             self,
@@ -293,7 +299,7 @@ class SCM:
                 visited_nodes.add(nn)
         return (key for (key, value) in sorted(vars_causal_priority.items(), key=lambda x: x[1], reverse=True))
 
-    def hierarchy_pos(self, check_for_tree=True, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5):
+    def _hierarchy_pos(self, check_for_tree=True, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5):
         '''
         From Joel's answer at https://stackoverflow.com/a/29597209/2966723.
         Licensed under Creative Commons Attribution-Share Alike
@@ -328,7 +334,7 @@ class SCM:
             else:
                 root = np.random.choice(list(self.graph.nodes))
 
-        def _hierarchy_pos(G, root, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5, pos=None, parent=None):
+        def __hierarchy_pos(G, root, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5, pos=None, parent=None):
             '''
             see hierarchy_pos docstring for most arguments
 
@@ -349,9 +355,9 @@ class SCM:
                 nextx = xcenter - width / 2 - dx / 2
                 for child in children:
                     nextx += dx
-                    pos = _hierarchy_pos(G, child, width=dx, vert_gap=vert_gap,
-                                         vert_loc=vert_loc - vert_gap, xcenter=nextx,
-                                         pos=pos, parent=root)
+                    pos = __hierarchy_pos(G, child, width=dx, vert_gap=vert_gap,
+                                          vert_loc=vert_loc - vert_gap, xcenter=nextx,
+                                          pos=pos, parent=root)
             return pos
 
-        return _hierarchy_pos(self.graph, root, width, vert_gap, vert_loc, xcenter)
+        return __hierarchy_pos(self.graph, root, width, vert_gap, vert_loc, xcenter)
