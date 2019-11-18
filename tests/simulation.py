@@ -77,12 +77,13 @@ def simulate(
         coeffs = []
 
         for this_level in range(gene_level - 1, -1, - 1):
-            parent_pool = levels_to_genes[this_level]
-            parent_mask = np.random.binomial(1, chance_per_level[this_level], size=len(parent_pool)).astype(bool)
-            parents[this_level] = parent_pool[parent_mask]
-            nr_coeffs = len(parents[this_level])
-            signs = alternating_signs(nr_coeffs)
-            coeffs += [1. * np.random.rand(nr_coeffs) * signs]
+            if this_level in levels_to_genes:
+                parent_pool = levels_to_genes[this_level]
+                parent_mask = np.random.binomial(1, chance_per_level[this_level], size=len(parent_pool)).astype(bool)
+                parents[this_level] = parent_pool[parent_mask]
+                nr_coeffs = len(parents[this_level])
+                signs = alternating_signs(nr_coeffs)
+                coeffs += [1. * np.random.rand(nr_coeffs) * signs]
 
         if coeffs:
             coeffs = np.concatenate(coeffs)
@@ -135,7 +136,7 @@ def analyze_distributions(
 
 if __name__ == '__main__':
 
-    causal_net = simulate(1000, 2)
+    causal_net = simulate(10, 2)
     print(causal_net)
     causal_net.plot(False, node_size=50, alpha=0.5)
     analyze_distributions(scm_net=causal_net)
