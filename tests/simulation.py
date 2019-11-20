@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
+from scipy.interpolate import UnivariateSpline
 
 
 def chance_drop_per_level(level, max_chance):
@@ -20,7 +21,6 @@ def alternating_signs(length):
 def simulate(
         nr_genes: int = 500,
         master_genes: Union[int, np.ndarray, List] = None,
-        levels_of_dependency: int = 5,
         max_connection_chance: float = 0.9,
         chance_per_level_func=chance_drop_per_level,
 ):
@@ -41,12 +41,12 @@ def simulate(
 
     nr_dep_levels = max(min(nr_genes, 5), int(np.log(nr_genes)))
 
-    # =====================
-
     population_per_level = np.diff((np.power(np.linspace(0, 1, nr_dep_levels), 2) * nr_genes)).astype(int)
     population_per_level = np.array([len(master_genes)] + population_per_level.tolist())
     population_per_level[-1] += nr_genes - population_per_level.sum()
     chance_per_level = {level: chance_per_level_func(level, max_connection_chance) for level in range(nr_dep_levels)}
+
+    # =====================
 
     genes_to_level = dict()
     levels_to_genes: dict = defaultdict(list)
@@ -83,15 +83,23 @@ def simulate(
                 parents[this_level] = parent_pool[parent_mask]
                 nr_coeffs = len(parents[this_level])
                 signs = alternating_signs(nr_coeffs)
-                coeffs += [1. * np.random.rand(nr_coeffs) * signs]
+                coeffs += [np.power(np.random.rand(nr_coeffs), (this_level+1)) * signs]
 
         if coeffs:
             coeffs = np.concatenate(coeffs)
 
         assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values(), []),
                                  LinearAssignment(noise_coeff, offset, *coeffs),
-                                 NoiseGenerator("normal",
-                                                loc=0, scale=np.random.rand() * 1)]
+                                 NoiseGenerator(
+                                     "skewnorm",
+                                     scale=np.random.rand() ** (nr_dep_levels - gene_level - 1),
+                                     a=0.6
+                                 )]
+                                 # NoiseGenerator(
+                                 #     "normal",
+                                 #     loc=-0.2,
+                                 #     scale=np.random.rand() ** (nr_dep_levels-gene_level-1)
+                                 # )]
 
     gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
@@ -130,15 +138,15 @@ def analyze_distributions(
     )
     mean_sorted = np.sort(mean)
     plt.plot(mean_sorted, quadr_poly(mean_sorted, *popt), color="red")
+    plt.loglog()
     plt.title("Mean-Variance-Relationship")
     plt.show()
 
 
 if __name__ == '__main__':
-
-    causal_net = simulate(10, 2)
+    causal_net = simulate(1000, 2)
     print(causal_net)
     causal_net.plot(False, node_size=50, alpha=0.5)
     analyze_distributions(scm_net=causal_net)
-
-
+    sample = causal_net.sample(10000)
+    sample_var = sample.var().sort_values()

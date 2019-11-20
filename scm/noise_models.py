@@ -6,7 +6,8 @@ from functools import partial
 class NoiseGenerator:
     """
     A simple feed forward convenience class to generate different numpy provided distributions to the user.
-    Selectable distributions are specified by the numpy docs:
+
+    For numpy distributions the list is:
 
     -- Beta distribution
         - beta(a, b[, size])
@@ -78,11 +79,23 @@ class NoiseGenerator:
         - weibull(a[, size])
     -- Zipf distribution
         - zipf(a[, size])
+
+    For Scipy distributions please refer to:
+    https://docs.scipy.org/doc/scipy/reference/stats.html
     """
 
     def __init__(self, distribution: str = "", **distribution_kwargs):
-        rg = Generator(PCG64())
-        self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
+        self.params = distribution_kwargs
+        try:
+            rg = Generator(PCG64())
+            self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
+        except AttributeError as a:
+            try:
+                exec(f"from scipy.stats import {distribution}")
+                self.distribution = partial(eval(f"{distribution}.rvs"), **distribution_kwargs)
+            except ImportError as i:
+                raise ValueError(f"No distribution found in neither numpy nor in scipy for "
+                                 f"distribution={distribution}.")
 
     def __call__(self, size=1):
         return self.distribution(size=size)

@@ -59,8 +59,8 @@ class SCM:
             else:
                 self.roots.append(node_name)
 
-    def __getitem__(self, item):
-        return self.graph[item]
+    def __getitem__(self, node):
+        return self.graph[node], self.graph.nodes[node]
 
     def __str__(self):
         return self.str()
