@@ -84,10 +84,15 @@ class NoiseGenerator:
     https://docs.scipy.org/doc/scipy/reference/stats.html
     """
 
-    def __init__(self, distribution: str = "", **distribution_kwargs):
+    def __init__(
+            self,
+            distribution: str = "",
+            seed=None,
+            **distribution_kwargs
+    ):
         self.params = distribution_kwargs
         try:
-            rg = Generator(PCG64())
+            rg = Generator(PCG64(seed))
             self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
         except AttributeError as a:
             try:
