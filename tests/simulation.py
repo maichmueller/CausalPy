@@ -83,7 +83,12 @@ def simulate(
                 parents[this_level] = parent_pool[parent_mask]
                 nr_coeffs = len(parents[this_level])
                 signs = alternating_signs(nr_coeffs)
-                coeffs += [np.power(np.random.rand(nr_coeffs), (this_level+1)) * signs]
+                coeffs.append(
+                    np.power(
+                        np.random.rand(nr_coeffs),
+                        1
+                    ) * signs
+                )
 
         if coeffs:
             coeffs = np.concatenate(coeffs)
@@ -91,9 +96,10 @@ def simulate(
         assignment_dict[gene] = [reduce(lambda x, y: x + y.tolist(), parents.values(), []),
                                  LinearAssignment(noise_coeff, offset, *coeffs),
                                  NoiseGenerator(
-                                     "skewnorm",
-                                     scale=np.random.rand() ** (nr_dep_levels - gene_level - 1),
-                                     a=0.6
+                                     "normal",
+                                     loc=np.random.randint(0, nr_dep_levels - gene_level - 1) if gene_level < nr_dep_levels-1 else 0,
+                                     scale=np.random.rand(),
+                                     # a=0.5
                                  )]
                                  # NoiseGenerator(
                                  #     "normal",
@@ -118,7 +124,7 @@ def analyze_distributions(
     if sample is None:
         rs = np.random.RandomState()
         sample = scm_net.sample(10000)
-        sample = pd.DataFrame(rs.poisson(np.exp(sample)), columns=sample.columns)
+        sample = pd.DataFrame(rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns)
 
     sample[genes].hist(bins=bins, figsize=figsize)
     plt.show()
@@ -129,7 +135,7 @@ def analyze_distributions(
     mean = sample.mean(axis=0)
     var = sample.var(axis=0)
     plt.scatter(mean, var, color="black")
-    plt.xlabel("Mean")
+    plt.xlabel("Mean $\mu$")
     plt.ylabel("Variance")
     popt, _ = curve_fit(
         quadr_poly,
@@ -137,14 +143,15 @@ def analyze_distributions(
         var
     )
     mean_sorted = np.sort(mean)
-    plt.plot(mean_sorted, quadr_poly(mean_sorted, *popt), color="red")
+    plt.plot(mean_sorted, quadr_poly(mean_sorted, *popt), color="red", label=f"Var$(\mu, \phi) = \mu + \phi \mu^2$ with $\phi = {popt.round(5)[0]}$")
+    plt.legend()
     plt.loglog()
     plt.title("Mean-Variance-Relationship")
     plt.show()
 
 
 if __name__ == '__main__':
-    causal_net = simulate(1000, 2)
+    causal_net = simulate(10000, 2)
     print(causal_net)
     causal_net.plot(False, node_size=50, alpha=0.5)
     analyze_distributions(scm_net=causal_net)
