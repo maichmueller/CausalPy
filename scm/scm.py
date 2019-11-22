@@ -8,8 +8,6 @@ from typing import List, Union, Dict, Tuple, Iterable, Set, Type, Mapping, TypeV
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 
-from scm.assignments import BaseAssignment
-from scm.noise_models import NoiseGenerator
 
 
 class SCM:

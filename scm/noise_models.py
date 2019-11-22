@@ -96,11 +96,15 @@ class NoiseGenerator:
             self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
         except AttributeError as a:
             try:
-                exec(f"from scipy.stats import {distribution}")
-                self.distribution = partial(eval(f"{distribution}.rvs"), **distribution_kwargs)
-            except ImportError as i:
-                raise ValueError(f"No distribution found in neither numpy nor in scipy for "
-                                 f"distribution={distribution}.")
+                rg = Generator(PCG64())
+                self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
+            except AttributeError as a:
+                try:
+                    exec(f"from scipy.stats import {distribution}")
+                    self.distribution = partial(eval(f"{distribution}.rvs"), **distribution_kwargs)
+                except ImportError as i:
+                    raise ValueError(f"No distribution found in neither numpy nor in scipy for "
+                                     f"distribution={distribution}.")
 
     def __call__(self, size=1):
         return self.distribution(size=size)

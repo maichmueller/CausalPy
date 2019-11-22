@@ -75,7 +75,7 @@ def simulate(
         # noise coefficient is always 1
         # coefficients for parents are chosen at random from [0, 2]
         offset = 0
-        noise_coeff = 1
+        noise_coeff = 0 if gene not in master_genes else 1
         coeffs = []
 
         for this_level in range(gene_level - 1, -1, - 1):
@@ -97,14 +97,9 @@ def simulate(
                                  NoiseGenerator(
                                      "skewnorm",
                                      scale=rs.random() * (nr_dep_levels - gene_level),
-                                     a=-.1,
+                                     a=.4,
                                      seed=seed
                                  )]
-        # NoiseGenerator(
-        #     "normal",
-        #     loc=-0.2,
-        #     scale=np.random.rand() ** (nr_dep_levels-gene_level-1)
-        # )]
 
     gene_tex_names = {name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))}
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
@@ -148,12 +143,12 @@ def analyze_distributions(
     plt.loglog()
     plt.title("Mean-Variance-Relationship")
     plt.show()
+    return sample
 
 
 if __name__ == '__main__':
     causal_net = simulate(10000, 2, seed=0)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
-    analyze_distributions(scm_net=causal_net)
-    sample = causal_net.sample(10000)
+    sample = analyze_distributions(scm_net=causal_net)
     sample_var = sample.var().sort_values()

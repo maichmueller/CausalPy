@@ -19,11 +19,14 @@ class BaseAssignment(ABC):
 
     See details of these functions for further explanation.
     """
+
     @abstractmethod
-    def __call__(self,
-                 noise: Union[float, np.ndarray],
-                 *args,
-                 **kwargs):
+    def __call__(
+            self,
+            noise: Union[float, np.ndarray],
+            *args,
+            **kwargs
+    ):
         """
         The call method to evaluate the assignment (function). The interface only enforces an input of the noise
         variable for each inheriting class, as these are essential parts of an SCM, that can't be omitted.
@@ -47,7 +50,10 @@ class BaseAssignment(ABC):
         raise NotImplementedError("Assignment subclasses must provide '__len__' method.")
 
     @abstractmethod
-    def function_str(self, variable_names=None):
+    def function_str(
+            self,
+            variable_names=None
+    ):
         """
         Method to convert the assignment functor to console printable output of the form: f(N, x_0,...) = ...
 
@@ -73,7 +79,12 @@ AssignmentType = TypeVar("AssignmentType", bound=BaseAssignment)
 
 
 class LinearAssignment(BaseAssignment):
-    def __init__(self, noise_factor, offset=0, *coefficients):
+    def __init__(
+            self,
+            noise_factor,
+            offset=0,
+            *coefficients
+    ):
         self.noise_factor = noise_factor
         self.offset = offset
         self.coefficients = np.asarray(coefficients) if len(coefficients) > 0 else np.array([])
@@ -84,7 +95,10 @@ class LinearAssignment(BaseAssignment):
     def __len__(self):
         return 1 + len(self.coefficients)
 
-    def function_str(self, variable_names=None):
+    def function_str(
+            self,
+            variable_names=None
+    ):
         rep = f"{f'{round(self.offset, 2)} + ' if self.offset != 0 else ''}{round(self.noise_factor, 2)} N"
         for i, c in enumerate(self.coefficients):
             if c != 0:
@@ -93,14 +107,15 @@ class LinearAssignment(BaseAssignment):
 
 
 class PolynomialAssignment(BaseAssignment):
-    def __init__(self,
-                 *coefficients_list: List[float]
-                 ):
-        self.polynomials = []
+    def __init__(
+            self,
+            *coefficients_list: List[float]
+    ):
+        polynomials = []
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:
-                self.polynomials.append(polynomial.Polynomial(coefficients))
-        self.polynomials = np.asarray(self.polynomials)
+                polynomials.append(polynomial.Polynomial(coefficients))
+        self.polynomials: np.ndarray = np.asarray(polynomials)
 
     def __call__(self, *args):
         assert (len(args) == len(self.polynomials))
@@ -147,9 +162,10 @@ class LinkerAssignment(BaseAssignment):
     ):
         return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
 
-def id(x):
+
+def identity(x):
     return x
 
+
 def sigmoid(x):
-    print("Sigmoid:", x)
-    return expit(x/2)
+    return expit(x / 2)

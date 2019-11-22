@@ -1,3 +1,3 @@
-from .scm import SCM
-from .assignments import *
-from .noise_models import NoiseGenerator
+from scm.scm import SCM
+from scm.assignments import BaseAssignment, LinearAssignment, PolynomialAssignment
+from scm.noise_models import NoiseGenerator
