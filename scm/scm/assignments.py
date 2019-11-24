@@ -21,12 +21,7 @@ class BaseAssignment(ABC):
     """
 
     @abstractmethod
-    def __call__(
-            self,
-            noise: Union[float, np.ndarray],
-            *args,
-            **kwargs
-    ):
+    def __call__(self, noise: Union[float, np.ndarray], *args, **kwargs):
         """
         The call method to evaluate the assignment (function). The interface only enforces an input of the noise
         variable for each inheriting class, as these are essential parts of an SCM, that can't be omitted.
@@ -39,7 +34,9 @@ class BaseAssignment(ABC):
         :param kwargs: any keyword arguments needed by the subclass.
         :return: float or np.ndarray, the evaluated function at all provided spots.
         """
-        raise NotImplementedError("Assignment subclasses must provide '__call__' method.")
+        raise NotImplementedError(
+            "Assignment subclasses must provide '__call__' method."
+        )
 
     @abstractmethod
     def __len__(self):
@@ -47,13 +44,12 @@ class BaseAssignment(ABC):
         Method to return the number of variables the assignment takes.
         :return:
         """
-        raise NotImplementedError("Assignment subclasses must provide '__len__' method.")
+        raise NotImplementedError(
+            "Assignment subclasses must provide '__len__' method."
+        )
 
     @abstractmethod
-    def function_str(
-            self,
-            variable_names=None
-    ):
+    def function_str(self, variable_names=None):
         """
         Method to convert the assignment functor to console printable output of the form: f(N, x_0,...) = ...
 
@@ -61,7 +57,9 @@ class BaseAssignment(ABC):
         Each position will be i of the list will be the name of the ith positional variable argument in __call__.
         :return: str, the converted identifier of the function.
         """
-        raise NotImplementedError("Assignment subclasses must provide 'function_str' method.")
+        raise NotImplementedError(
+            "Assignment subclasses must provide 'function_str' method."
+        )
 
     def __str__(self):
         return self.str()
@@ -79,15 +77,12 @@ AssignmentType = TypeVar("AssignmentType", bound=BaseAssignment)
 
 
 class LinearAssignment(BaseAssignment):
-    def __init__(
-            self,
-            noise_factor,
-            offset=0,
-            *coefficients
-    ):
+    def __init__(self, noise_factor, offset=0, *coefficients):
         self.noise_factor = noise_factor
         self.offset = offset
-        self.coefficients = np.asarray(coefficients) if len(coefficients) > 0 else np.array([])
+        self.coefficients = (
+            np.asarray(coefficients) if len(coefficients) > 0 else np.array([])
+        )
 
     def __call__(self, noise, *args):
         return self.offset + self.noise_factor * noise + self.coefficients @ args
@@ -95,10 +90,7 @@ class LinearAssignment(BaseAssignment):
     def __len__(self):
         return 1 + len(self.coefficients)
 
-    def function_str(
-            self,
-            variable_names=None
-    ):
+    def function_str(self, variable_names=None):
         rep = f"{f'{round(self.offset, 2)} + ' if self.offset != 0 else ''}{round(self.noise_factor, 2)} N"
         for i, c in enumerate(self.coefficients):
             if c != 0:
@@ -107,10 +99,7 @@ class LinearAssignment(BaseAssignment):
 
 
 class PolynomialAssignment(BaseAssignment):
-    def __init__(
-            self,
-            *coefficients_list: List[float]
-    ):
+    def __init__(self, *coefficients_list: List[float]):
         polynomials = []
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:
@@ -118,7 +107,7 @@ class PolynomialAssignment(BaseAssignment):
         self.polynomials: np.ndarray = np.asarray(polynomials)
 
     def __call__(self, *args):
-        assert (len(args) == len(self.polynomials))
+        assert len(args) == len(self.polynomials)
         # args[0] is assumed to be the noise
         return sum((poly(arg) for poly, arg in zip(self.polynomials, args)))
 
@@ -132,34 +121,25 @@ class PolynomialAssignment(BaseAssignment):
             this_assign = []
             for deg, c in enumerate(coeffs):
                 if c != 0:
-                    this_assign.append(f"{round(c, 2)} {var}{f'**{deg}' if deg != 1 else ''}")
+                    this_assign.append(
+                        f"{round(c, 2)} {var}{f'**{deg}' if deg != 1 else ''}"
+                    )
             assignment.append(" + ".join(this_assign))
         return " + ".join(assignment)
 
 
 class LinkerAssignment(BaseAssignment):
-    def __init__(
-            self,
-            linker_func: Callable,
-            assignment_func: AssignmentType
-    ):
+    def __init__(self, linker_func: Callable, assignment_func: AssignmentType):
         self.linker = linker_func
         self.assign_func = assignment_func
 
-    def __call__(
-            self,
-            *args,
-            **kwargs
-    ):
+    def __call__(self, *args, **kwargs):
         return self.linker(self.assign_func(*args, **kwargs))
 
     def __len__(self):
         return len(self.assign_func)
 
-    def function_str(
-            self,
-            variable_names=None
-    ):
+    def function_str(self, variable_names=None):
         return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
 
 

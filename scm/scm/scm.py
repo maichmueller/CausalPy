@@ -9,15 +9,16 @@ from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 
 
-
 class SCM:
     def __init__(
-            self,
-            assignment_map: Mapping[object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]],
-            variable_tex_names: Dict = None,
-            function_key: str = "function",
-            noise_key: str = "noise",
-            scm_name: str = "Structural Causal Model"
+        self,
+        assignment_map: Mapping[
+            object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]
+        ],
+        variable_tex_names: Dict = None,
+        function_key: str = "function",
+        noise_key: str = "noise",
+        scm_name: str = "Structural Causal Model",
     ):
 
         self.scm_name = scm_name
@@ -50,7 +51,9 @@ class SCM:
         # from its causal parent to itself. We will store the causal root nodes separately.
         self.graph = nx.DiGraph()
         for node_name, (parents_list, function, noise_model) in assignment_map.items():
-            self.graph.add_node(node_name, **{self.function_key: function, self.noise_key: noise_model})
+            self.graph.add_node(
+                node_name, **{self.function_key: function, self.noise_key: noise_model}
+            )
             if parents_list:
                 for parent in parents_list:
                     self.graph.add_edge(parent, node_name)
@@ -63,12 +66,7 @@ class SCM:
     def __str__(self):
         return self.str()
 
-    def sample(
-            self,
-            n,
-            variables=None,
-            seed=None
-    ):
+    def sample(self, n, variables=None, seed=None):
         """
         Sample method to generate data for the given variables. If no list of variables is supplied, the method will
         simply generate data for all variables.
@@ -87,15 +85,14 @@ class SCM:
             node_attr = self.graph.nodes[node]
             data = node_attr[self.function_key](
                 node_attr[self.noise_key](n),
-                *(sample[pred] for pred in self.graph.predecessors(node))
+                *(sample[pred] for pred in self.graph.predecessors(node)),
             )
             sample[node] = data
         np.random.seed(None)  # reset random seed
         return pd.DataFrame.from_dict(sample)
 
     def intervene(
-            self,
-            interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]
+        self, interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]
     ):
         """
         Method to apply the do-calculus on the specified variables.
@@ -122,13 +119,19 @@ class SCM:
                 continue
 
             if isinstance(items, dict):
-                if any((key not in items for key in (self.function_key, self.noise_key))):
-                    raise ValueError(f"Intervention dictionary provided with the wrong keys.\n"
-                                     f"Observed keys were: {list(items.keys())}\n"
-                                     f"Expected keys were: [{self.function_key}, {self.noise_key}]")
+                if any(
+                    (key not in items for key in (self.function_key, self.noise_key))
+                ):
+                    raise ValueError(
+                        f"Intervention dictionary provided with the wrong keys.\n"
+                        f"Observed keys were: {list(items.keys())}\n"
+                        f"Expected keys were: [{self.function_key}, {self.noise_key}]"
+                    )
                 attr_dict = items
                 try:
-                    parent_list = [par for par in self._filter_variable_names(items["parents"])]
+                    parent_list = [
+                        par for par in self._filter_variable_names(items["parents"])
+                    ]
                 except KeyError:
                     parent_list = []
 
@@ -140,7 +143,9 @@ class SCM:
                 attr_dict = {self.function_key: items[1], self.noise_key: items[2]}
 
             else:
-                raise ValueError(f"Intervention items container '{items.__name__}' not supported.")
+                raise ValueError(
+                    f"Intervention items container '{items.__name__}' not supported."
+                )
 
             self.interventions_attr_backup[var] = self.graph.nodes[var]
             edge_backup = []
@@ -152,10 +157,7 @@ class SCM:
                 self.graph.add_edge(parent, var)
             self.graph.add_node(var, **attr_dict)
 
-    def undo_interventions(
-            self,
-            variables: Union[List, Tuple, np.ndarray] = None
-    ):
+    def undo_interventions(self, variables: Union[List, Tuple, np.ndarray] = None):
         """
         Method to undo previously done interventions.
 
@@ -169,23 +171,28 @@ class SCM:
             present_variables = self.interventions_attr_backup.keys()
 
         for var in present_variables:
-            if var in self.interventions_attr_backup and var in self.interventions_edge_backup:
+            if (
+                var in self.interventions_attr_backup
+                and var in self.interventions_edge_backup
+            ):
                 self.graph.add_node(var, **self.interventions_attr_backup[var])
                 for parent in self.graph.predecessors(var):
                     self.graph.remove_edge(parent, var)
                 for parent in self.interventions_edge_backup[var]:
                     self.graph.add_edge(parent, var)
             else:
-                logging.warning(f"Variable '{var}' not found in intervention backup. Omitting it.")
+                logging.warning(
+                    f"Variable '{var}' not found in intervention backup. Omitting it."
+                )
 
     def plot(
-            self,
-            draw_labels: bool = True,
-            node_size: int = 500,
-            figsize: Tuple[int, int] = (6, 4),
-            dpi: int = 150,
-            alpha=0.5,
-            **kwargs
+        self,
+        draw_labels: bool = True,
+        node_size: int = 500,
+        figsize: Tuple[int, int] = (6, 4),
+        dpi: int = 150,
+        alpha=0.5,
+        **kwargs,
     ):
         """
         Plot the causal graph of the scm in a dependency oriented way.
@@ -209,7 +216,7 @@ class SCM:
         if nx.is_tree(self.graph):
             pos = self.hierarchy_pos(root=self.roots)
         else:
-            pos = graphviz_layout(self.graph, prog='dot')
+            pos = graphviz_layout(self.graph, prog="dot")
         plt.title(self.scm_name)
         if draw_labels:
             labels = self.var_names_draw_dict
@@ -223,7 +230,7 @@ class SCM:
             with_labels=True,
             node_size=node_size,
             alpha=alpha,
-            **kwargs
+            **kwargs,
         )
 
     def str(self):
@@ -232,9 +239,12 @@ class SCM:
         variables an intervention has been applied.
         :return: str, the representation.
         """
-        lines = [f"Structural Causal Model of {self.nr_variables} variables: " + ", ".join(self.var_names),
-                 f"Following variables have been intervened on: {list(self.interventions_attr_backup.keys())}",
-                 'Current Assignment Functions are:']
+        lines = [
+            f"Structural Causal Model of {self.nr_variables} variables: "
+            + ", ".join(self.var_names),
+            f"Following variables have been intervened on: {list(self.interventions_attr_backup.keys())}",
+            "Current Assignment Functions are:",
+        ]
         max_var_space = max([len(var_name) for var_name in self.var_names])
         for node in self.graph.nodes:
             parents_vars = [pred for pred in self.graph.predecessors(node)]
@@ -249,10 +259,7 @@ class SCM:
         else:
             return self.graph.nodes
 
-    def _filter_variable_names(
-            self,
-            variables: Iterable
-    ):
+    def _filter_variable_names(self, variables: Iterable):
         """
         Filter out variable names, that are not currently in the graph. Warn for each variable that wasn't present.
 
@@ -265,12 +272,11 @@ class SCM:
             if variable in self.graph.nodes:
                 yield variable
             else:
-                logging.warning(f"Variable '{variable}' not found in graph. Omitting it.")
+                logging.warning(
+                    f"Variable '{variable}' not found in graph. Omitting it."
+                )
 
-    def _causal_iterator(
-            self,
-            variables: Iterable = None
-    ):
+    def _causal_iterator(self, variables: Iterable = None):
         """
         Provide a causal iterator through the graph starting from the roots going to the variables needed.
 
@@ -291,15 +297,27 @@ class SCM:
             if nn not in visited_nodes:
                 for parent in self.graph.predecessors(nn):
                     vars_causal_priority[parent] = max(
-                        vars_causal_priority[parent],
-                        vars_causal_priority[nn] + 1
+                        vars_causal_priority[parent], vars_causal_priority[nn] + 1
                     )
                     queue.append(parent)
                 visited_nodes.add(nn)
-        return (key for (key, value) in sorted(vars_causal_priority.items(), key=lambda x: x[1], reverse=True))
+        return (
+            key
+            for (key, value) in sorted(
+                vars_causal_priority.items(), key=lambda x: x[1], reverse=True
+            )
+        )
 
-    def _hierarchy_pos(self, check_for_tree=True, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5):
-        '''
+    def _hierarchy_pos(
+        self,
+        check_for_tree=True,
+        root=None,
+        width=1.0,
+        vert_gap=0.2,
+        vert_loc=0,
+        xcenter=0.5,
+    ):
+        """
         From Joel's answer at https://stackoverflow.com/a/29597209/2966723.
         Licensed under Creative Commons Attribution-Share Alike
 
@@ -323,24 +341,35 @@ class SCM:
         vert_loc: vertical location of root
 
         xcenter: horizontal location of root
-        '''
+        """
         if check_for_tree and not nx.is_tree(self.graph):
-            raise TypeError('cannot use hierarchy_pos on a graph that is not a tree')
+            raise TypeError("cannot use hierarchy_pos on a graph that is not a tree")
 
         if root is None:
             if isinstance(self.graph, nx.DiGraph):
-                root = next(iter(nx.topological_sort(self.graph)))  # allows back compatibility with nx version 1.11
+                root = next(
+                    iter(nx.topological_sort(self.graph))
+                )  # allows back compatibility with nx version 1.11
             else:
                 root = np.random.choice(list(self.graph.nodes))
 
-        def __hierarchy_pos(G, root, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5, pos=None, parent=None):
-            '''
+        def __hierarchy_pos(
+            G,
+            root,
+            width=1.0,
+            vert_gap=0.2,
+            vert_loc=0,
+            xcenter=0.5,
+            pos=None,
+            parent=None,
+        ):
+            """
             see hierarchy_pos docstring for most arguments
 
             pos: a dict saying where all nodes go if they have been assigned
             parent: parent of this branch. - only affects it if non-directed
 
-            '''
+            """
 
             if pos is None:
                 pos = {root: (xcenter, vert_loc)}
@@ -354,9 +383,16 @@ class SCM:
                 nextx = xcenter - width / 2 - dx / 2
                 for child in children:
                     nextx += dx
-                    pos = __hierarchy_pos(G, child, width=dx, vert_gap=vert_gap,
-                                          vert_loc=vert_loc - vert_gap, xcenter=nextx,
-                                          pos=pos, parent=root)
+                    pos = __hierarchy_pos(
+                        G,
+                        child,
+                        width=dx,
+                        vert_gap=vert_gap,
+                        vert_loc=vert_loc - vert_gap,
+                        xcenter=nextx,
+                        pos=pos,
+                        parent=root,
+                    )
             return pos
 
         return __hierarchy_pos(self.graph, root, width, vert_gap, vert_loc, xcenter)

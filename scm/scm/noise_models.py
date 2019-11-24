@@ -84,27 +84,49 @@ class NoiseGenerator:
     https://docs.scipy.org/doc/scipy/reference/stats.html
     """
 
-    def __init__(
-            self,
-            distribution: str = "",
-            seed=None,
-            **distribution_kwargs
-    ):
+    def __init__(self, distribution_str: str = "", source="numpy", seed=None, **distribution_kwargs):
         self.params = distribution_kwargs
-        try:
-            rg = Generator(PCG64(seed))
-            self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
-        except AttributeError as a:
+        self.distribution_str = None
+        self.source = source
+        self.seed = seed
+        self.distribution_kwargs = distribution_kwargs
+
+        if source == "numpy":
+            self.random_state = Generator(PCG64(seed))
+        elif source == "scipy":
+            self.random_state = np.random.RandomState(seed)
+
+
+        self.distribution = None
+        self.set_distribution(distribution_str, source=source, seed=seed, **distribution_kwargs)
+
+    def set_seed(self, seed: int):
+        if self.source == "numpy":
+
+
+    def set_distribution(self, distribution_str, source, seed, **distribution_kwargs):
+        if source == "numpy":
             try:
-                rg = Generator(PCG64())
-                self.distribution = partial(eval(f"rg.{distribution}"), **distribution_kwargs)
+                rg = Generator(PCG64(seed))
+                self.distribution = partial(
+                    eval(f"rg.{distribution_str}"), **distribution_kwargs
+                )
             except AttributeError as a:
-                try:
-                    exec(f"from scipy.stats import {distribution}")
-                    self.distribution = partial(eval(f"{distribution}.rvs"), **distribution_kwargs)
-                except ImportError as i:
-                    raise ValueError(f"No distribution found in neither numpy nor in scipy for "
-                                     f"distribution={distribution}.")
+                raise ValueError(
+                    f"No distribution found in source numpy for "
+                    f"distribution={distribution_str}."
+                )
+        elif source == "scipy":
+            try:
+                exec(f"from scipy.stats import {distribution_str}")
+                self.distribution = partial(
+                    eval(f"{distribution_str}.rvs"), **distribution_kwargs
+                )
+            except ImportError as i:
+                raise ValueError(
+                    f"No distribution found in source scipy for "
+                    f"distribution={distribution_str}."
+                )
 
     def __call__(self, size=1):
         return self.distribution(size=size)
