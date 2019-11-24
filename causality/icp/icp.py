@@ -45,7 +45,7 @@ class InvariantCausalPredictor:
         self.environments = {env: envs[envs == env] for env in np.unique(envs)}
         self.nr_environments = len(self.environments)
 
-    def filter_candidates(self, nr_iter=100):
+    def _filter_candidates(self, nr_iter=100):
         _, filtered, _ = sklearn.linear_model.lars_path(
             self.obs, self.target, method="lasso", max_iter=nr_iter, return_path=False
         )
@@ -88,7 +88,7 @@ class InvariantCausalPredictor:
         Causal inference using invariant prediction: identification and confidence intervals, arXiv:1501.01332,
         Journal of the Royal Statistical Society, Series B (with discussion) 78(5):947-1012, 2016.
         """
-        subset_iterator = self.subset_iterator(
+        subset_iterator = self._subset_iterator(
             self.variables if candidates is None else candidates,
             rejected_subsets,
             nr_parents_limit,
@@ -96,31 +96,47 @@ class InvariantCausalPredictor:
         p_values_per_elem = np.zeros(self.p)
         subset = tuple()
         for subset, finished in subset_iterator:
-            if not subset:
-                # we have been given an empty subset, i.e. we had non overlapping candidate sets
+            if finished:
+                # the iterator lets us know, when we are done, so as to not unnecessarily test another subset
+                # and send data back to the iterator (would fail).
                 break
-            p_value = self.test_plausible_parents(subset)
+            p_value = self._test_plausible_parents(subset)
             p_values_per_elem[subset] = max(p_values_per_elem[subset], p_value)
             subset_iterator.send(p_value <= alpha)
 
         # once the routine has finished the variable subset will hold the latest estimate of the causal parents
         if subset:
+            # if the candidates set isn't empty, we have found causal parents
             subset = tuple(self.index_map[c] for c in subset)
-            p_values_per_elem = pd.Series(
-                p_values_per_elem, index=[self.index_map[i] for i in np.arange(self.p)],
-            )
-            return subset, p_values_per_elem
         else:
-            return subset, None
+            # the causal parents set is empty
+            p_values_per_elem = 1
+
+        p_values_per_elem = pd.Series(
+            p_values_per_elem, index=[self.index_map[i] for i in np.arange(self.p)],
+        )  # add variable names information to the data
+        return subset, p_values_per_elem
 
     @staticmethod
     def test_equal_gaussians(sample_1, sample_2):
         """
         Test for the equality of the distribution of input 1 versus 2.
-        This test is supposed to be performed when the residuals are assumed to follow a gaussian distribution, which
-        is defined by mean and variance.
+        This test is supposed to be performed when the samples are assumed to follow a gaussian distribution, which
+        is fully defined by mean and variance.
 
-        This method performs a t-test for equal mean and F-test for equal variance for residuals.
+        This method performs a t-test for equal mean and F-test for equal variance.
+
+        Parameters
+        ----------
+        sample_1 : (n, p) np.ndarray,
+            The data pertaining to the first gaussian.
+        sample_2 : (n, p) np.ndarray,
+            The data pertaining to the second gaussian.
+
+        Returns
+        -------
+        tuple
+            A 2-tuple of the p value of the equal mean test and the equal variance test.
         """
         len_1 = len(sample_1)
         len_2 = len(sample_2)
@@ -145,7 +161,7 @@ class InvariantCausalPredictor:
         )
         return p_value_t, p_value_f
 
-    def test_plausible_parents(self, S: Union[np.ndarray, List, Tuple]):
+    def _test_plausible_parents(self, S: Union[np.ndarray, List, Tuple]):
         lr = sklearn.linear_model.LinearRegression(fit_intercept=False)
         obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
         lr.fit(obs_S, self.target)
@@ -168,7 +184,7 @@ class InvariantCausalPredictor:
         return p_value
 
     @staticmethod
-    def subset_iterator(
+    def _subset_iterator(
         elements: Union[int, Sequence],
         candidates: Set[Tuple] = None,
         rejected_subsets: Set[Tuple] = None,

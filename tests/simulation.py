@@ -1,6 +1,7 @@
 from functools import reduce
+from typing import Union, List
 
-from scm import *
+from causality import *
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
@@ -114,6 +115,7 @@ def simulate(
                 scale=rs.random() * (nr_dep_levels - gene_level),
                 a=0.4,
                 seed=seed,
+                source="scipy"
             ),
         ]
 
@@ -161,7 +163,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
 
 if __name__ == "__main__":
-    causal_net = simulate(10000, 2, seed=0)
+    causal_net = simulate(100, 2, seed=0)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
     sample = analyze_distributions(scm_net=causal_net)

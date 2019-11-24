@@ -1,6 +1,5 @@
 import numpy as np
 from numpy.polynomial import polynomial
-from scipy.special import expit
 from typing import List, Union, Dict, Type, Callable, TypeVar
 from abc import ABC, abstractmethod
 
@@ -141,11 +140,3 @@ class LinkerAssignment(BaseAssignment):
 
     def function_str(self, variable_names=None):
         return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
-
-
-def identity(x):
-    return x
-
-
-def sigmoid(x):
-    return expit(x / 2)

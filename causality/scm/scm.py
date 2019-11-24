@@ -4,7 +4,9 @@ import logging
 import networkx as nx
 from networkx.drawing.nx_agraph import graphviz_layout
 
-from typing import List, Union, Dict, Tuple, Iterable, Set, Type, Mapping, TypeVar
+from . import BaseAssignment, NoiseGenerator
+
+from typing import List, Union, Dict, Tuple, Iterable, Set, Type, Mapping, TypeVar, Collection
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 
@@ -13,7 +15,7 @@ class SCM:
     def __init__(
         self,
         assignment_map: Mapping[
-            object, Tuple[Iterable, Type[BaseAssignment], Type[NoiseGenerator]]
+            object, Tuple[Collection, Type[BaseAssignment], Type[NoiseGenerator]]
         ],
         variable_tex_names: Dict = None,
         function_key: str = "function",

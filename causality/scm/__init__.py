@@ -1,8 +1,8 @@
-from .scm import *
 from .assignments import (
-    LinkerAssignment,
-    LinearAssignment,
     BaseAssignment,
+    LinearAssignment,
     PolynomialAssignment,
+    LinkerAssignment,
 )
 from .noise_models import NoiseGenerator
+from .scm import SCM

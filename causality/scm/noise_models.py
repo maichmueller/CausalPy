@@ -1,6 +1,6 @@
 import numpy as np
 from numpy.random import Generator, PCG64
-from functools import partial
+from functools import partial, wraps
 
 
 class NoiseGenerator:
@@ -84,33 +84,42 @@ class NoiseGenerator:
     https://docs.scipy.org/doc/scipy/reference/stats.html
     """
 
-    def __init__(self, distribution_str: str = "", source="numpy", seed=None, **distribution_kwargs):
-        self.params = distribution_kwargs
+    def __init__(self, distribution_str: str = "", source="numpy", seed=None, **distribution_params):
+        self.params = distribution_params
         self.distribution_str = None
         self.source = source
         self.seed = seed
-        self.distribution_kwargs = distribution_kwargs
-
-        if source == "numpy":
-            self.random_state = Generator(PCG64(seed))
-        elif source == "scipy":
-            self.random_state = np.random.RandomState(seed)
-
 
         self.distribution = None
-        self.set_distribution(distribution_str, source=source, seed=seed, **distribution_kwargs)
+        self.set_distribution(distribution_str, source=source, seed=seed)
+
+    def set_source(self, source):
+        self.source = source
 
     def set_seed(self, seed: int):
         if self.source == "numpy":
+            rng = np.random.default_rng(seed)
+            self.distribution = eval(f"rng.{self.distribution_str}")
+        elif self.source == "scipy":
+            distribution = eval(f"{self.distribution_str}")
+            distribution.random_state = seed
+            self.distribution = distribution.rvs
+        else:
+            raise ValueError(f"'source' parameter has to be either 'numpy' or 'scipy'. "
+                             f"Input '{self.source}' not supported.")
 
+    def _apply_dist_params(func):
+        @wraps(func)
+        def dist(self, *args, **kwargs):
+            return func(self, *args, **kwargs, **self.params)
+        return dist
 
-    def set_distribution(self, distribution_str, source, seed, **distribution_kwargs):
+    def set_distribution(self, distribution_str, source, seed=None):
+        seed = self.seed if seed is None else seed
         if source == "numpy":
             try:
-                rg = Generator(PCG64(seed))
-                self.distribution = partial(
-                    eval(f"rg.{distribution_str}"), **distribution_kwargs
-                )
+                rng = np.random.default_rng(seed)
+                self.distribution = eval(f"rng.{distribution_str}")
             except AttributeError as a:
                 raise ValueError(
                     f"No distribution found in source numpy for "
@@ -119,14 +128,17 @@ class NoiseGenerator:
         elif source == "scipy":
             try:
                 exec(f"from scipy.stats import {distribution_str}")
-                self.distribution = partial(
-                    eval(f"{distribution_str}.rvs"), **distribution_kwargs
-                )
+                distribution = eval(f"{distribution_str}")
+                distribution.random_state = seed
+                self.distribution = distribution.rvs
             except ImportError as i:
                 raise ValueError(
                     f"No distribution found in source scipy for "
                     f"distribution={distribution_str}."
                 )
 
-    def __call__(self, size=1):
-        return self.distribution(size=size)
+    @_apply_dist_params
+    def __call__(self, size=1, **kwargs):
+        return self.distribution(size=size, **kwargs)
+
+    _apply_dist_params = staticmethod(_apply_dist_params)
