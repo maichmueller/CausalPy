@@ -27,7 +27,7 @@ class LinICP(ICP):
     ):
         self.n, self.p = None, None
         self.alpha = None
-        self.target_ident = None
+        self.target_name = None
         self.index_map = None
         self.variables = None
         self.target = None
@@ -35,7 +35,7 @@ class LinICP(ICP):
         self.environments = None
 
     @staticmethod
-    def filter_candidates(obs, target, nr_iter=100):
+    def pre_filter_candidates(obs, target, nr_iter=100):
         _, filtered, _ = sklearn.linear_model.lars_path(
             obs, target, method="lasso", max_iter=nr_iter, return_path=False
         )
@@ -47,6 +47,7 @@ class LinICP(ICP):
             envs: np.ndarray,
             target: Union[int, str],
             alpha: float = 0.05,
+            prefilter_variables=True,
             ignored_subsets: Set = None,
             nr_parents_limit: int = None,
             **kwargs
@@ -62,7 +63,7 @@ class LinICP(ICP):
         Parameters
         ----------
         alpha : float
-            Significance level of the tests. P(\hat{S} \subset S^*) \gte 1-`alpha`
+            Significance level of the test. P(\hat{S} \subset S^*) \gte 1-`alpha`
         obs : (n, p) ndarray or DataFrame
             The data of all environment observations from the variables of interest.
         envs : (n,) ndarray
@@ -87,33 +88,38 @@ class LinICP(ICP):
         Causal inference using invariant prediction: identification and confidence intervals, arXiv:1501.01332,
         Journal of the Royal Statistical Society, Series B (with discussion) 78(5):947-1012, 2016.
         """
-        obs_filtered = obs[:, self.filter_candidates(obs, target, kwargs.pop("nr_iter", 100))]
-        self.n, self.p = obs_filtered.shape
+        self.n, self.p = obs.shape
         assert (
             len(envs) == self.n,
             "Number of observation samples and number of environment labels have to be equal.",
         )
         self.alpha = alpha
-        self.target_ident = target
+        self.target_name = target
 
-        if isinstance(obs_filtered, pd.DataFrame):
-            self.index_map = {
-                idx: mapping for idx, mapping in zip(range(len(self.p)), obs.columns)
-            }
-            self.variables = obs_filtered.columns
-            self.target = obs_filtered[target].to_numpy()
-            self.obs = obs_filtered[obs_filtered.columns != target].to_numpy()
-        elif isinstance(obs_filtered, np.ndarray):
-            self.index_map = {idx: idx for idx in range(self.p)}
-            self.variables = np.arange(self.p)
-            self.target = obs_filtered[:, target]
-            self.obs = np.delete(obs_filtered, target, axis=1)
+        if isinstance(obs, pd.DataFrame):
+            self.index_map = pd.Series(
+                obs.columns, index=range(self.p)
+            )
+            self.variables = obs.columns.values
+            self.target = obs[target].to_numpy().flatten()
+            self.obs = obs.drop(columns=[target]).to_numpy()
+
+        elif isinstance(obs, np.ndarray):
+            self.index_map = pd.Series(np.arange(self.p))
+            self.variables = self.index_map.values
+            self.target = obs[:, target].flatten()
+            self.obs = np.delete(obs, target, axis=1)
         else:
             raise ValueError(
                 "Observations have to be either a pandas DataFrame or numpy ndarray."
             )
 
-        self.environments = {env: envs[envs == env] for env in np.unique(envs)}
+        if prefilter_variables:
+            pre_filtered_vars = np.sort(self.pre_filter_candidates(self.obs, self.target, kwargs.pop("nr_iter", 100)))
+            self.obs = self.obs[:, pre_filtered_vars]
+            self.index_map = self.index_map.reindex(pre_filtered_vars).reset_index(drop=True)
+
+        self.environments = {env: envs == env for env in np.unique(envs)}
 
         subset_iterator = self._subset_iterator(
             elements=self.variables,
@@ -128,7 +134,9 @@ class LinICP(ICP):
                 # and send data back to the iterator (would fail).
                 break
             p_value = self._test_plausible_parents(subset)
-            p_values_per_elem[subset] = max(p_values_per_elem[subset], p_value)
+            if subset:
+                # this if condition excludes the test case of the empty set
+                p_values_per_elem[subset] = max(p_values_per_elem[subset], p_value)
             subset_iterator.send(p_value <= self.alpha)
 
         # once the routine has finished the variable subset will hold the latest estimate of the causal parents
@@ -189,8 +197,11 @@ class LinICP(ICP):
         return p_value_t, p_value_f
 
     def _test_plausible_parents(self, S: Union[np.ndarray, List, Tuple]):
+        if not S:
+            obs_S = np.ones((self.n, 1))
+        else:
+            obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
         lr = sklearn.linear_model.LinearRegression(fit_intercept=False)
-        obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
         lr.fit(obs_S, self.target)
         residuals = lr.predict(obs_S) - self.target
         p_value = 1
@@ -212,14 +223,14 @@ class LinICP(ICP):
 
     @staticmethod
     def _subset_iterator(
-            elements: Union[int, Sequence, Set],
+            elements: Union[int, Collection, Set],
             candidates: Set[Tuple] = None,
             rejected_subsets: Set[Tuple] = None,
             nr_parents_limit: int = None,
     ):
         if isinstance(elements, int):
             elements = set(range(elements))
-        elif isinstance(elements, Sequence):
+        elif isinstance(elements, Collection):
             elements = set(elements)
         else:
             raise ValueError(
@@ -257,6 +268,6 @@ class LinICP(ICP):
                     # subsets with empty intersection.
                     return tuple(), True
             else:
-                rejected_subsets.add(subset)
+                rejected_subsets.add(subset_tup)
 
         return tuple(candidates), True

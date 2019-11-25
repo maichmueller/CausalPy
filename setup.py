@@ -22,7 +22,8 @@ setup_requirements = ["pytest-runner"]
 
 test_requirements = ["pytest"]
 
-extras_requirements = {"plot": ["pygraphviz"], "tests": ["pytest"]}
+extras_requirements = {"plot": ["pygraphviz"], "test": ["pytest"]}
+
 author = "Michael Aichmueller"
 
 setup(
@@ -48,7 +49,7 @@ setup(
     name="Causality",
     packages=find_packages(),
     setup_requires=setup_requirements,
-    test_suite="tests",
+    test_suite="test",
     tests_require=test_requirements,
     extras_require=extras_requirements,
     url="https://github.com/maichmueller/scm",

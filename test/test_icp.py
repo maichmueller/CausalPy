@@ -1,5 +1,3 @@
-import unittest
-from unittest import TestCase
 
 from causality import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM, LinICP
 import numpy as np
@@ -46,19 +44,18 @@ def build_scm():
     return cn
 
 
-class TestICP(TestCase):
-    def test_linear_icp(self):
-        cn = build_scm()
+def test_linear_icp():
+    cn = build_scm()
 
-        data_unintervend = cn.sample(100)
-        cn.do_intervention(["X_1"], [2])
-        data_intervention_1 = cn.sample(100)
-        cn.soft_intervention(["X_2"], [NoiseGenerator("standard_t", df=1, seed=0)])
-        data_intervention_2 = cn.sample(100)
+    data_unintervend = cn.sample(100)
+    cn.do_intervention(["X_1"], [2])
+    data_intervention_1 = cn.sample(100)
+    cn.soft_intervention(["X_2"], [NoiseGenerator("standard_t", df=1, seed=0)])
+    data_intervention_2 = cn.sample(100)
 
-        obs = pd.concat([data_unintervend, data_intervention_1, data_intervention_2], axis=0)
-        envs = np.array([0] * 100 + [1] * 100 * [2] * 100)
-        target = "Y"
+    obs = pd.concat([data_unintervend, data_intervention_1, data_intervention_2], axis=0).reset_index(drop=True)
+    envs = np.array([0] * 100 + [1] * 100 + [2] * 100)
+    target = "Y"
 
-        causal_parents = LinICP().infer(obs, envs, target, alpha=0.05)
+    causal_parents = LinICP().infer(obs, envs, target, alpha=0.05)
 
