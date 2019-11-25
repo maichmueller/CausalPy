@@ -61,7 +61,7 @@ def noise(n):
     return np.random.default_rng(0).standard_normal(n)
 
 
-class TestAssignments(TestCase):
+class TestSCM(TestCase):
     def test_linear_assignment(self):
         func = LinearAssignment(1, 0, 1, 2, 3)
         input_args = np.array([1, 2]), np.array([2, 4]), np.array([3, 6])
@@ -77,11 +77,10 @@ class TestAssignments(TestCase):
 
         scm_sample = cn.sample(10)
         sample = manual_standard_sample(10, noise, scm_sample.values.dtype, nodes_in_graph)
-        sample_order_scm = list(cn._causal_iterator())
+        sample_order_scm = list(cn.get_variables())
         sample = sample[sample_order_scm]
         # floating point inaccuracy needs to be accounted for
         self.assertTrue((sample - scm_sample).abs().values.sum() < 10e-10)
-        del sample
 
     def test_scm_intervention(self):
         cn = build_scm()
@@ -100,21 +99,20 @@ class TestAssignments(TestCase):
         sample[:, 4] = noise(n) + Polynomial([0, 0, 1.5])(sample[:, 0]) + Polynomial([0, 2])(sample[:, 2])
         sample[:, 3] = noise(n) + 3.3 * (sample[:, 0] + sample[:, 4])
         sample = pd.DataFrame(sample, columns=list(cn.graph.nodes))
-        sample_in_scm_order = sample[list(cn._causal_iterator())]
+        sample_in_scm_order = sample[list(cn.get_variables())]
 
         self.assertTrue((sample_in_scm_order - scm_sample_interv).abs().values.sum() < 10e-10)
 
         cn.undo_intervention()
 
         self.assertTrue(
-            (
-                    manual_standard_sample(
-                        n,
-                        noise,
-                        scm_sample_interv.values.dtype,
-                        list(cn.graph.nodes)
-                    )[list(cn._causal_iterator())]
-                    - scm_sample_interv).abs().values.sum() < 10e-10
+            (manual_standard_sample(
+                n,
+                noise,
+                scm_sample_interv.values.dtype,
+                list(cn.graph.nodes)
+            )[list(cn.get_variables())]
+             - scm_sample_interv).abs().values.sum() < 10e-10
         )
 
 

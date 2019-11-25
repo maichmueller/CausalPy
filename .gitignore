@@ -4,3 +4,5 @@ causality/__pycache__/*
 causality/icp/__pycache__/*
 causality/scm/__pycache__/*
 .mypy_cache/*
+
+causality/scm/__pycache__/

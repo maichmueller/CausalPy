@@ -93,7 +93,7 @@ class SCM:
             ]
     ):
         """
-        Method to apply the do-calculus on the specified variables.
+        Method to apply interventions on the specified variables.
 
         One can set any variable to a new assignment function and noise model, thus redefining its parents and their
         dependency structure. Using this method will enable the user to call sample, plot etc. on the SCM just like
@@ -174,7 +174,7 @@ class SCM:
 
     def do_intervention(self, variables: Collection, values: Collection[float]):
         """
-        Perform hard interventions, i.e. setting specific variables to a constant value.
+        Perform do-interventions, i.e. setting specific variables to a constant value.
         This method doesn't change the current noise models.
 
         Convenience wrapper around ``interventions`` method.
@@ -289,11 +289,13 @@ class SCM:
             the size of the figure to be passed to matplotlib. Default is (6, 4).
         dpi : (optional) int,
             the dots per inch arg for matplotlib. Default is 150.
+        alpha : (optional) float,
+            the statistical significance level for the tests. Default value is 0.05.
         kwargs :
             arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
         """
         if nx.is_tree(self.graph):
-            pos = self.hierarchy_pos(root=self.roots)
+            pos = self._hierarchy_pos(root=self.roots)
         else:
             pos = graphviz_layout(self.graph, prog="dot")
         plt.title(self.scm_name)
@@ -333,8 +335,7 @@ class SCM:
 
     def get_variables(self, causal_order=True):
         if causal_order:
-            for var in self._causal_iterator():
-                yield var
+            return self._causal_iterator()
         else:
             return self.graph.nodes
 
