@@ -254,20 +254,22 @@ class SCM:
                 )
 
     def plot(
-            self,
-            draw_labels: bool = True,
-            node_size: int = 500,
-            figsize: Tuple[int, int] = (6, 4),
-            dpi: int = 150,
-            alpha=0.5,
-            **kwargs,
+        self,
+        draw_labels: bool = True,
+        node_size: int = 500,
+        figsize: Tuple[int, int] = (6, 4),
+        dpi: int = 150,
+        alpha: float = 0.5,
+        **kwargs,
     ):
         """
         Plot the causal graph of the scm in a dependency oriented way.
 
-        Because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a tree
-        structure can't be computed unambiguously. Therefore this method relies on graphviz to compute a
+        This will attempt a tree plot of the scm, in the case that the graph is indeed a tree.
+        However, because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a tree
+        structure often can't be computed. Therefore this method relies on graphviz to compute a
         feasible representation of the causal graph.
+
         The graphviz package has been marked as an optional package for this module and therefore needs to be installed
         by the user.
         Note, that (at least on Ubuntu) graphviz demands further libraries to be supplied, thus the following
@@ -275,11 +277,20 @@ class SCM:
         Open a terminal and type:
 
             ``sudo apt-get install graphviz libgraphviz-dev pkg-config``
-
-        :param node_size: int, the size of the node circles in the graph. Bigger values imply bigger circles.
-        :param figsize: tuple, the size of the figure to be passed to matplotlib
-        :param dpi: int, the dots per inch for matplotlib
-        :param kwargs: arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
+        Parameters
+        ----------
+        draw_labels : (optional) bool,
+            Whether to draw the node labels onto the node. Can look unwieldy if the names are long.
+            Default is True.
+        node_size : (optional) int,
+            the size of the node circles in the graph. Bigger values mean bigger circles.
+            Default is 500.
+        figsize : (optional) tuple,
+            the size of the figure to be passed to matplotlib. Default is (6, 4).
+        dpi : (optional) int,
+            the dots per inch arg for matplotlib. Default is 150.
+        kwargs :
+            arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
         """
         if nx.is_tree(self.graph):
             pos = self.hierarchy_pos(root=self.roots)
