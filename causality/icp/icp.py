@@ -1,4 +1,5 @@
 import itertools as it
+from copy import deepcopy
 from typing import *
 
 
@@ -11,24 +12,26 @@ from abc import ABC, abstractmethod
 
 class ICP(ABC):
     @abstractmethod
-    def infer(self,
-              obs: Union[pd.DataFrame, np.ndarray],
-              envs: np.ndarray,
-              target: Union[int, str],
-              alpha: float = 0.05,
-              *args,
-              **kwargs):
+    def infer(
+        self,
+        obs: Union[pd.DataFrame, np.ndarray],
+        envs: np.ndarray,
+        target: Union[int, str],
+        alpha: float = 0.05,
+        *args,
+        **kwargs,
+    ):
         pass
 
 
 class LinICP(ICP):
-    def __init__(
-            self,
-    ):
+    def __init__(self,):
         self.n, self.p = None, None
+        self.p_filtered = None
         self.alpha = None
         self.target_name = None
-        self.index_map = None
+        self.index_to_varname = None
+        self.varname_to_index = None
         self.variables = None
         self.target = None
         self.obs = None
@@ -42,15 +45,15 @@ class LinICP(ICP):
         return filtered
 
     def infer(
-            self,
-            obs: Union[pd.DataFrame, np.ndarray],
-            envs: np.ndarray,
-            target: Union[int, str],
-            alpha: float = 0.05,
-            prefilter_variables=True,
-            ignored_subsets: Set = None,
-            nr_parents_limit: int = None,
-            **kwargs
+        self,
+        obs: Union[pd.DataFrame, np.ndarray],
+        envs: np.ndarray,
+        target: Union[int, str],
+        alpha: float = 0.05,
+        prefilter_variables=True,
+        ignored_subsets: Set = None,
+        nr_parents_limit: int = None,
+        **kwargs,
     ):
         r"""
         Perform Linear Invariant Causal Prediction (ICP) on the data provided on object construction.
@@ -88,7 +91,7 @@ class LinICP(ICP):
         Causal inference using invariant prediction: identification and confidence intervals, arXiv:1501.01332,
         Journal of the Royal Statistical Society, Series B (with discussion) 78(5):947-1012, 2016.
         """
-        self.n, self.p = obs.shape
+        self.n, self.p = obs.shape[0], obs.shape[1] - 1
         assert (
             len(envs) == self.n,
             "Number of observation samples and number of environment labels have to be equal.",
@@ -97,58 +100,64 @@ class LinICP(ICP):
         self.target_name = target
 
         if isinstance(obs, pd.DataFrame):
-            self.index_map = pd.Series(
-                obs.columns, index=range(self.p)
-            )
-            self.variables = obs.columns.values
             self.target = obs[target].to_numpy().flatten()
             self.obs = obs.drop(columns=[target]).to_numpy()
+            self.index_to_varname = pd.Series(obs.columns.drop(target), index=range(self.p))
+            self.varname_to_index = pd.Series(range(self.p), index=obs.columns.drop(target))
+            self.variables = obs.columns.values
 
         elif isinstance(obs, np.ndarray):
-            self.index_map = pd.Series(np.arange(self.p))
-            self.variables = self.index_map.values
+            self.index_to_varname = pd.Series(np.arange(self.p))
+            self.variables = self.index_to_varname.values
             self.target = obs[:, target].flatten()
             self.obs = np.delete(obs, target, axis=1)
+            self.varname_to_index = (self.index_to_varname.loc[target + 1:] - 1).drop(index=target)
         else:
             raise ValueError(
                 "Observations have to be either a pandas DataFrame or numpy ndarray."
             )
 
         if prefilter_variables:
-            pre_filtered_vars = np.sort(self.pre_filter_candidates(self.obs, self.target, kwargs.pop("nr_iter", 100)))
+            pre_filtered_vars = np.sort(
+                self.pre_filter_candidates(
+                    self.obs, self.target, kwargs.pop("nr_iter", 100)
+                )
+            )
             self.obs = self.obs[:, pre_filtered_vars]
-            self.index_map = self.index_map.reindex(pre_filtered_vars).reset_index(drop=True)
+            preds = self.obs.shape[1]
+            self.index_to_varname = self.index_to_varname.reindex(
+                pre_filtered_vars
+            ).reset_index(drop=True)
+            self.varname_to_index = pd.Series(
+                self.index_to_varname.index, index=self.index_to_varname.values
+            )
+        else:
+            preds = self.p
 
         self.environments = {env: envs == env for env in np.unique(envs)}
 
         subset_iterator = self._subset_iterator(
-            elements=self.variables,
+            elements=self.index_to_varname.values,
             rejected_subsets=ignored_subsets,
             nr_parents_limit=nr_parents_limit,
         )
-        p_values_per_elem = np.zeros(self.p)
-        subset: Tuple = tuple()
-        for subset, finished in subset_iterator:
-            if finished:
-                # the iterator lets us know, when we are done, so as to not unnecessarily test another subset
-                # and send data back to the iterator (would fail).
-                break
-            p_value = self._test_plausible_parents(subset)
+        p_values_per_elem = np.zeros(preds)
+
+        subset, finished = next(subset_iterator)
+        while not finished:
+            subset_indices = self.varname_to_index[list(subset)].values
+            p_value = self._test_plausible_parents(subset_indices)
             if subset:
                 # this if condition excludes the test case of the empty set
-                p_values_per_elem[subset] = max(p_values_per_elem[subset], p_value)
-            subset_iterator.send(p_value <= self.alpha)
-
+                p_values_per_elem[subset_indices] = np.maximum(
+                    p_values_per_elem[subset_indices], p_value
+                )
+            subset, finished = subset_iterator.send(p_value <= self.alpha)
         # once the routine has finished the variable subset will hold the latest estimate of the causal parents
-        if subset:
-            # if the candidates set isn't empty, we have found causal parents
-            subset = tuple(self.index_map[c] for c in subset)
-        else:
-            # the causal parents set is empty
-            p_values_per_elem = 1
 
         p_values_per_elem = pd.Series(
-            p_values_per_elem, index=[self.index_map[i] for i in np.arange(self.p)],
+            1 if not subset else p_values_per_elem,
+            index=[self.index_to_varname[i] for i in np.arange(preds)],
         )  # add variable names information to the data
         return subset, p_values_per_elem
 
@@ -184,8 +193,8 @@ class LinICP(ICP):
             var_1_per_len + var_1_per_len
         )
         t_dof = np.power(var_1_per_len + var_2_per_len, 2) / (
-                np.power(var_1_per_len, 2) / (len_1 - 1)
-                + np.power(var_2_per_len, 2) / (len_2 - 1)
+            np.power(var_1_per_len, 2) / (len_1 - 1)
+            + np.power(var_2_per_len, 2) / (len_2 - 1)
         )
         p_value_t = scipy.stats.t.sf(np.abs(t_test_score), t_dof)
 
@@ -197,7 +206,7 @@ class LinICP(ICP):
         return p_value_t, p_value_f
 
     def _test_plausible_parents(self, S: Union[np.ndarray, List, Tuple]):
-        if not S:
+        if not len(S):
             obs_S = np.ones((self.n, 1))
         else:
             obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
@@ -207,7 +216,7 @@ class LinICP(ICP):
         p_value = 1
         # the paper suggests to test the residual of data in an environment e against the
         # the residuals of the data not in e.
-        # TODO: find out, whether this isn't equivalent to the faster method of testing the residuals of
+        # TODO: find out, whether this isn't equivalent to the slightly faster method of testing the residuals of
         # TODO: each environment e against environment e + 1.
         for env in self.environments:
             env_indices = self.environments[env]
@@ -223,10 +232,10 @@ class LinICP(ICP):
 
     @staticmethod
     def _subset_iterator(
-            elements: Union[int, Collection, Set],
-            candidates: Set[Tuple] = None,
-            rejected_subsets: Set[Tuple] = None,
-            nr_parents_limit: int = None,
+        elements: Union[int, Collection, Set],
+        candidates: Set[Tuple] = None,
+        rejected_subsets: Set[Tuple] = None,
+        nr_parents_limit: int = None,
     ):
         if isinstance(elements, int):
             elements = set(range(elements))
@@ -241,7 +250,10 @@ class LinICP(ICP):
         if rejected_subsets is None:
             rejected_subsets = set()
         if candidates is None:
-            candidates = set(elements)
+            if not isinstance(elements, Set):
+                candidates = set(elements)
+            else:
+                candidates = deepcopy(elements)
         else:
             candidates = set(candidates)
 
@@ -249,8 +261,8 @@ class LinICP(ICP):
             nr_parents_limit = len(elements)
 
         for subset in it.chain.from_iterable(
-                it.combinations(elements, len_subset)
-                for len_subset in range(nr_parents_limit + 1)
+            it.combinations(elements, len_subset)
+            for len_subset in range(nr_parents_limit + 1)
         ):
             subset = candidates.intersection(subset)
             # converting to tuple here is necessary as sets are mutable, thus not hashable
@@ -266,8 +278,9 @@ class LinICP(ICP):
                 if not candidates:
                     # empty candidates set means we have found no causal parent as there were at least two accepted
                     # subsets with empty intersection.
-                    return tuple(), True
+                    yield tuple(), True
+
             else:
                 rejected_subsets.add(subset_tup)
 
-        return tuple(candidates), True
+        yield tuple(candidates), True

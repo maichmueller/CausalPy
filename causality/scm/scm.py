@@ -20,6 +20,7 @@ from typing import (
 )
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
+from copy import deepcopy
 
 
 class SCM:
@@ -34,12 +35,12 @@ class SCM:
         scm_name: str = "Structural Causal Model",
     ):
 
-        self.scm_name = scm_name
+        self.scm_name: str = scm_name
         # the root variables which are causally happening at first.
         self.roots: List = []
-        self.nr_variables = len(assignment_map)
+        self.nr_variables: int = len(assignment_map)
 
-        self.var_names = np.array(list(assignment_map.keys()))
+        self.var_names: np.ndarray = np.array(list(assignment_map.keys()))
         # supply any variable name, that has not been assigned a different TeX name, itself as TeX name.
         # This prevents missing labels in the plot method.
         if variable_tex_names is not None:
@@ -56,8 +57,8 @@ class SCM:
 
         # a backup dictionary of the original assignments of the intervened variables,
         # in order to undo the interventions later.
-        self.interventions_attr_backup: Dict = dict()
-        self.interventions_edge_backup: Dict = dict()
+        self.interventions_backup_attr: Dict = dict()
+        self.interventions_backup_parent: Dict = dict()
 
         # build the graph:
         # any node will be given the attributes of function and noise to later sample from and also an incoming edge
@@ -135,27 +136,28 @@ class SCM:
 
             if isinstance(items, dict):
                 if any(
-                    (
-                        key not in ("parents", self.function_key, self.noise_key)
-                        for key in items.keys()
-                    )
+                        (
+                                key not in ("parents", self.function_key, self.noise_key)
+                                for key in items.keys()
+                        )
                 ):
                     raise ValueError(
                         f"Intervention dictionary provided with the wrong keys.\n"
                         f"Observed keys are: {list(items.keys())}\n"
                         f"Possible keys are: ['parents', '{self.function_key}', '{self.noise_key}']"
                     )
-                attr_dict = items
                 try:
                     parent_list = [
-                        par for par in self._filter_variable_names(items["parents"])
+                        par for par in self._filter_variable_names(items.pop("parents"))
                     ]
                 except KeyError:
                     parent_list = tuple(self.graph.predecessors(var))
 
+                attr_dict = items
+
             elif isinstance(items, (list, tuple, np.ndarray)):
                 assert (
-                    len(items) == 3
+                        len(items) == 3
                 ), "The positional items container needs to contain exactly 3 items."
 
                 if items[0] is not None:
@@ -173,15 +175,23 @@ class SCM:
                     f"Intervention items container '{type(items)}' not supported."
                 )
 
-            self.interventions_attr_backup[var] = self.graph.nodes[var]
-            edge_backup = []
-            for parent in list(self.graph.predecessors(var)):
-                edge_backup.append(parent)
-                self.graph.remove_edge(parent, var)
-            self.interventions_edge_backup[var] = edge_backup
+            if var not in self.interventions_backup_attr:
+                # the variable has NOT already been backed up. If we overwrite it now it is fine. If it had already been
+                # in the backup, then it we would need to pass on this step, in order to not overwrite the backup
+                # (possibly with a previous intervention)
+                self.interventions_backup_attr[var] = deepcopy(self.graph.nodes[var])
+
+            if var not in self.interventions_backup_parent:
+                # the same logic goes for the parents backup.
+                parent_backup = []
+                for parent in list(self.graph.predecessors(var)):
+                    parent_backup.append(parent)
+                    self.graph.remove_edge(parent, var)
+                self.interventions_backup_parent[var] = parent_backup
+
+            self.graph.add_node(var, **attr_dict)
             for parent in parent_list:
                 self.graph.add_edge(parent, var)
-            self.graph.add_node(var, **attr_dict)
 
     def do_intervention(self, variables: Collection, values: Collection[float]):
         """
@@ -240,22 +250,27 @@ class SCM:
         if variables is not None:
             present_variables = self._filter_variable_names(variables)
         else:
-            present_variables = self.interventions_attr_backup.keys()
+            present_variables = list(self.interventions_backup_attr.keys())
 
         for var in present_variables:
-            if (
-                var in self.interventions_attr_backup
-                and var in self.interventions_edge_backup
-            ):
-                self.graph.add_node(var, **self.interventions_attr_backup[var])
-                for parent in list(self.graph.predecessors(var)):
-                    self.graph.remove_edge(parent, var)
-                for parent in self.interventions_edge_backup[var]:
-                    self.graph.add_edge(parent, var)
-            else:
+            try:
+                attr_dict = self.interventions_backup_attr.pop(var)
+                parents = self.interventions_backup_parent.pop(var)
+            except KeyError:
                 logging.warning(
                     f"Variable '{var}' not found in intervention backup. Omitting it."
                 )
+                continue
+
+            self.graph.add_node(var, **attr_dict)
+            for parent in list(self.graph.predecessors(var)):
+                self.graph.remove_edge(parent, var)
+            for parent in parents:
+                self.graph.add_edge(parent, var)
+
+    def reseed(self, seed: int):
+        for var in self.get_variables():
+            self.graph.nodes[var][self.noise_key].set_seed(seed)
 
     def plot(
         self,
@@ -327,7 +342,7 @@ class SCM:
         lines = [
             f"Structural Causal Model of {self.nr_variables} variables: "
             + ", ".join(self.var_names),
-            f"Following variables have been intervened on: {list(self.interventions_attr_backup.keys())}",
+            f"Following variables have been intervened on: {list(self.interventions_backup_attr.keys())}",
             "Current Assignment Functions are:",
         ]
         max_var_space = max([len(var_name) for var_name in self.var_names])

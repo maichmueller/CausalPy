@@ -86,7 +86,7 @@ class NoiseGenerator:
 
     def __init__(self, distribution_str: str = "", source="numpy", seed=None, **distribution_params):
         self.params = distribution_params
-        self.distribution_str = None
+        self.distribution_str = distribution_str
         self.source = source
         self.seed = seed
 

@@ -55,7 +55,9 @@ def test_linear_icp():
 
     obs = pd.concat([data_unintervend, data_intervention_1, data_intervention_2], axis=0).reset_index(drop=True)
     envs = np.array([0] * 100 + [1] * 100 + [2] * 100)
-    target = "Y"
+    target = "X_3"
 
-    causal_parents = LinICP().infer(obs, envs, target, alpha=0.05)
+    causal_parents, p_vals = LinICP().infer(obs, envs, target, alpha=0.05, prefilter_variables=False)
+
+    assert causal_parents == tuple(cn.graph.predecessors(target))
 

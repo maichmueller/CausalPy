@@ -73,21 +73,28 @@ def test_linear_assignment():
     assert (func(np.array([1, 1]), *input_args) == np.array([15, 29])).all()
 
 
-def test_scm_build_sample():
+def test_scm_build():
     cn = build_scm()
     nodes_in_graph = list(cn.graph.nodes)
     assert nodes_in_graph, ["X_0", "X_1", "X_2", "X_3", "Y"]
 
+
+def test_scm_sample():
+    cn = build_scm()
     scm_sample = cn.sample(10)
-    sample = manual_standard_sample(10, noise, scm_sample.values.dtype, nodes_in_graph)
+    sample = manual_standard_sample(
+        10, noise, scm_sample.values.dtype, list(cn.graph.nodes)
+    )
     sample_order_scm = list(cn.get_variables())
     sample = sample[sample_order_scm]
     # floating point inaccuracy needs to be accounted for
-    assert (sample - scm_sample).abs().values.sum() < 10e-10
+    assert (sample - scm_sample).abs().values.sum() < 1e-10
 
 
 def test_scm_intervention():
     cn = build_scm()
+
+    # do the intervention
     cn.intervention(
         {
             "X_3": {
@@ -99,7 +106,7 @@ def test_scm_intervention():
     )
     n = 10
 
-    scm_sample_interv = cn.sample(10)
+    scm_sample_interv = cn.sample(n)
     sample = np.empty((n, 5), dtype=scm_sample_interv.values.dtype)
     sample[:, 0] = noise(n)
     sample[:, 1] = 1 + noise(n) + 2 * sample[:, 0]
@@ -109,17 +116,22 @@ def test_scm_intervention():
         + Polynomial([0, 0, 1.5])(sample[:, 0])
         + Polynomial([0, 2])(sample[:, 2])
     )
-    sample[:, 3] = noise(n) + 3.3 * (sample[:, 0] + sample[:, 4])
+    sample[:, 3] = NoiseGenerator("t", df=1, source="scipy", seed=0)(n) + 3.3 * (
+        sample[:, 0] + sample[:, 4]
+    )
     sample = pd.DataFrame(sample, columns=list(cn.graph.nodes))
     sample_in_scm_order = sample[list(cn.get_variables())]
 
-    assert (sample_in_scm_order - scm_sample_interv).abs().values.sum() < 10e-10
+    assert (sample_in_scm_order - scm_sample_interv).abs().values.sum() < 1e-10
 
+    # from here on the cn should work as normal again
     cn.undo_intervention()
 
-    assert (
-        manual_standard_sample(
-            n, noise, scm_sample_interv.values.dtype, list(cn.graph.nodes)
-        )[list(cn.get_variables())]
-        - scm_sample_interv
-    ).abs().values.sum() < 10e-10
+    # reseeding needs to happen as the state of the initial noise distributions is further advanced than
+    # a newly seeded noise by noise()
+    cn.reseed(0)
+    man_sample = manual_standard_sample(
+        n, noise, scm_sample_interv.values.dtype, list(cn.graph.nodes)
+    )[list(cn.get_variables())]
+    new_cn_sample = cn.sample(n)
+    assert (man_sample - new_cn_sample).abs().values.sum() < 1e-10
