@@ -1,4 +1,5 @@
 import itertools as it
+from collections import namedtuple
 from copy import deepcopy
 from typing import *
 
@@ -26,13 +27,13 @@ class ICP(ABC):
 class LinICP(ICP):
     def __init__(
             self, fit_intercept: bool = True,
-            distribution_assumption: str = "gaussian",
+            noise_assumption: str = None,
             filter_variables: bool = True,
             filter_method: str = "lasso_sqrt"
     ):
 
         self.fit_intercept = fit_intercept
-        self.distribution_assumption = distribution_assumption
+        self.noise_assumption = noise_assumption
         self.filter_variables = filter_variables
         self.filter_method = filter_method
 
@@ -172,54 +173,45 @@ class LinICP(ICP):
         return subset, p_values_per_elem
 
     @staticmethod
-    def test_equal_gaussians(sample_1, sample_2):
+    def test_equal_gaussians(sample1, sample2, **levene_kwargs):
         """
         Test for the equality of the distribution of input 1 versus 2.
         This test is supposed to be performed when the samples are assumed to follow a gaussian distribution, which
         is fully defined by mean and variance.
 
-        This method performs a t-test for equal mean and F-test for equal variance.
+        This method performs a t-test for equal mean and Levene's test for equal variance.
 
         Parameters
         ----------
-        sample_1 : (n, p) np.ndarray,
+        sample1 : (n, p) np.ndarray,
             The data pertaining to the first gaussian.
-        sample_2 : (n, p) np.ndarray,
+        sample2 : (n, p) np.ndarray,
             The data pertaining to the second gaussian.
+        levene_kwargs: kwargs,
+            Arguments passable to the scipy.stats.levene method. More information can be found in [1]_
+
 
         Returns
         -------
         tuple
-            A 2-tuple of the p value of the equal mean test and the equal variance test.
+            A 2-tuple of the test results (statistic, pvalue) of the equal mean test and the equal variance test.
+
+        References
+        ----------
+        [1] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levene.html
+        [2] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html
         """
-        len_1 = len(sample_1)
-        len_2 = len(sample_2)
-        var_1 = np.var(sample_1, ddof=1)
-        var_2 = np.var(sample_2, ddof=1)
-        var_1_per_len = var_1 / len_1
-        var_2_per_len = var_2 / len_2
+        equal_mean = scipy.stats.ttest_ind(sample1, sample2, equal_var=False)
+        #  the levene test is apparently more robust than the standard F-test given the sensitivity of the F-test
+        # to non-normality of the data.
+        equal_var = scipy.stats.levene(sample1, sample2, **levene_kwargs)
+        return equal_mean, equal_var
 
-        t_test_score = (np.mean(sample_1) - np.mean(sample_2)) / np.sqrt(
-            var_1_per_len + var_1_per_len
-        )
-        t_dof = np.power(var_1_per_len + var_2_per_len, 2) / (
-                np.power(var_1_per_len, 2) / (len_1 - 1)
-                + np.power(var_2_per_len, 2) / (len_2 - 1)
-        )
-        p_value_t = scipy.stats.t.sf(np.abs(t_test_score), t_dof)
-
-        f_test_score = var_1 / var_2
-        p_value_f = 2 * min(
-            scipy.stats.f.cdf(f_test_score, len_1 - 1, len_2 - 1),
-            scipy.stats.f.sf(f_test_score, len_1 - 1, len_2 - 1),
-        )
-        return p_value_t, p_value_f
-
-    def _test_plausible_parents(self, S: Union[np.ndarray, List, Tuple]):
-        if not len(S):
+    def _test_plausible_parents(self, s: Union[np.ndarray, List, Tuple]):
+        if not len(s):
             obs_S = np.ones((self.n, 1))
         else:
-            obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
+            obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, s])
         lr = sklearn.linear_model.LinearRegression(fit_intercept=True)
         lr.fit(obs_S, self.target)
         residuals = lr.predict(obs_S) - self.target

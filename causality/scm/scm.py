@@ -4,7 +4,7 @@ import logging
 import networkx as nx
 from networkx.drawing.nx_agraph import graphviz_layout
 
-from . import BaseAssignment, NoiseGenerator, LinearAssignment
+from . import Assignment, NoiseModel, NoiseGenerator, LinearAssignment, BaseAssignment
 
 from typing import (
     List,
@@ -15,19 +15,22 @@ from typing import (
     Set,
     Type,
     Mapping,
-    TypeVar,
     Collection,
-)
+    TypeVar)
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 from copy import deepcopy
 
 
 class SCM:
+
+    Assignment = TypeVar('Assignment', bound=BaseAssignment)
+    NoiseModel = TypeVar('NoiseModel', bound=NoiseGenerator)
+
     def __init__(
         self,
         assignment_map: Mapping[
-            object, Tuple[Collection, Type[BaseAssignment], Type[NoiseGenerator]]
+            object, Tuple[Collection, Type[Assignment], Type[NoiseModel]]
         ],
         variable_tex_names: Dict = None,
         function_key: str = "function",
@@ -41,7 +44,7 @@ class SCM:
         self.nr_variables: int = len(assignment_map)
 
         self.var_names: np.ndarray = np.array(list(assignment_map.keys()))
-        # supply any variable name, that has not been assigned a different TeX name, itself as TeX name.
+        # supply any variable name, that has not been assigned a different TeX name, with itself as TeX name.
         # This prevents missing labels in the plot method.
         if variable_tex_names is not None:
             for name in self.var_names:

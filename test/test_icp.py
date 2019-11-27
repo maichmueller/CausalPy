@@ -6,33 +6,38 @@ from scipy import stats
 from numpy.polynomial.polynomial import Polynomial
 
 
-def build_scm():
+def build_scm(seed=0):
     cn = SCM(
         assignment_map={
             "X_0": (
                 [],
                 LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
             "X_1": (
                 ["X_0"],
                 LinearAssignment(1, 1, 2),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
             "X_2": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 1, 3, 2),
-                NoiseGenerator("standard_normal", seed=0),
+                ["X_0"],
+                LinearAssignment(1, 1, 3),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
             "X_3": (
-                ["X_1", "X_2"],
-                LinearAssignment(1, 0, 0.3, 0.7),
-                NoiseGenerator("standard_normal", seed=0),
+                ["X_1"],
+                LinearAssignment(1, 0, 0.3),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
             "Y": (
-                ["X_0", "X_2", "X_3"],
-                LinearAssignment(1, 3, -1, -2, 5),
-                NoiseGenerator("standard_normal", seed=0),
+                ["X_2", "X_3"],
+                LinearAssignment(1, 3, -2, 5),
+                NoiseGenerator("standard_normal", seed=seed),
+            ),
+            "X_4": (
+                ["Y"],
+                LinearAssignment(1, 3, 9),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
         },
         variable_tex_names={
@@ -43,26 +48,6 @@ def build_scm():
         },
     )
     return cn
-
-
-def test_residual_test():
-    rvs1 = stats.norm.rvs(loc=5, scale=10, size=500)
-    rvs2 = stats.norm.rvs(loc=5, scale=10, size=500)
-    rvs3 = stats.norm.rvs(loc=5, scale=20, size=500)
-    rvs4 = stats.norm.rvs(loc=5, scale=20, size=100)
-    rvs5 = stats.norm.rvs(loc=8, scale=20, size=100)
-    p_1_2 = stats.ttest_ind(rvs1, rvs2, equal_var=False)[1]
-    p_1_3 = stats.ttest_ind(rvs1, rvs3, equal_var=False)[1]
-    p_1_4 = stats.ttest_ind(rvs1, rvs4, equal_var=False)[1]
-    p_1_5 = stats.ttest_ind(rvs1, rvs5, equal_var=False)[1]
-
-    assert LinICP.test_equal_gaussians(rvs1, rvs2)[0] == p_1_2
-    assert LinICP.test_equal_gaussians(rvs1, rvs3)[0] == p_1_3
-    assert LinICP.test_equal_gaussians(rvs1, rvs4)[0] == p_1_4
-    assert LinICP.test_equal_gaussians(rvs1, rvs5)[0] == p_1_5
-
-
-
 
 
 def test_linear_icp():

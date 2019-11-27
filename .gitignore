@@ -6,3 +6,5 @@ causality/scm/__pycache__/*
 .mypy_cache/*
 
 causality/scm/__pycache__/
+
+*.json

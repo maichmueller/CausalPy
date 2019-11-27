@@ -1,6 +1,6 @@
 import numpy as np
 from numpy.polynomial import polynomial
-from typing import List, Union, Dict, Type, Callable, TypeVar
+from typing import Union, TypeVar
 from abc import ABC, abstractmethod
 
 
@@ -72,71 +72,4 @@ class BaseAssignment(ABC):
         return prefix + assignment
 
 
-AssignmentType = TypeVar("AssignmentType", bound=BaseAssignment)
-
-
-class LinearAssignment(BaseAssignment):
-    def __init__(self, noise_factor, offset=0, *coefficients):
-        self.noise_factor = noise_factor
-        self.offset = offset
-        self.coefficients = (
-            np.asarray(coefficients) if len(coefficients) > 0 else np.array([])
-        )
-
-    def __call__(self, noise, *args):
-        return self.offset + self.noise_factor * noise + self.coefficients @ args
-
-    def __len__(self):
-        return 1 + len(self.coefficients)
-
-    def function_str(self, variable_names=None):
-        rep = f"{f'{round(self.offset, 2)} + ' if self.offset != 0 else ''}{round(self.noise_factor, 2)} N"
-        for i, c in enumerate(self.coefficients):
-            if c != 0:
-                rep += f" + {round(c, 2)} {variable_names[i + 1]}"
-        return rep
-
-
-class PolynomialAssignment(BaseAssignment):
-    def __init__(self, *coefficients_list: List[float]):
-        polynomials = []
-        if len(coefficients_list) > 0:
-            for coefficients in coefficients_list:
-                polynomials.append(polynomial.Polynomial(coefficients))
-        self.polynomials: np.ndarray = np.asarray(polynomials)
-
-    def __call__(self, *args):
-        assert len(args) == len(self.polynomials)
-        # args[0] is assumed to be the noise
-        return sum((poly(arg) for poly, arg in zip(self.polynomials, args)))
-
-    def __len__(self):
-        return len(self.polynomials)
-
-    def function_str(self, variable_names=None):
-        assignment = []
-        for poly, var in zip(self.polynomials, variable_names):
-            coeffs = poly.coef
-            this_assign = []
-            for deg, c in enumerate(coeffs):
-                if c != 0:
-                    this_assign.append(
-                        f"{round(c, 2)} {var}{f'**{deg}' if deg != 1 else ''}"
-                    )
-            assignment.append(" + ".join(this_assign))
-        return " + ".join(assignment)
-
-
-class LinkerAssignment(BaseAssignment):
-    def __init__(self, linker_func: Callable, assignment_func: AssignmentType):
-        self.linker = linker_func
-        self.assign_func = assignment_func
-
-    def __call__(self, *args, **kwargs):
-        return self.linker(self.assign_func(*args, **kwargs))
-
-    def __len__(self):
-        return len(self.assign_func)
-
-    def function_str(self, variable_names=None):
-        return f"{self.linker.__name__}({self.assign_func.str(variable_names)})"
+Assignment = TypeVar('Assignment', bound=BaseAssignment)

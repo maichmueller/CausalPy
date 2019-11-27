@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 import numpy as np
 from numpy.random import Generator, PCG64
 from functools import partial, wraps
@@ -142,3 +144,6 @@ class NoiseGenerator:
         return self.distribution(size=size, **kwargs)
 
     _apply_dist_params = staticmethod(_apply_dist_params)
+
+
+NoiseModel = TypeVar('NoiseModel', bound=NoiseGenerator)
