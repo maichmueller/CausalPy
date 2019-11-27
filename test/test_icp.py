@@ -2,6 +2,7 @@
 from causality import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM, LinICP
 import numpy as np
 import pandas as pd
+from scipy import stats
 from numpy.polynomial.polynomial import Polynomial
 
 
@@ -42,6 +43,26 @@ def build_scm():
         },
     )
     return cn
+
+
+def test_residual_test():
+    rvs1 = stats.norm.rvs(loc=5, scale=10, size=500)
+    rvs2 = stats.norm.rvs(loc=5, scale=10, size=500)
+    rvs3 = stats.norm.rvs(loc=5, scale=20, size=500)
+    rvs4 = stats.norm.rvs(loc=5, scale=20, size=100)
+    rvs5 = stats.norm.rvs(loc=8, scale=20, size=100)
+    p_1_2 = stats.ttest_ind(rvs1, rvs2, equal_var=False)[1]
+    p_1_3 = stats.ttest_ind(rvs1, rvs3, equal_var=False)[1]
+    p_1_4 = stats.ttest_ind(rvs1, rvs4, equal_var=False)[1]
+    p_1_5 = stats.ttest_ind(rvs1, rvs5, equal_var=False)[1]
+
+    assert LinICP.test_equal_gaussians(rvs1, rvs2)[0] == p_1_2
+    assert LinICP.test_equal_gaussians(rvs1, rvs3)[0] == p_1_3
+    assert LinICP.test_equal_gaussians(rvs1, rvs4)[0] == p_1_4
+    assert LinICP.test_equal_gaussians(rvs1, rvs5)[0] == p_1_5
+
+
+
 
 
 def test_linear_icp():

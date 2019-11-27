@@ -2,7 +2,6 @@ import itertools as it
 from copy import deepcopy
 from typing import *
 
-
 import numpy as np
 import pandas as pd
 import scipy.stats
@@ -13,19 +12,30 @@ from abc import ABC, abstractmethod
 class ICP(ABC):
     @abstractmethod
     def infer(
-        self,
-        obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
-        target: Union[int, str],
-        alpha: float = 0.05,
-        *args,
-        **kwargs,
+            self,
+            obs: Union[pd.DataFrame, np.ndarray],
+            envs: np.ndarray,
+            target: Union[int, str],
+            alpha: float = 0.05,
+            *args,
+            **kwargs,
     ):
         pass
 
 
 class LinICP(ICP):
-    def __init__(self,):
+    def __init__(
+            self, fit_intercept: bool = True,
+            distribution_assumption: str = "gaussian",
+            filter_variables: bool = True,
+            filter_method: str = "lasso_sqrt"
+    ):
+
+        self.fit_intercept = fit_intercept
+        self.distribution_assumption = distribution_assumption
+        self.filter_variables = filter_variables
+        self.filter_method = filter_method
+
         self.n, self.p = None, None
         self.p_filtered = None
         self.alpha = None
@@ -45,15 +55,15 @@ class LinICP(ICP):
         return filtered
 
     def infer(
-        self,
-        obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
-        target: Union[int, str],
-        alpha: float = 0.05,
-        prefilter_variables=True,
-        ignored_subsets: Set = None,
-        nr_parents_limit: int = None,
-        **kwargs,
+            self,
+            obs: Union[pd.DataFrame, np.ndarray],
+            envs: np.ndarray,
+            target: Union[int, str],
+            alpha: float = 0.05,
+            prefilter_variables=True,
+            ignored_subsets: Set = None,
+            nr_parents_limit: int = None,
+            **kwargs,
     ):
         r"""
         Perform Linear Invariant Causal Prediction (ICP) on the data provided on object construction.
@@ -193,8 +203,8 @@ class LinICP(ICP):
             var_1_per_len + var_1_per_len
         )
         t_dof = np.power(var_1_per_len + var_2_per_len, 2) / (
-            np.power(var_1_per_len, 2) / (len_1 - 1)
-            + np.power(var_2_per_len, 2) / (len_2 - 1)
+                np.power(var_1_per_len, 2) / (len_1 - 1)
+                + np.power(var_2_per_len, 2) / (len_2 - 1)
         )
         p_value_t = scipy.stats.t.sf(np.abs(t_test_score), t_dof)
 
@@ -210,7 +220,7 @@ class LinICP(ICP):
             obs_S = np.ones((self.n, 1))
         else:
             obs_S = sklearn.preprocessing.add_dummy_feature(self.obs[:, S])
-        lr = sklearn.linear_model.LinearRegression(fit_intercept=False)
+        lr = sklearn.linear_model.LinearRegression(fit_intercept=True)
         lr.fit(obs_S, self.target)
         residuals = lr.predict(obs_S) - self.target
         p_value = 1
@@ -232,10 +242,10 @@ class LinICP(ICP):
 
     @staticmethod
     def _subset_iterator(
-        elements: Union[int, Collection, Set],
-        candidates: Set[Tuple] = None,
-        rejected_subsets: Set[Tuple] = None,
-        nr_parents_limit: int = None,
+            elements: Union[int, Collection, Set],
+            candidates: Set[Tuple] = None,
+            rejected_subsets: Set[Tuple] = None,
+            nr_parents_limit: int = None,
     ):
         if isinstance(elements, int):
             elements = set(range(elements))
@@ -261,8 +271,8 @@ class LinICP(ICP):
             nr_parents_limit = len(elements)
 
         for subset in it.chain.from_iterable(
-            it.combinations(elements, len_subset)
-            for len_subset in range(nr_parents_limit + 1)
+                it.combinations(elements, len_subset)
+                for len_subset in range(nr_parents_limit + 1)
         ):
             subset = candidates.intersection(subset)
             # converting to tuple here is necessary as sets are mutable, thus not hashable
