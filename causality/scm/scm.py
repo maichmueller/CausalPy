@@ -314,7 +314,7 @@ class SCM:
             arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
         """
         if nx.is_tree(self.graph):
-            pos = self._hierarchy_pos(root=self.roots)
+            pos = self._hierarchy_pos(root=self.roots[0])
         else:
             pos = graphviz_layout(self.graph, prog="dot")
         plt.title(self.scm_name)
@@ -419,7 +419,7 @@ class SCM:
             yield key
 
     def _hierarchy_pos(
-        self, root=None, width=1.0, vert_gap=0.2, vert_loc=0, leaf_vs_root_factor=0.5
+        self, root=None, width=1.0, vert_gap=0.2, vert_loc=0, leaf_vs_root_factor=0.5, check_for_tree=True
     ):
 
         """
@@ -470,7 +470,7 @@ class SCM:
         xcenter: horizontal location of root
         """
         G = self.graph
-        if not nx.is_tree(G):
+        if check_for_tree and not nx.is_tree(G):
             raise TypeError("cannot use hierarchy_pos on a graph that is not a tree")
 
         if root is None:
