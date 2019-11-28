@@ -173,7 +173,7 @@ class LinICP(ICP):
         return subset, p_values_per_elem
 
     @staticmethod
-    def test_equal_gaussians(sample1, sample2, **levene_kwargs):
+    def test_residuals(sample1, sample2, test="normal", **levene_kwargs):
         """
         Test for the equality of the distribution of input 1 versus 2.
         This test is supposed to be performed when the samples are assumed to follow a gaussian distribution, which
@@ -190,22 +190,29 @@ class LinICP(ICP):
         levene_kwargs: kwargs,
             Arguments passable to the scipy.stats.levene method. More information can be found in [1]_
 
-
         Returns
         -------
         tuple
-            A 2-tuple of the test results (statistic, pvalue) of the equal mean test and the equal variance test.
+            A 2-tuple of the test p-values of the equal mean test and the equal variance test.
 
         References
         ----------
         [1] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levene.html
         [2] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html
         """
-        equal_mean = scipy.stats.ttest_ind(sample1, sample2, equal_var=False)
-        #  the levene test is apparently more robust than the standard F-test given the sensitivity of the F-test
-        # to non-normality of the data.
-        equal_var = scipy.stats.levene(sample1, sample2, **levene_kwargs)
-        return equal_mean, equal_var
+        if test == "ranks":
+            p_equal_mean = scipy.stats.ttest_ind(sample1, sample2, equal_var=False).pvalue
+            #  the levene test is apparently more robust than the standard F-test given the sensitivity of the F-test
+            # to non-normality of the data.
+            p_equal_var = scipy.stats.levene(sample1, sample2, **levene_kwargs).pvalue
+            p_val = 2 * min(p_equal_mean, p_equal_var)
+        elif isinstance(test, Callable):
+            p_val = test(sample1, sample2)
+        elif "normal":
+            # TODO: compute myself the statistics
+            p_equal_mean = scipy.stats.ttest_ind(sample1, sample2, equal_var=False).pvalue
+            p_equal_var = scipy.stats.levene(sample1, sample2, **levene_kwargs).pvalue
+        return
 
     def _test_plausible_parents(self, s: Union[np.ndarray, List, Tuple]):
         if not len(s):
@@ -222,15 +229,11 @@ class LinICP(ICP):
         # TODO: each environment e against environment e + 1.
         for env in self.environments:
             env_indices = self.environments[env]
-            p_value_update = 2 * min(
-                self.test_equal_gaussians(
-                    residuals[env_indices], residuals[np.logical_not(env_indices)]
-                )
+            p_value_update = self.test_residuals(
+                residuals[env_indices], residuals[np.logical_not(env_indices)]
             )
             p_value = min(p_value, p_value_update)
-
-        p_value *= len(self.environments)  # Bonferroni correction for p value
-        return p_value
+        return p_value * len(self.environments)   # Bonferroni correction for p value
 
     @staticmethod
     def _subset_iterator(

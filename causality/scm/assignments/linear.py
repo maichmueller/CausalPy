@@ -1,4 +1,5 @@
 from .base import BaseAssignment
+import numpy as np
 
 
 class LinearAssignment(BaseAssignment):

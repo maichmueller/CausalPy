@@ -24,13 +24,10 @@ from copy import deepcopy
 
 class SCM:
 
-    Assignment = TypeVar('Assignment', bound=BaseAssignment)
-    NoiseModel = TypeVar('NoiseModel', bound=NoiseGenerator)
-
     def __init__(
         self,
         assignment_map: Mapping[
-            object, Tuple[Collection, Type[Assignment], Type[NoiseModel]]
+            object, Tuple[Collection, BaseAssignment, NoiseGenerator]
         ],
         variable_tex_names: Dict = None,
         function_key: str = "function",
@@ -219,7 +216,7 @@ class SCM:
             interventions_dict[var] = ([], LinearAssignment(1, val), None)
         self.intervention(interventions_dict)
 
-    def soft_intervention(self, variables: Collection, noise_models: Collection[float]):
+    def soft_intervention(self, variables: Collection, noise_models: Collection[NoiseGenerator]):
         """
         Perform hard interventions, i.e. setting specific variables to a constant value.
         This method doesn't change the current noise models.
