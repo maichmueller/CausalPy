@@ -1,4 +1,4 @@
-from causality import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM
+from causalpy import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM
 import numpy as np
 import pandas as pd
 from numpy.polynomial.polynomial import Polynomial

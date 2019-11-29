@@ -14,12 +14,9 @@ from typing import (
     Tuple,
     Iterable,
     Set,
-    Type,
     Mapping,
     Collection,
-    TypeVar,
     Optional,
-    Any,
 )
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
@@ -140,7 +137,7 @@ class SCM:
 
             - For tuple: the order is (Parent list, assignment functor, noise models). In order to omit one of these,
                 set them to None.
-            - For ndarray: same as list, but dim == 1 assumed (not checked).
+            - For ndarray: same as list, but dim == 1 assumed (will be flattened otherwise).
         """
         for var, items in interventions.items():
             if var not in self.graph.nodes:
@@ -169,16 +166,19 @@ class SCM:
                 attr_dict = items
 
             elif isinstance(items, (list, tuple, np.ndarray)):
+                if isinstance(items, np.ndarray) and items.ndim > 1:
+                    items = items.flatten()
+
                 assert (
                     len(items) == 3
                 ), "The positional items container needs to contain exactly 3 items."
 
-                if items[0] is not None:
+                if items[0] is None:
+                    parent_list = tuple(self.graph.predecessors(var))
+                else:
                     parent_list = tuple(
                         par for par in self._filter_variable_names(items[0])
                     )
-                else:
-                    parent_list = tuple(self.graph.predecessors(var))
                 attr_dict = dict()
                 if items[1] is not None:
                     attr_dict.update({self.function_key: items[1]})
@@ -302,9 +302,9 @@ class SCM:
         Plot the causal graph of the scm in a dependency oriented way.
 
         This will attempt a tree plot of the scm, in the case that the graph is indeed a tree.
-        However, because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a tree
-        structure often can't be computed. Therefore this method relies on graphviz to compute a
-        feasible representation of the causal graph.
+        However, because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a
+        tree structure often can't be computed. Therefore this method relies on graphviz to compute a feasible
+        representation of the causal graph.
 
         The graphviz package has been marked as an optional package for this module and therefore needs to be installed
         by the user.
@@ -505,17 +505,17 @@ class SCM:
                 root = np.random.choice(list(G.nodes))
 
         def __hierarchy_pos(
-            G,
-            root,
-            leftmost,
-            width,
-            leafdx=0.2,
-            vert_gap=0.2,
-            vert_loc=0,
-            xcenter=0.5,
-            rootpos=None,
-            leafpos=None,
-            parent=None,
+            G_,
+            root_,
+            leftmost_,
+            width_,
+            leafdx_=0.2,
+            vert_gap_=0.2,
+            vert_loc_=0,
+            xcenter_=0.5,
+            rootpos_=None,
+            leafpos_=None,
+            parent_=None,
         ):
             """
             see hierarchy_pos docstring for most arguments
@@ -525,49 +525,49 @@ class SCM:
 
             """
 
-            if rootpos is None:
-                rootpos = {root: (xcenter, vert_loc)}
+            if rootpos_ is None:
+                rootpos_ = {root_: (xcenter_, vert_loc_)}
             else:
-                rootpos[root] = (xcenter, vert_loc)
-            if leafpos is None:
-                leafpos = {}
-            children = list(G.neighbors(root))
+                rootpos_[root_] = (xcenter_, vert_loc_)
+            if leafpos_ is None:
+                leafpos_ = {}
+            children = list(G_.neighbors(root_))
             leaf_count = 0
-            if not isinstance(G, nx.DiGraph) and parent is not None:
-                children.remove(parent)
+            if not isinstance(G_, nx.DiGraph) and parent_ is not None:
+                children.remove(parent_)
             if len(children) != 0:
-                rootdx = width / len(children)
-                nextx = xcenter - width / 2 - rootdx / 2
+                rootdx = width_ / len(children)
+                nextx = xcenter_ - width_ / 2 - rootdx / 2
                 for child in children:
                     nextx += rootdx
-                    rootpos, leafpos, newleaves = __hierarchy_pos(
-                        G,
+                    rootpos_, leafpos_, newleaves = __hierarchy_pos(
+                        G_,
                         child,
-                        leftmost + leaf_count * leafdx,
-                        width=rootdx,
-                        leafdx=leafdx,
-                        vert_gap=vert_gap,
-                        vert_loc=vert_loc - vert_gap,
-                        xcenter=nextx,
-                        rootpos=rootpos,
-                        leafpos=leafpos,
-                        parent=root,
+                        leftmost_ + leaf_count * leafdx_,
+                        width_=rootdx,
+                        leafdx_=leafdx_,
+                        vert_gap_=vert_gap_,
+                        vert_loc_=vert_loc_ - vert_gap_,
+                        xcenter_=nextx,
+                        rootpos_=rootpos_,
+                        leafpos_=leafpos_,
+                        parent_=root_,
                     )
                     leaf_count += newleaves
 
                 leftmostchild = min(
-                    (x for x, y in [leafpos[child] for child in children])
+                    (x for x, y in [leafpos_[child] for child in children])
                 )
                 rightmostchild = max(
-                    (x for x, y in [leafpos[child] for child in children])
+                    (x for x, y in [leafpos_[child] for child in children])
                 )
-                leafpos[root] = ((leftmostchild + rightmostchild) / 2, vert_loc)
+                leafpos_[root_] = ((leftmostchild + rightmostchild) / 2, vert_loc_)
             else:
                 leaf_count = 1
-                leafpos[root] = (leftmost, vert_loc)
+                leafpos_[root_] = (leftmost_, vert_loc_)
             #        pos[root] = (leftmost + (leaf_count-1)*dx/2., vert_loc)
             print(leaf_count)
-            return rootpos, leafpos, leaf_count
+            return rootpos_, leafpos_, leaf_count
 
         xcenter = width / 2.0
         if isinstance(G, nx.DiGraph):
@@ -587,10 +587,10 @@ class SCM:
             root,
             0,
             width,
-            leafdx=width * 1.0 / leafcount,
-            vert_gap=vert_gap,
-            vert_loc=vert_loc,
-            xcenter=xcenter,
+            leafdx_=width * 1.0 / leafcount,
+            vert_gap_=vert_gap,
+            vert_loc_=vert_loc,
+            xcenter_=xcenter,
         )
         pos = {}
         for node in rootpos:

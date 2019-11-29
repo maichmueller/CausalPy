@@ -1,7 +1,7 @@
 from functools import reduce
 from typing import Union, List
 
-from causality import *
+from causalpy import *
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict

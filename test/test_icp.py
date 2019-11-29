@@ -1,6 +1,6 @@
 from functools import reduce
 
-from causality import (
+from causalpy import (
     LinearAssignment,
     PolynomialAssignment,
     NoiseGenerator,

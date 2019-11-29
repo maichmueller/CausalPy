@@ -73,7 +73,9 @@ class LinICP(ICP):
                 obs, target, method="lasso", max_iter=nr_iter, return_path=False
             )
         else:
-            raise NotImplementedError(f"Method for filtering type '{self.filter_method}' not yet implemented.")
+            raise NotImplementedError(
+                f"Method for filtering type '{self.filter_method}' not yet implemented."
+            )
         return filtered
 
     def infer(
@@ -130,12 +132,8 @@ class LinICP(ICP):
             self.variables = obs.columns.values
             target = obs[target_variable].to_numpy().flatten()
             obs = obs.drop(columns=[target_variable])
-            self.index_to_varname = pd.Series(
-                obs.columns, index=range(self.p)
-            )
-            self.varname_to_index = pd.Series(
-                range(self.p), index=obs.columns
-            )
+            self.index_to_varname = pd.Series(obs.columns, index=range(self.p))
+            self.varname_to_index = pd.Series(range(self.p), index=obs.columns)
             obs = obs.to_numpy()
 
         elif isinstance(obs, np.ndarray):
@@ -145,7 +143,9 @@ class LinICP(ICP):
             obs = np.delete(obs, target_variable, axis=1)
             itv = self.index_to_varname
             target_index = itv[itv == target_variable].index
-            self.varname_to_index = (itv.loc[target_index + 1 :] - 1).drop(index=target_variable)
+            self.varname_to_index = (itv.loc[target_index + 1 :] - 1).drop(
+                index=target_variable
+            )
         else:
             raise ValueError(
                 "Observations have to be either a pandas DataFrame or numpy ndarray."
@@ -153,9 +153,7 @@ class LinICP(ICP):
 
         if self.filter_variables:
             pre_filtered_vars = np.sort(
-                self.filter_candidates(
-                    obs, target, kwargs.pop("nr_iter", 100)
-                )
+                self.filter_candidates(obs, target, kwargs.pop("nr_iter", 100))
             )
             obs = obs[:, pre_filtered_vars]
             p = obs.shape[1]
@@ -182,7 +180,9 @@ class LinICP(ICP):
         subset, finished = next(subset_iterator)
         while not finished:
             subset_indices = self.varname_to_index[list(subset)].values
-            p_value = self._test_plausible_parents(obs, target, environments, subset_indices)
+            p_value = self._test_plausible_parents(
+                obs, target, environments, subset_indices
+            )
             print("tested:", subset, "\t p value:", p_value)
             if subset:
                 # this if condition excludes the test case of the empty set
@@ -232,22 +232,7 @@ class LinICP(ICP):
         [2] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ks_2samp.html
         [3] https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html
         """
-        if test == "ranks":
-            p_equal_mean = scipy.stats.ttest_ind(
-                sample1, sample2, equal_var=False
-            ).pvalue
-            #  the levene test is apparently more robust than the standard F-test given the sensitivity of the F-test
-            # to non-normality of the data.
-            p_equal_var = scipy.stats.levene(sample1, sample2, **kwargs).pvalue
-            p_val = 2 * min(p_equal_mean, p_equal_var)
-
-        elif test == "ks":
-            p_val = scipy.stats.ks_2samp(sample1, sample2, **kwargs).pvalue
-
-        elif isinstance(test, Callable):
-            p_val = test(sample1, sample2, **kwargs)
-
-        elif test == "normal":
+        if test == "normal":
             n1 = len(sample1)
             n2 = len(sample2)
             mean1 = np.mean(sample1)
@@ -266,12 +251,29 @@ class LinICP(ICP):
             )
             p_val = 2 * min(p_equal_mean, p_equal_var)
 
+        elif test == "ks":
+            p_val = scipy.stats.ks_2samp(sample1, sample2, **kwargs).pvalue
+
+        elif test == "ranks":
+            p_equal_mean = scipy.stats.ttest_ind(
+                sample1, sample2, equal_var=False
+            ).pvalue
+            #  the levene test is apparently more robust than the standard F-test given the sensitivity of the F-test
+            # to non-normality of the data.
+            p_equal_var = scipy.stats.levene(sample1, sample2, **kwargs).pvalue
+            p_val = 2 * min(p_equal_mean, p_equal_var)
+
+        elif isinstance(test, Callable):
+            p_val = test(sample1, sample2, **kwargs)
+
         else:
             raise ValueError(f"Test input parameter '{test}' not supported.")
 
         return p_val
 
-    def _test_plausible_parents(self, obs, target: np.ndarray, envs: Dict, s: Union[np.ndarray, List, Tuple], ):
+    def _test_plausible_parents(
+        self, obs, target: np.ndarray, envs: Dict, s: Union[np.ndarray, List, Tuple],
+    ):
         if not len(s):
             obs_S = np.ones((self.n, 1))
         else:
