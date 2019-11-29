@@ -1,1 +1,1 @@
-A small python implementation of a Structural Causal Model (SCM) as defined by Jonas Peters in his book [Elements of Causal Inference](https://mitpress.mit.edu/books/elements-causal-inference).
+A python package aiming to provide implementations of Structural Causal Models (SCM) as defined by Jonas Peters in his book [Elements of Causal Inference](https://mitpress.mit.edu/books/elements-causal-inference) and further causal inference methods thereof, such as [Invariant Causal Prediction (ICP)](http://onlinelibrary.wiley.com/doi/10.1111/rssb.12167/epdf).
