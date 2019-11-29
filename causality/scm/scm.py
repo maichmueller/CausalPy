@@ -4,7 +4,8 @@ import logging
 import networkx as nx
 from networkx.drawing.nx_agraph import graphviz_layout
 
-from . import Assignment, NoiseModel, NoiseGenerator, LinearAssignment, BaseAssignment
+from .assignments import LinearAssignment, BaseAssignment
+from .noise import NoiseGenerator
 
 from typing import (
     List,
@@ -16,14 +17,16 @@ from typing import (
     Type,
     Mapping,
     Collection,
-    TypeVar)
+    TypeVar,
+    Optional,
+    Any,
+)
 from collections import deque, defaultdict
 import matplotlib.pyplot as plt
 from copy import deepcopy
 
 
 class SCM:
-
     def __init__(
         self,
         assignment_map: Mapping[
@@ -99,7 +102,18 @@ class SCM:
         return pd.DataFrame.from_dict(sample)
 
     def intervention(
-        self, interventions: Dict[object, Union[Dict, List, Tuple, np.ndarray]]
+        self,
+        interventions: Dict[
+            object,
+            Union[
+                Dict,
+                Tuple[
+                    Union[Tuple, List, None],
+                    Optional[BaseAssignment],
+                    Optional[np.ndarray],
+                ],
+            ],
+        ],
     ):
         """
         Method to apply interventions on the specified variables.
@@ -124,9 +138,8 @@ class SCM:
                 the order of positional parameters of the assignment function to agree with the iterative order of the
                 new parents!
 
-            - For list: the order is [Parent list, assignment functor, noise models]. In order to omit one of these, set
-                them to None.
-            - For tuple: same as list
+            - For tuple: the order is (Parent list, assignment functor, noise models). In order to omit one of these,
+                set them to None.
             - For ndarray: same as list, but dim == 1 assumed (not checked).
         """
         for var, items in interventions.items():
@@ -136,10 +149,10 @@ class SCM:
 
             if isinstance(items, dict):
                 if any(
-                        (
-                                key not in ("parents", self.function_key, self.noise_key)
-                                for key in items.keys()
-                        )
+                    (
+                        key not in ("parents", self.function_key, self.noise_key)
+                        for key in items.keys()
+                    )
                 ):
                     raise ValueError(
                         f"Intervention dictionary provided with the wrong keys.\n"
@@ -147,9 +160,9 @@ class SCM:
                         f"Possible keys are: ['parents', '{self.function_key}', '{self.noise_key}']"
                     )
                 try:
-                    parent_list = [
+                    parent_list = tuple(
                         par for par in self._filter_variable_names(items.pop("parents"))
-                    ]
+                    )
                 except KeyError:
                     parent_list = tuple(self.graph.predecessors(var))
 
@@ -157,11 +170,13 @@ class SCM:
 
             elif isinstance(items, (list, tuple, np.ndarray)):
                 assert (
-                        len(items) == 3
+                    len(items) == 3
                 ), "The positional items container needs to contain exactly 3 items."
 
                 if items[0] is not None:
-                    parent_list = [par for par in self._filter_variable_names(items[0])]
+                    parent_list = tuple(
+                        par for par in self._filter_variable_names(items[0])
+                    )
                 else:
                     parent_list = tuple(self.graph.predecessors(var))
                 attr_dict = dict()
@@ -211,12 +226,14 @@ class SCM:
         -------
             None
         """
-        interventions_dict = dict()
+        interventions_dict: Dict[object, Tuple[List, BaseAssignment, None]] = dict()
         for var, val in zip(variables, values):
             interventions_dict[var] = ([], LinearAssignment(1, val), None)
         self.intervention(interventions_dict)
 
-    def soft_intervention(self, variables: Collection, noise_models: Collection[NoiseGenerator]):
+    def soft_intervention(
+        self, variables: Collection, noise_models: Collection[NoiseGenerator]
+    ):
         """
         Perform hard interventions, i.e. setting specific variables to a constant value.
         This method doesn't change the current noise models.
@@ -419,7 +436,13 @@ class SCM:
             yield key
 
     def _hierarchy_pos(
-        self, root=None, width=1.0, vert_gap=0.2, vert_loc=0, leaf_vs_root_factor=0.5, check_for_tree=True
+        self,
+        root=None,
+        width=1.0,
+        vert_gap=0.2,
+        vert_loc=0,
+        leaf_vs_root_factor=0.5,
+        check_for_tree=True,
     ):
 
         """

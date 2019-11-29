@@ -1,10 +1,18 @@
+from functools import reduce
 
-from causality import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM, LinICP
+from causality import (
+    LinearAssignment,
+    PolynomialAssignment,
+    NoiseGenerator,
+    SCM,
+    LinICP,
+)
 import numpy as np
 import pandas as pd
 from scipy import stats
 from numpy.polynomial.polynomial import Polynomial
 import matplotlib.pyplot as plt
+
 
 def build_scm(seed=0):
     cn = SCM(
@@ -59,8 +67,7 @@ def build_scm(seed=0):
 
 def test_linear_icp():
     cn = build_scm()
-    cn.plot()
-    plt.show()
+    cn.plot(alpha=1)
     data_unintervend = cn.sample(100)
     cn.do_intervention(["X_1"], [-4])
     data_intervention_1 = cn.sample(100)
@@ -71,11 +78,35 @@ def test_linear_icp():
     cn.do_intervention(["X_4"], [5])
     data_intervention_3 = cn.sample(100)
 
-    obs = pd.concat([data_unintervend, data_intervention_1, data_intervention_2, data_intervention_3], axis=0).reset_index(drop=True)
-    envs = np.array([0] * 100 + [1] * 100 + [2] * 100 + [3] * 100)
+    obs = pd.concat(
+        [
+            data_unintervend,
+            data_intervention_1,
+            data_intervention_2,
+            data_intervention_3,
+        ],
+        axis=0,
+    ).reset_index(drop=True)
+
+    envs = np.array(
+        reduce(
+            lambda x, y: x + y,
+            [
+                [i] * len(data)
+                for i, data in zip(
+                    range(4),
+                    (
+                        data_unintervend,
+                        data_intervention_1,
+                        data_intervention_2,
+                        data_intervention_3,
+                    ),
+                )
+            ],
+        )
+    )
     target = "Y"
 
     causal_parents, p_vals = LinICP().infer(obs, envs, target, alpha=0.05)
 
     assert causal_parents == tuple(cn.graph.predecessors(target))
-

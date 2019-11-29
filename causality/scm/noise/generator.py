@@ -1,4 +1,4 @@
-from typing import TypeVar
+from typing import TypeVar, Callable
 
 import numpy as np
 from numpy.random import Generator, PCG64
@@ -110,7 +110,7 @@ class NoiseGenerator:
             raise ValueError(f"'source' parameter has to be either 'numpy' or 'scipy'. "
                              f"Input '{self.source}' not supported.")
 
-    def _apply_dist_params(func):
+    def _apply_dist_params(func: Callable):
         @wraps(func)
         def dist(self, *args, **kwargs):
             return func(self, *args, **kwargs, **self.params)
