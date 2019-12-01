@@ -1,7 +1,7 @@
 from functools import reduce, partial
 from typing import Optional, Dict
 
-from .icp import ICP
+from .base import ICP
 
 import numpy as np
 import pandas as pd

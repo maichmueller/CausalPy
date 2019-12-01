@@ -1,4 +1,4 @@
-from .icp import ICP
+from .base import ICP
 
 import itertools as it
 from copy import deepcopy
