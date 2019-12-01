@@ -1,1 +1,2 @@
-from .icp import ICP, LinICP
+from .icp import ICP
+from .linearicp import LinICP

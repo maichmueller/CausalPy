@@ -1,11 +1,15 @@
-import numpy as np
-import pandas as pd
-import logging
-import networkx as nx
-from networkx.drawing.nx_agraph import graphviz_layout
-
 from .assignments import LinearAssignment, BaseAssignment
 from .noise import NoiseGenerator
+
+import numpy as np
+import pandas as pd
+import networkx as nx
+from networkx.drawing.nx_agraph import graphviz_layout
+from collections import deque, defaultdict
+
+import matplotlib.pyplot as plt
+import logging
+from copy import deepcopy
 
 from typing import (
     List,
@@ -18,9 +22,6 @@ from typing import (
     Collection,
     Optional,
 )
-from collections import deque, defaultdict
-import matplotlib.pyplot as plt
-from copy import deepcopy
 
 
 class SCM:
@@ -85,7 +86,7 @@ class SCM:
         :return: pd.DataFrame, the dataframe containing the samples of all the variables needed for the selection.
         """
         if seed is not None:
-            np.random.seed(seed)
+            self.reseed(seed)
         sample = dict()
 
         for node in self._causal_iterator(variables):
@@ -286,8 +287,10 @@ class SCM:
                 self.graph.add_edge(parent, var)
 
     def reseed(self, seed: int):
+        seed_addon = 0
         for var in self.get_variables():
-            self.graph.nodes[var][self.noise_key].set_seed(seed)
+            self.graph.nodes[var][self.noise_key].set_seed(seed + seed_addon)
+            seed_addon += 1
 
     def plot(
         self,

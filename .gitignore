@@ -3,6 +3,9 @@ __pycache__/*
 causalpy/__pycache__/*
 causalpy/icp/__pycache__/*
 causalpy/scm/__pycache__/*
+causalpy/scm/assignments/__pycache__/*
+
+causalpy/scm/noise/__pycache__/*
 .mypy_cache/*
 
 causalpy/scm/__pycache__/

@@ -1,6 +1,7 @@
+from .base import BaseAssignment
+
 import numpy as np
 from numpy.polynomial import polynomial
-from .base import BaseAssignment
 from typing import List
 
 

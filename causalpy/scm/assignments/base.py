@@ -1,7 +1,6 @@
 import numpy as np
-from numpy.polynomial import polynomial
-from typing import Union, TypeVar
 from abc import ABC, abstractmethod
+from typing import Union, TypeVar
 
 
 class BaseAssignment(ABC):

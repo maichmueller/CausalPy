@@ -4,33 +4,33 @@ import pandas as pd
 from numpy.polynomial.polynomial import Polynomial
 
 
-def build_scm():
+def build_scm(seed=0):
     cn = SCM(
         assignment_map={
             "X_0": (
                 [],
                 LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed),
             ),
             "X_1": (
                 ["X_0"],
                 LinearAssignment(1, 1, 2),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed+1),
             ),
             "X_2": (
                 ["X_0", "X_1"],
                 LinearAssignment(1, 1, 3, 2),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed+2),
             ),
             "X_3": (
                 ["X_1", "X_2"],
                 PolynomialAssignment([0, 1], [0, 1, 0.5], [0, 0, 4]),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed+3),
             ),
             "Y": (
                 ["X_0", "X_2"],
                 PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 2]),
-                NoiseGenerator("standard_normal", seed=0),
+                NoiseGenerator("standard_normal", seed=seed+4),
             ),
         },
         variable_tex_names={
@@ -43,18 +43,18 @@ def build_scm():
     return cn
 
 
-def manual_standard_sample(n, noise_func, dtype, names):
+def manual_standard_sample(n, noise_func, dtype, names, seed):
     sample = np.empty((n, 5), dtype=dtype)
-    sample[:, 0] = noise_func(n)
-    sample[:, 1] = 1 + noise_func(n) + 2 * sample[:, 0]
-    sample[:, 2] = 1 + noise_func(n) + 3 * sample[:, 0] + 2 * sample[:, 1]
+    sample[:, 0] = noise_func(n, seed)
+    sample[:, 1] = 1 + noise_func(n, seed+1) + 2 * sample[:, 0]
+    sample[:, 2] = 1 + noise_func(n, seed+2) + 3 * sample[:, 0] + 2 * sample[:, 1]
     sample[:, 3] = (
-        noise_func(n)
+        noise_func(n, seed+3)
         + Polynomial([0, 1, 0.5])(sample[:, 1])
         + Polynomial([0, 0, 4])(sample[:, 2])
     )
     sample[:, 4] = (
-        noise_func(n)
+        noise_func(n, seed+4)
         + Polynomial([0, 0, 1.5])(sample[:, 0])
         + Polynomial([0, 2])(sample[:, 2])
     )
@@ -62,8 +62,8 @@ def manual_standard_sample(n, noise_func, dtype, names):
     return sample
 
 
-def noise(n):
-    return np.random.default_rng(0).standard_normal(n)
+def noise(n, seed=0):
+    return np.random.default_rng(seed).standard_normal(n)
 
 
 def test_linear_assignment():
@@ -76,14 +76,14 @@ def test_linear_assignment():
 def test_scm_build():
     cn = build_scm()
     nodes_in_graph = list(cn.graph.nodes)
-    assert nodes_in_graph, ["X_0", "X_1", "X_2", "X_3", "Y"]
+    assert nodes_in_graph == ["X_0", "X_1", "X_2", "X_3", "Y"]
 
 
 def test_scm_sample():
     cn = build_scm()
     scm_sample = cn.sample(10)
     sample = manual_standard_sample(
-        10, noise, scm_sample.values.dtype, list(cn.graph.nodes)
+        10, noise, scm_sample.values.dtype, list(cn.graph.nodes), 0
     )
     sample_order_scm = list(cn.get_variables())
     sample = sample[sample_order_scm]
@@ -108,11 +108,11 @@ def test_scm_intervention():
 
     scm_sample_interv = cn.sample(n)
     sample = np.empty((n, 5), dtype=scm_sample_interv.values.dtype)
-    sample[:, 0] = noise(n)
-    sample[:, 1] = 1 + noise(n) + 2 * sample[:, 0]
-    sample[:, 2] = 1 + noise(n) + 3 * sample[:, 0] + 2 * sample[:, 1]
+    sample[:, 0] = noise(n, 0)
+    sample[:, 1] = 1 + noise(n, 1) + 2 * sample[:, 0]
+    sample[:, 2] = 1 + noise(n, 2) + 3 * sample[:, 0] + 2 * sample[:, 1]
     sample[:, 4] = (
-        noise(n)
+        noise(n, 4)
         + Polynomial([0, 0, 1.5])(sample[:, 0])
         + Polynomial([0, 2])(sample[:, 2])
     )
@@ -130,8 +130,9 @@ def test_scm_intervention():
     # reseeding needs to happen as the state of the initial noise distributions is further advanced than
     # a newly seeded noise by noise()
     cn.reseed(0)
+
     man_sample = manual_standard_sample(
-        n, noise, scm_sample_interv.values.dtype, list(cn.graph.nodes)
+        n, noise, scm_sample_interv.values.dtype, list(cn.graph.nodes), 0
     )[list(cn.get_variables())]
     new_cn_sample = cn.sample(n)
     assert (man_sample - new_cn_sample).abs().values.sum() < 1e-10
