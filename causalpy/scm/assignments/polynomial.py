@@ -1,4 +1,4 @@
-from .base import BaseAssignment
+from .assignmentbase import BaseAssignment
 
 import numpy as np
 from numpy.polynomial import polynomial

@@ -1,4 +1,6 @@
-from .base import ICP
+from functools import reduce
+
+from .icpbase import ICP
 
 import itertools as it
 from copy import deepcopy
@@ -9,17 +11,20 @@ import pandas as pd
 import scipy.stats
 import sklearn.linear_model
 
+from tqdm.auto import tqdm
+
 
 class LinICP(ICP):
     def __init__(
-            self,
-            alpha: float = 0.05,
-            fit_intercept: bool = True,
-            residual_test: str = "normal",
-            filter_variables: bool = True,
-            filter_method: str = "lasso_sqrt",
-            ignored_subsets: Optional[Set] = None,
-            nr_parents_limit: Optional[int] = None,
+        self,
+        alpha: float = 0.05,
+        fit_intercept: bool = True,
+        residual_test: str = "normal",
+        filter_variables: bool = True,
+        filter_method: str = "lasso_sqrt",
+        ignored_subsets: Optional[Set] = None,
+        nr_parents_limit: Optional[int] = None,
+        **kwargs,
     ):
         """
 
@@ -37,7 +42,7 @@ class LinICP(ICP):
             The upper limiting number of causal parents to consider. If not given, the method will search in all
             possible, not excluded subsets.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.fit_intercept = fit_intercept
         self.residual_test = residual_test
         self.filter_variables = filter_variables
@@ -60,13 +65,13 @@ class LinICP(ICP):
         return filtered
 
     def infer(
-            self,
-            obs: Union[pd.DataFrame, np.ndarray],
-            envs: np.ndarray,
-            target_variable: Union[int, str],
-            alpha: Optional[float] = None,
-            *args,
-            **kwargs,
+        self,
+        obs: Union[pd.DataFrame, np.ndarray],
+        envs: np.ndarray,
+        target_variable: Union[int, str],
+        alpha: Optional[float] = None,
+        *args,
+        **kwargs,
     ):
         r"""
         Perform Linear Invariant Causal Prediction (ICP) on the data provided on object construction.
@@ -101,11 +106,7 @@ class LinICP(ICP):
         if alpha is None:
             alpha = self.alpha
 
-        obs, target, environments = self.preprocess_input(
-            obs,
-            target_variable,
-            envs
-        )
+        obs, target, environments = self.preprocess_input(obs, target_variable, envs)
         if self.filter_variables:
             pre_filtered_vars = np.sort(
                 self.filter_candidates(obs, target, kwargs.pop("nr_iter", 100))
@@ -144,18 +145,23 @@ class LinICP(ICP):
             rejected = p_value <= alpha
             if not rejected:
                 self.accepted_sets.add(subset)
+                self.logger.debug(f"Subset {subset} with p-value: {p_value} accepted.")
+            else:
+                self.logger.debug(f"Subset {subset} with p-value: {p_value} rejected.")
 
             subset, finished = subset_iterator.send(rejected)
-        # once the routine has finished the variable subset will hold the latest estimate of the causal parents
+        # the subset variable will hold the latest best estimation of the parent set of the target.
+        parents = subset
+        self.logger.debug(f"Final parents set {parents}")
 
         p_values_per_elem = pd.Series(
-            1 if not subset else p_values_per_elem,
+            1 if not parents else p_values_per_elem,
             index=[self.index_to_varname[i] for i in np.arange(p)],
         )  # add variable names information to the data
-        return subset, p_values_per_elem
+        return parents, p_values_per_elem
 
     def _test_plausible_parents(
-            self, obs, target: np.ndarray, envs: Dict, s: Union[np.ndarray, List, Tuple],
+        self, obs, target: np.ndarray, envs: Dict, s: Union[np.ndarray, List, Tuple],
     ):
         if not len(s):
             obs_S = np.ones((self.n, 1))
@@ -254,10 +260,10 @@ class LinICP(ICP):
 
     @staticmethod
     def _subset_iterator(
-            elements: Union[int, Collection, Set],
-            candidates: Set[Tuple] = None,
-            rejected_subsets: Set[Tuple] = None,
-            nr_parents_limit: int = None,
+        elements: Union[int, Collection, Set],
+        candidates: Set[Tuple] = None,
+        rejected_subsets: Set[Tuple] = None,
+        nr_parents_limit: int = None,
     ):
         if isinstance(elements, int):
             elements = set(range(elements))
@@ -293,8 +299,8 @@ class LinICP(ICP):
             nr_parents_limit = len(elements)
 
         for subset in it.chain.from_iterable(
-                it.combinations(elements, len_subset)
-                for len_subset in range(nr_parents_limit + 1)
+            it.combinations(elements, len_subset)
+            for len_subset in range(nr_parents_limit + 1)
         ):
             if previously_rejected(subset):
                 # the intersected subset has already been checked, moving on
@@ -308,8 +314,5 @@ class LinICP(ICP):
                     # empty candidates set means we have found no causal parent as there were at least two accepted
                     # subsets with empty intersection.
                     yield tuple(), True
-
-            else:
-                rejected_subsets.add(subset)
 
         yield tuple(candidates), True

@@ -1,2 +1,2 @@
-from .base import ICP
+from .icpbase import ICP
 from .lingam import LinICP

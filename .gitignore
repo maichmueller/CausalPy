@@ -6,6 +6,7 @@ causalpy/scm/__pycache__/*
 causalpy/scm/assignments/__pycache__/*
 
 causalpy/scm/noise/__pycache__/*
+examples/__pycache__/*
 .mypy_cache/*
 
 causalpy/scm/__pycache__/

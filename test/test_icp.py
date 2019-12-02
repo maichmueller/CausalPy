@@ -69,15 +69,16 @@ def test_linear_icp():
     cn = build_scm()
     # cn.plot(alpha=1)
     # plt.show()
-    data_unintervend = cn.sample(1000)
+    cn_vars = list(cn.get_variables())
+    data_unintervend = cn.sample(1000)[cn_vars]
     cn.do_intervention(["X_3"], [-4])
-    data_intervention_1 = cn.sample(1000)
+    data_intervention_1 = cn.sample(1000)[cn_vars]
     cn.undo_intervention()
     cn.do_intervention(["X_0"], [5])
-    data_intervention_2 = cn.sample(1000)
+    data_intervention_2 = cn.sample(1000)[cn_vars]
     cn.undo_intervention()
     cn.do_intervention(["X_4"], [5])
-    data_intervention_3 = cn.sample(1000)
+    data_intervention_3 = cn.sample(1000)[cn_vars]
 
     obs = pd.concat(
         [

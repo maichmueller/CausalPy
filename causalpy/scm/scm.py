@@ -227,9 +227,9 @@ class SCM:
         -------
             None
         """
-        interventions_dict: Dict[object, Tuple[List, BaseAssignment, None]] = dict()
+        interventions_dict: Dict[object, Tuple[List, BaseAssignment, NoiseGenerator]] = dict()
         for var, val in zip(variables, values):
-            interventions_dict[var] = ([], LinearAssignment(1, val), None)
+            interventions_dict[var] = ([], LinearAssignment(1, val), NoiseGenerator(None))
         self.intervention(interventions_dict)
 
     def soft_intervention(
@@ -362,7 +362,7 @@ class SCM:
         lines = [
             f"Structural Causal Model of {self.nr_variables} variables: "
             + ", ".join(self.var_names),
-            f"Following variables have been intervened on: {list(self.interventions_backup_attr.keys())}",
+            f"Following variables are actively intervened on: {list(self.interventions_backup_attr.keys())}",
             "Current Assignment Functions are:",
         ]
         max_var_space = max([len(var_name) for var_name in self.var_names])

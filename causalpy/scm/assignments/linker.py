@@ -1,4 +1,4 @@
-from .base import BaseAssignment, Assignment
+from .assignmentbase import BaseAssignment, Assignment
 
 import numpy as np
 from typing import Callable

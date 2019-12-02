@@ -1,4 +1,4 @@
-from typing import TypeVar, Callable
+from typing import *
 
 import numpy as np
 from numpy.random import Generator, PCG64
@@ -86,7 +86,7 @@ class NoiseGenerator:
     https://docs.scipy.org/doc/scipy/reference/stats.html
     """
 
-    def __init__(self, distribution_str: str = "", source="numpy", seed=None, **distribution_params):
+    def __init__(self, distribution_str: Optional[str] = None, source="numpy", seed=None, **distribution_params):
         self.params = distribution_params
         self.distribution_str = distribution_str
         self.source = source
@@ -99,16 +99,7 @@ class NoiseGenerator:
         self.source = source
 
     def set_seed(self, seed: int):
-        if self.source == "numpy":
-            rng = np.random.default_rng(seed)
-            self.distribution = eval(f"rng.{self.distribution_str}")
-        elif self.source == "scipy":
-            distribution = eval(f"{self.distribution_str}")
-            distribution.random_state = seed
-            self.distribution = distribution.rvs
-        else:
-            raise ValueError(f"'source' parameter has to be either 'numpy' or 'scipy'. "
-                             f"Input '{self.source}' not supported.")
+        self.set_distribution(self.distribution_str, self.source, seed=seed)
 
     def _apply_dist_params(func: Callable):
         @wraps(func)
@@ -118,6 +109,9 @@ class NoiseGenerator:
 
     def set_distribution(self, distribution_str, source, seed=None):
         seed = self.seed if seed is None else seed
+        if distribution_str is None:
+            self.distribution = lambda size: np.zeros(size)
+            return
         if source == "numpy":
             try:
                 rng = np.random.default_rng(seed)

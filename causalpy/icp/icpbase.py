@@ -4,18 +4,23 @@ from typing import *
 import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
+import os
 
 
 class ICP(ABC):
 
-    def __init__(self, verbose: Optional[bool] = False):
+    def __init__(self, log_level: Optional[Union[str, int]] = False):
         self.n: int = -1
         self.p: int = -1
         self.target_name: Hashable = -1
         self.index_to_varname: pd.Series = pd.Series([])
         self.varname_to_index: pd.Series = pd.Series([])
         self.variables: np.ndarray = np.array([])
-        self.verbose = verbose
+
+        self.log_level = log_level.upper() if isinstance(log_level, str) else log_level
+        logging.basicConfig(format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
 
     @abstractmethod
     def infer(
@@ -68,8 +73,4 @@ class ICP(ABC):
         environments: Dict = {env: envs == env for env in np.unique(envs)}
 
         return obs, target, environments
-
-    def print(self, *args, **kwargs):
-        if self.verbose:
-            logging.log(*args, **kwargs)
 
