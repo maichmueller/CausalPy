@@ -1,7 +1,7 @@
 import torch
 
 
-class LinearNet(torch.nn.Module):
+class FCNet(torch.nn.Module):
     """ Standard feed forward neural network with fully connected layers and ReLUs"""
     def __init__(self, layer_nodes):
         super().__init__()

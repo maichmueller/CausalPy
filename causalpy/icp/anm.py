@@ -1,5 +1,5 @@
 from functools import reduce, partial
-from typing import Optional, Dict
+from typing import *
 
 from .base import ICP
 
@@ -19,19 +19,18 @@ class ANModelICP(ICP):
             network: torch.nn.Module,
             epochs: int = 100,
             batch_size: int = 1024,
-            residual_equality_measure: str = "mmd",
+            residual_equality_measure: Union[str, Callable] = "mmd",
             variable_importance_measure: str = "hsic",
             optimizer: Optional[Optimizer] = None,
             scheduler: Optional[_LRScheduler] = None,
             hyperparams: Optional[Dict] = None,
             verbose: bool = True
     ):
-        super().__init__()
+        super().__init__(verbose=verbose)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.batch_size = batch_size
         self.epochs = epochs
         self.network = network
-        self.verbose = verbose
         self.hyperparams = {"gamma": 1e-2} if hyperparams is None else hyperparams
 
         if optimizer is None:
@@ -44,11 +43,17 @@ class ANModelICP(ICP):
             self.residuals_comparison = lambda res_i, res_ip1: self.mmd_multiscale(res_i, res_ip1)
         elif residual_equality_measure == "moments":
             self.residuals_comparison = lambda res_i, res_ip1: self.moments(res_i, res_ip1)
+        elif isinstance(residual_equality_measure, Callable):
+            self.residuals_comparison = residual_equality_measure
         else:
             raise ValueError(f"Dependency measure '{residual_equality_measure}' not supported.")
 
         if variable_importance_measure == "hsic":
             self.variable_importance_measure = self._hilbert_schmidt_independence
+
+    def set_network(self, network):
+        self.network = network
+        self.reset_optimizer()
 
     def reset_optimizer(self):
         self.optimizer.param_groups = []
@@ -148,6 +153,11 @@ class ANModelICP(ICP):
 
     def infer(self, obs, target_variable, envs, *args, **kwargs):
 
+        if any(kwargs.pop(kwarg, False) for kwarg in ("plot", "visualize")):
+            self.visualize()
+
+        target_ground_truth = kwargs.pop("ground_truth", None)
+
         obs, target, environments = self.preprocess_input(
             obs,
             target_variable,
@@ -156,7 +166,11 @@ class ANModelICP(ICP):
 
         self.reset_optimizer()
 
-        pbar = tqdm(range(self.epochs), desc="Training Additive Noise Model Network")
+        pbar = tqdm(
+            range(self.epochs),
+            desc="Training Additive Noise Model Network"
+        ) if self.verbose else range(self.epochs)
+
         for epoch in pbar:
             # Compute Residuals for different contexts
             residuals = dict()
@@ -173,11 +187,11 @@ class ANModelICP(ICP):
             for env, env_ind in environments.items():
                 jacobian[env] = self._get_jacobian(obs[env_ind])[0].abs().mean(0)
 
-            # Loss that computes the dependence of parent variables and residuals per context
-            # Loss is weighted by Expectation of absolute values of the partial derivatives
             def sum_reduce(x, y):
                 return x + y
 
+            # Loss that computes the dependence of parent variables and residuals per context
+            # Loss is weighted by Expectation of absolute values of the partial derivatives
             loss_ind_par = reduce(
                 sum_reduce,
                 [
@@ -197,16 +211,7 @@ class ANModelICP(ICP):
             # Note that we residuals (residual_i, residual_{i+1}) which greatly reduces the computational amount
             loss_identical_res = reduce(
                 sum_reduce,
-                [
-                    reduce(
-                        sum_reduce,
-                        map(
-                            partial(self.residuals_comparison, res_i=res_i),
-                            residuals[i + 1:]
-                        )
-                    )
-                    for i, res_i in enumerate(residuals)
-                ]
+                [self.residuals_comparison(residuals[i], residuals[i + 1]) for i in range(len(residuals) - 1)]
             )
 
             # Overall Loss
@@ -219,29 +224,58 @@ class ANModelICP(ICP):
 
             if epoch % 10 == 0:
                 losses['res'].append(loss_identical_res.item())
-                losses['reg'].append(loss_regression.item())
+            losses['reg'].append(loss_regression.item())
 
-                # Compute regression loss for ground truth model
-                residual_1_true = y_1 - x_1[:, 1:2] - x_1[:, 2:3]
-                residual_2_true = y_2 - x_2[:, 1:2] - x_2[:, 2:3]
-                residual_3_true = y_3 - x_3[:, 1:2] - x_3[:, 2:3]
-                residual_4_true = y_4 - x_4[:, 1:2] - x_4[:, 2:3]
-                residual_5_true = y_5 - x_5[:, 1:2] - x_5[:, 2:3]
+            # Compute regression loss for ground truth model
+            residual_1_true = y_1 - x_1[:, 1:2] - x_1[:, 2:3]
+            residual_2_true = y_2 - x_2[:, 1:2] - x_2[:, 2:3]
+            residual_3_true = y_3 - x_3[:, 1:2] - x_3[:, 2:3]
+            residual_4_true = y_4 - x_4[:, 1:2] - x_4[:, 2:3]
+            residual_5_true = y_5 - x_5[:, 1:2] - x_5[:, 2:3]
 
-                # Regression loss if the causal model is used
-                loss_reg_truth = (residual_1_true ** 2).mean() + (residual_2_true ** 2).mean() + (
-                        residual_3_true ** 2).mean() + (residual_4_true ** 2).mean() + (residual_5_true ** 2).mean()
-                losses['reg_truth'].append(loss_reg_truth.item())
+            # Regression loss if the causal model is used
+            loss_reg_truth = (residual_1_true ** 2).mean() + (residual_2_true ** 2).mean() + (
+                    residual_3_true ** 2).mean() + (residual_4_true ** 2).mean() + (residual_5_true ** 2).mean()
+            losses['reg_truth'].append(loss_reg_truth.item())
 
-                losses['exp_jac'][0].append(jacobian_1.detach()[0])
-                losses['exp_jac'][1].append(jacobian_1.detach()[1])
-                losses['exp_jac'][2].append(jacobian_1.detach()[2])
-                losses['exp_jac'][3].append(jacobian_1.detach()[3])
+            losses['exp_jac'][0].append(jacobian_1.detach()[0])
+            losses['exp_jac'][1].append(jacobian_1.detach()[1])
+            losses['exp_jac'][2].append(jacobian_1.detach()[2])
+            losses['exp_jac'][3].append(jacobian_1.detach()[3])
 
-                # plotter_loss.plot('loss', 'train_loss', 'loss all', iteration, loss.item())
+            # plotter_loss.plot('loss', 'train_loss', 'loss all', iteration, loss.item())
             # if iteration % 10 == 0:
             #    print('Jacobian in context 1 in iteration {} '.format(iteration), jacobian_1.detach().cpu().numpy()
 
-    def print(self, *args, **kwargs):
-        if self.verbose:
-            logging.log(*args, **kwargs)
+    def visualize(self):
+        # import test for visdom. If it fails, either let the method fail or maybe substitute by matplotlib
+        try:
+            import visdom
+            from visdom import Visdom
+        except ImportError as e:
+            logging.warn(f"Package 'Visdom' needs to be installed for visualization of training. Please install or"
+                         f"call 'infer' without the visualization keyword.")
+            raise e
+
+        vlp = VisdomLinePlotter(Visdom())
+
+class VisdomLinePlotter(object):
+    """Plots to Visdom"""
+
+    def __init__(self, visdom_obj, env_name='main'):
+        self.viz = visdom_obj
+        self.env = env_name
+        self.plots = {}
+
+    def plot(self, var_name, split_name, title_name, x, y):
+        if var_name not in self.plots:
+            self.plots[var_name] = self.viz.line(X=np.array([x, x]), Y=np.array([y, y]), env=self.env,
+                                                 opts=dict(
+                                                     legend=[split_name],
+                                                     title=title_name,
+                                                     xlabel='Epochs',
+                                                     ylabel=var_name
+                                                 ))
+        else:
+            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name],
+                          name=split_name, update='append')

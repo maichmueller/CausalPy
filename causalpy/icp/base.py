@@ -1,3 +1,4 @@
+import logging
 from typing import *
 
 import numpy as np
@@ -7,13 +8,14 @@ from abc import ABC, abstractmethod
 
 class ICP(ABC):
 
-    def __init__(self):
+    def __init__(self, verbose: Optional[bool] = False):
         self.n: int = -1
         self.p: int = -1
         self.target_name: Hashable = -1
         self.index_to_varname: pd.Series = pd.Series([])
         self.varname_to_index: pd.Series = pd.Series([])
         self.variables: np.ndarray = np.array([])
+        self.verbose = verbose
 
     @abstractmethod
     def infer(
@@ -66,4 +68,8 @@ class ICP(ABC):
         environments: Dict = {env: envs == env for env in np.unique(envs)}
 
         return obs, target, environments
+
+    def print(self, *args, **kwargs):
+        if self.verbose:
+            logging.log(*args, **kwargs)
 
