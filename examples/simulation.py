@@ -32,7 +32,7 @@ def simulate(
     # =====================
     # PARAMETERS
     # --------------------
-    rs = np.random.Generator(np.random.PCG64(seed))
+    rs = np.random.default_rng(seed)
     gene_names = np.array([r"G_" + str(i) + "" for i in range(nr_genes)])
     if master_genes is None:
         master_genes = gene_names[0:3]
@@ -92,7 +92,7 @@ def simulate(
         for this_level in range(gene_level - 1, -1, -1):
             if this_level in levels_to_genes:
                 parent_pool = levels_to_genes[this_level]
-                parent_mask = np.random.binomial(
+                parent_mask = rs.binomial(
                     1, chance_per_level[this_level], size=len(parent_pool)
                 ).astype(bool)
                 parents[this_level] = parent_pool[parent_mask]
@@ -122,7 +122,7 @@ def simulate(
         name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))
     }
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    cn.reseed(seed)
+    cn.reseed(seed+10)
     return cn
 
 

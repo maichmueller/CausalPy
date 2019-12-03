@@ -150,8 +150,12 @@ class LinICP(ICP):
                 self.logger.debug(f"Subset {subset} with p-value: {p_value} rejected.")
 
             subset, finished = subset_iterator.send(rejected)
+
         # the subset variable will hold the latest best estimation of the parent set of the target.
-        parents = subset
+        if self.accepted_sets:
+            parents = subset
+        else:
+            parents = tuple()
         self.logger.debug(f"Final parents set {parents}")
 
         p_values_per_elem = pd.Series(
