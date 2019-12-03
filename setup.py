@@ -15,7 +15,8 @@ requirements = [
     "pandas>=0.2",
     "scikit-learn>=0.2",
     "scipy>=1.3",
-    "matplotlib>=3.0"
+    "matplotlib>=3.0",
+    "tqdm>=4.24.0"
 ]
 
 setup_requirements = ["pytest-runner"]
@@ -52,7 +53,7 @@ setup(
     test_suite="test",
     tests_require=test_requirements,
     extras_require=extras_requirements,
-    url="https://github.com/maichmueller/scm",
+    url="https://github.com/maichmueller/causalpy",
     version="0.0.1",
     zip_safe=False,
 )

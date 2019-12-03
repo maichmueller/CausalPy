@@ -1,4 +1,4 @@
-from .icpbase import ICP
+from .icpbase import ICPredictor
 from .utils import VisdomLinePlotter
 
 from typing import *
@@ -19,7 +19,7 @@ from tqdm.auto import tqdm
 import logging
 
 
-class ANModelICP(ICP):
+class ANMPredictor(ICPredictor):
     def __init__(
         self,
         network: torch.nn.Module,
@@ -118,7 +118,7 @@ class ANModelICP(ICP):
             torch.sum(
                 reduce(
                     lambda x, y: x * y,
-                    map(self._centering, (ANModelICP.rbf(X, X), ANModelICP.rbf(Y, Y))),
+                    map(self._centering, (ANMPredictor.rbf(X, X), ANMPredictor.rbf(Y, Y))),
                 )
             )
             / self.batch_size

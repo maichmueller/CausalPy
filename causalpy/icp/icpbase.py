@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 import os
 
 
-class ICP(ABC):
+class ICPredictor(ABC):
 
     def __init__(self, log_level: Optional[Union[str, int]] = False):
         self.n: int = -1

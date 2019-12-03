@@ -5,7 +5,7 @@ from causalpy import (
     PolynomialAssignment,
     NoiseGenerator,
     SCM,
-    LinICP,
+    LINGAMPredictor,
 )
 import numpy as np
 import pandas as pd
@@ -160,7 +160,7 @@ def test_linear_icp_simple():
     )
     target = "Y"
 
-    causal_parents, p_vals = LinICP(alpha=0.01).infer(obs, envs, target)
+    causal_parents, p_vals = LINGAMPredictor(alpha=0.01).infer(obs, envs, target)
 
     assert sorted(causal_parents) == sorted(cn.graph.predecessors(target))
 
@@ -219,6 +219,6 @@ def test_linear_icp_medium():
     )
     target = "Y"
 
-    causal_parents, p_vals = LinICP(alpha=0.1, residual_test="normal", log_level="DEBUG").infer(obs, envs, target)
+    causal_parents, p_vals = LINGAMPredictor(alpha=0.1, residual_test="normal", log_level="DEBUG").infer(obs, envs, target)
 
     assert sorted(causal_parents) == sorted(cn.graph.predecessors(target))

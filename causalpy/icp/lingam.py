@@ -1,6 +1,6 @@
 from functools import reduce
 
-from .icpbase import ICP
+from .icpbase import ICPredictor
 
 import itertools as it
 from copy import deepcopy
@@ -14,7 +14,7 @@ import sklearn.linear_model
 from tqdm.auto import tqdm
 
 
-class LinICP(ICP):
+class LINGAMPredictor(ICPredictor):
     def __init__(
         self,
         alpha: float = 0.05,
@@ -22,6 +22,7 @@ class LinICP(ICP):
         residual_test: str = "ranks",
         filter_variables: bool = True,
         filter_method: str = "lasso_sqrt",
+        use_sklearn: bool = False,
         ignored_subsets: Optional[Set] = None,
         nr_parents_limit: Optional[int] = None,
         **kwargs,
@@ -49,6 +50,8 @@ class LinICP(ICP):
         self.filter_method = filter_method
         self.ignored_subsets: Optional[Set] = ignored_subsets
         self.nr_parents_limit: Optional[int] = nr_parents_limit
+
+        self.regression_function = self._regression_sklearn if use_sklearn else self._regression_analytically
 
         self.alpha: float = alpha
         self.accepted_sets: Set = set()
@@ -164,6 +167,20 @@ class LinICP(ICP):
         )  # add variable names information to the data
         return parents, p_values_per_elem
 
+    @staticmethod
+    def _regression_sklearn(x, y):
+        lr = sklearn.linear_model.LinearRegression(fit_intercept=True).fit(x, y)
+        residuals = x - lr.predict(x)
+        lr.coef_[0] = lr.intercept_
+        return residuals, lr.coef_
+
+    @staticmethod
+    def _regression_analytically(x, y):
+        x_T = x.transpose()
+        beta = np.linalg.inv(x_T @ x) @ x_T @ y
+        residuals = y - x @ beta
+        return residuals, beta
+
     def _test_plausible_parents(
         self,
         obs: np.ndarray,
@@ -175,9 +192,11 @@ class LinICP(ICP):
             obs_S = np.ones((self.n, 1))
         else:
             obs_S = sklearn.preprocessing.add_dummy_feature(obs[:, s])
-        lr = sklearn.linear_model.LinearRegression(fit_intercept=True)
-        lr.fit(obs_S, target)
-        residuals = target - lr.predict(obs_S)
+        # opting here to allow for an analytical regression calculation speeds up the computation significantly.
+        # This might come at the cost of some numerical stability, which might be provided by sklearn, but not by a
+        # direct, analytical beta calculation.
+        residuals, beta = self.regression_function(obs_S, target)
+
         p_value = 1
         # the paper suggests to test the residual of data in an environment e against the
         # the residuals of the data not in e.

@@ -1,5 +1,5 @@
 from examples.simulation import *
-from causalpy import LinICP
+from causalpy import LINGAMPredictor
 
 
 def to_count_data(sample):
@@ -10,7 +10,7 @@ def to_count_data(sample):
 
 
 if __name__ == '__main__':
-    causal_net = simulate(50, 2, seed=0)
+    causal_net = simulate(10, 2, seed=0)
     print(causal_net)
     rs = np.random.default_rng(0)
     vars = list(causal_net.get_variables())
@@ -33,7 +33,7 @@ if __name__ == '__main__':
 
     obs = pd.concat(obs, axis=0).reset_index(drop=True)
     envs = np.array(envs)
-    linicp = LinICP(alpha=0.01, filter_variables=False, log_level="DEBUG", residual_test="ks")
+    linicp = LINGAMPredictor(alpha=0.01, filter_variables=False, log_level="DEBUG", residual_test="ks")
     predicted_parents, p_vals = linicp.infer(obs, target_variable=target_variable, envs=envs)
     actual_parents = list(causal_net.graph.predecessors(target_variable))
     print("Target:", target_variable)
