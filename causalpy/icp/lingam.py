@@ -19,7 +19,7 @@ class LinICP(ICP):
         self,
         alpha: float = 0.05,
         fit_intercept: bool = True,
-        residual_test: str = "normal",
+        residual_test: str = "ranks",
         filter_variables: bool = True,
         filter_method: str = "lasso_sqrt",
         ignored_subsets: Optional[Set] = None,
@@ -165,7 +165,11 @@ class LinICP(ICP):
         return parents, p_values_per_elem
 
     def _test_plausible_parents(
-        self, obs, target: np.ndarray, envs: Dict, s: Union[np.ndarray, List, Tuple],
+        self,
+        obs: np.ndarray,
+        target: np.ndarray,
+        envs: Dict,
+        s: Union[np.ndarray, List, Tuple],
     ):
         if not len(s):
             obs_S = np.ones((self.n, 1))
@@ -181,7 +185,7 @@ class LinICP(ICP):
         # TODO: each environment e against environment e + 1.
         for env in envs:
             env_indices = envs[env]
-            p_value_update = self.test_residuals(
+            p_value_update = self.residuals_test(
                 residuals[env_indices],
                 residuals[np.logical_not(env_indices)],
                 test=self.residual_test,
@@ -190,7 +194,7 @@ class LinICP(ICP):
         return p_value * len(envs)  # Bonferroni correction for p value
 
     @staticmethod
-    def test_residuals(sample1, sample2, test="normal", **kwargs):
+    def residuals_test(sample1, sample2, test="normal", **kwargs):
         """
         Test for the equality of the distribution of input 1 versus 2.
 
