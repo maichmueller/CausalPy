@@ -19,6 +19,7 @@ class GLMPredictor(LINGAMPredictor):
         fit_intercept: bool = True,
         filter_variables: bool = True,
         filter_method: str = "lasso_sqrt",
+        linker_function: Optional[Callable] = np.exp,
         ignored_subsets: Optional[Set] = None,
         nr_parents_limit: Optional[int] = None,
         **kwargs,
@@ -41,7 +42,6 @@ class GLMPredictor(LINGAMPredictor):
         """
         super().__init__(**kwargs)
         self.fit_intercept = fit_intercept
-        self.residual_test = residual_test
         self.filter_variables = filter_variables
         self.filter_method = filter_method
         self.ignored_subsets: Optional[Set] = ignored_subsets
@@ -49,6 +49,8 @@ class GLMPredictor(LINGAMPredictor):
 
         self.alpha: float = alpha
         self.accepted_sets: Set = set()
+
+        self.linker_function = linker_function
 
     def _test_plausible_parents(
         self,

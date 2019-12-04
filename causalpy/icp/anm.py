@@ -118,7 +118,10 @@ class ANMPredictor(ICPredictor):
             torch.sum(
                 reduce(
                     lambda x, y: x * y,
-                    map(self._centering, (ANMPredictor.rbf(X, X), ANMPredictor.rbf(Y, Y))),
+                    map(
+                        self._centering,
+                        (ANMPredictor.rbf(X, X), ANMPredictor.rbf(Y, Y)),
+                    ),
                 )
             )
             / self.batch_size
@@ -176,13 +179,11 @@ class ANMPredictor(ICPredictor):
         """
         A null method to allow for data extraction of the training process in the case of not needing the data.
         """
-        return
+        pass
 
     def infer(self, obs, target_variable, envs, *args, **kwargs):
 
-        data_hook = kwargs.pop("data_hook", None)
-        if data_hook is None:
-            data_hook = self._null_data_hook
+        data_hook = kwargs.pop("data_hook", self._null_data_hook)
 
         residual_ground_truth = kwargs.pop("ground_truth", None)
         if residual_ground_truth is not None:
@@ -197,11 +198,7 @@ class ANMPredictor(ICPredictor):
         torch.autograd.set_detect_anomaly(True)
         self.reset_optimizer()
 
-        pbar = (
-            tqdm(range(self.epochs), desc="Training Additive Noise Model Network")
-            if self.log_level
-            else range(self.epochs)
-        )
+        pbar = tqdm(range(self.epochs), desc="Training Additive Noise Model Network")
 
         for epoch in pbar:
             # Compute Residuals for different contexts
@@ -219,46 +216,32 @@ class ANMPredictor(ICPredictor):
             for env, env_ind in environments.items():
                 jacobians[env] = self._get_jacobian(obs[env_ind])[0].abs().mean(0)
 
-            def sum_reduce(x, y):
-                return x + y
-
             # Loss that computes the dependence of parent variables and residuals per context
             # Loss is weighted by Expectation of absolute values of the partial derivatives
-            loss_ind_par = reduce(
-                sum_reduce,
-                [
-                    jacobian
-                    * reduce(
-                        sum_reduce,
-                        map(
-                            self.variable_independence_measure,
-                            (
-                                (residuals[env], obs[env_ind, var])
-                                for env, env_ind in environments.items()
-                            ),
-                        ),
+            loss_ind_par = sum(
+                jacobian
+                * sum(
+                    self.variable_independence_measure(
+                        residuals[env], obs[env_ind, var]
                     )
-                    for var, jacobian in jacobians.items()
-                ],
+                    for env, env_ind in environments.items()
+                )
+                for var, jacobian in jacobians.items()
             )
 
             # Measure for the dependence of Residuals and Context
             # Formulated differently: Measure for how close the residuals are distributed across different contexts.
             # Note that we compare only residual_i to residual_{i+1}, which greatly reduces the computational amount.
-            loss_identical_res = reduce(
-                sum_reduce,
-                [
-                    self.residuals_comparison(residuals[i], residuals[i + 1])
-                    for i in range(len(residuals) - 1)
-                ],
+            loss_identical_res = sum(
+                self.residuals_comparison(residuals[i], residuals[i + 1])
+                for i in range(len(residuals) - 1)
             )
 
             # Overall Loss
-            # TODO: what does residuals[0] do here?
             loss = (
                 loss_identical_res
                 + self.hyperparams["gamma"] * loss_ind_par
-                + residuals[0].mean().abs()
+                # + residuals[0].mean().abs()
             )
 
             loss.backward()
@@ -281,20 +264,17 @@ class ANMPredictor(ICPredictor):
                 losses["regression"].append(loss_regression.item())
                 losses["total"].append(loss.item())
 
-                if residual_ground_truth is not None:
-                    # Regression loss if the true causal model is used
-                    losses["regression_truth"].append(
-                        reduce(
-                            sum_reduce,
-                            [
-                                (residual_ground_truth[env_ind] ** 2).mean()
-                                for env_ind in environments.values()
-                            ],
-                        )
+            if residual_ground_truth is not None:
+                # Regression loss if the true causal model is used
+                losses["regression_truth"].append(
+                    sum(
+                        (residual_ground_truth[env_ind] ** 2).mean()
+                        for env_ind in environments.values()
                     )
-                if (epoch + 1) % 10 == 0:
-                    self.log(str(losses))
-                    self.visualize_training(losses)
+                )
+            if (epoch + 1) % 10 == 0:
+                self.logger.info(str(losses))
+            self.visualize_training(losses)
 
     @staticmethod
     def visualize_training(losses):
