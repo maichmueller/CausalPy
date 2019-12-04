@@ -148,9 +148,9 @@ class LINGAMPredictor(ICPredictor):
             rejected = p_value <= alpha
             if not rejected:
                 self.accepted_sets.add(subset)
-                self.logger.debug(f"Subset {subset} with p-value: {p_value} accepted.")
+                self.logger.debug(f"Subset: {subset}\t p-value: {p_value} --> accepted.")
             else:
-                self.logger.debug(f"Subset {subset} with p-value: {p_value} rejected.")
+                self.logger.debug(f"Subset: {subset}\t p-value: {p_value} --> rejected.")
 
             subset, finished = subset_iterator.send(rejected)
 
@@ -171,8 +171,9 @@ class LINGAMPredictor(ICPredictor):
     def _regression_sklearn(x, y):
         lr = sklearn.linear_model.LinearRegression(fit_intercept=True).fit(x, y)
         residuals = x - lr.predict(x)
-        lr.coef_[0] = lr.intercept_
-        return residuals, lr.coef_
+        coeffs = lr.coef_.copy()
+        coeffs[0] = lr.intercept_
+        return residuals, coeffs
 
     @staticmethod
     def _regression_analytically(x, y):
@@ -196,7 +197,7 @@ class LINGAMPredictor(ICPredictor):
         # This might come at the cost of some numerical stability, which might be provided by sklearn, but not by a
         # direct, analytical beta calculation.
         residuals, beta = self.regression_function(obs_S, target)
-
+        self.logger.debug(f"Subset: {tuple(self.index_to_varname[i] for i in s)}\t regression coefficients: {beta}")
         p_value = 1
         # the paper suggests to test the residual of data in an environment e against the
         # the residuals of the data not in e.

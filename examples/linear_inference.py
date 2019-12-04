@@ -3,14 +3,15 @@ from causalpy import LINGAMPredictor
 
 
 def to_count_data(sample):
-    sample = pd.DataFrame(
-        rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
-    )
+    # sample = pd.DataFrame(
+    #     rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
+    # )
+    # return sample
     return sample
 
 
 if __name__ == "__main__":
-    causal_net = simulate(10, 2, seed=0)
+    causal_net = simulate(5, 2, seed=0)
     print(causal_net)
     rs = np.random.default_rng(0)
     vars = list(causal_net.get_variables())
@@ -34,9 +35,12 @@ if __name__ == "__main__":
             curr_env += 1
 
     obs = pd.concat(obs, axis=0).reset_index(drop=True)
+    obs.to_csv("rtest.csv", index=False)
     envs = np.array(envs)
+    pd.Series(envs).to_csv("rtest_envs.csv", index=False)
+    print(target_variable)
     linicp = LINGAMPredictor(
-        alpha=0.01, filter_variables=False, log_level="DEBUG", residual_test="ks"
+        alpha=0.01, filter_variables=False, log_level="DEBUG", residual_test="ranks"
     )
     predicted_parents, p_vals = linicp.infer(
         obs, target_variable=target_variable, envs=envs

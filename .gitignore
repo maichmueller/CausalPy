@@ -4,6 +4,7 @@ causalpy/__pycache__/*
 causalpy/icp/__pycache__/*
 causalpy/scm/__pycache__/*
 causalpy/scm/assignments/__pycache__/*
+causalpy/icp/utils/__pycache__/*
 
 causalpy/scm/noise/__pycache__/*
 examples/__pycache__/*
