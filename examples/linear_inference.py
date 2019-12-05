@@ -11,15 +11,16 @@ def to_count_data(sample):
 
 
 if __name__ == "__main__":
-    causal_net = simulate(5, 2, seed=0)
+    causal_net = simulate(10, 2, seed=3)
     print(causal_net)
-    rs = np.random.default_rng(0)
+    rs = np.random.default_rng(8)
     vars = list(causal_net.get_variables())
     n_normal = rs.integers(100, 5000 + 1)
     obs = [to_count_data(causal_net.sample(n_normal))[vars]]
     envs = [0] * n_normal
     curr_env = 1
-    target_variable = rs.choice(causal_net.get_variables(False), size=1)[0]
+    # target_variable = rs.choice(causal_net.get_variables(False), size=1)[0]
+    target_variable = "G_3"
     for variable in vars:
         if variable != target_variable:
             n_interv = rs.integers(100, 500 + 1)
@@ -40,7 +41,7 @@ if __name__ == "__main__":
     pd.Series(envs).to_csv("rtest_envs.csv", index=False)
     print(target_variable)
     linicp = LINGAMPredictor(
-        alpha=0.01, filter_variables=False, log_level="DEBUG", residual_test="ranks"
+        alpha=0.05, filter_variables=False, log_level="DEBUG", residual_test="ranks"
     )
     predicted_parents, p_vals = linicp.infer(
         obs, target_variable=target_variable, envs=envs

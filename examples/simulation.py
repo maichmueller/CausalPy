@@ -86,7 +86,7 @@ def simulate(
         # noise coefficient is always 1
         # coefficients for parents are chosen at random from [0, 2]
         offset = 0
-        noise_coeff = 0 if gene not in master_genes else 1
+        noise_coeff = 1
         coeffs = []
 
         for this_level in range(gene_level - 1, -1, -1):
@@ -163,7 +163,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
 
 if __name__ == "__main__":
-    causal_net = simulate(100, 2, seed=0)
+    causal_net = simulate(1000, 2, seed=0)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
     sample = analyze_distributions(scm_net=causal_net)

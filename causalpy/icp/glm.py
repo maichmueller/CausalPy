@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import scipy.stats
 import sklearn.linear_model
-
+from statsmodels.api import GLM, families
 from tqdm.auto import tqdm
 
 
@@ -15,11 +15,8 @@ class GLMPredictor(LINGAMPredictor):
 
     def __init__(
         self,
+        glm_family: families.Family,
         alpha: float = 0.05,
-        fit_intercept: bool = True,
-        filter_variables: bool = True,
-        filter_method: str = "lasso_sqrt",
-        linker_function: Optional[Callable] = np.exp,
         ignored_subsets: Optional[Set] = None,
         nr_parents_limit: Optional[int] = None,
         **kwargs,
@@ -40,17 +37,18 @@ class GLMPredictor(LINGAMPredictor):
             The upper limiting number of causal parents to consider. If not given, the method will search in all
             possible, not excluded subsets.
         """
-        super().__init__(**kwargs)
-        self.fit_intercept = fit_intercept
-        self.filter_variables = filter_variables
-        self.filter_method = filter_method
+        super().__init__(filter_variables=False, **kwargs)
+        self.glm_family = glm_family
         self.ignored_subsets: Optional[Set] = ignored_subsets
         self.nr_parents_limit: Optional[int] = nr_parents_limit
 
         self.alpha: float = alpha
         self.accepted_sets: Set = set()
 
-        self.linker_function = linker_function
+    def phi_estimator(self, target: np.ndarray, mu_pred: np.ndarray, n_envs: int, n_obs: int):
+        n = len(target)
+        phi_hat = 1 / (n - n_envs * (n_obs + 1)) * np.sum((target - mu_pred) ** 2 / self.glm_family.variance(mu_pred))
+        self.glm_family.variance
 
     def _test_plausible_parents(
         self,
@@ -63,7 +61,8 @@ class GLMPredictor(LINGAMPredictor):
             obs_S = np.ones((self.n, 1))
         else:
             obs_S = sklearn.preprocessing.add_dummy_feature(obs[:, s])
-        lr = sklearn.linear_model.LinearRegression(fit_intercept=True)
+        glm_reg = GLM(target, obs_S, family=self.glm_family).fit()
+        mu_pred = glm_reg.predict(obs_S)
         lr.fit(obs_S, target)
         residuals = target - lr.predict(obs_S)
         p_value = 1

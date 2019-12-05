@@ -203,8 +203,7 @@ class LINGAMPredictor(ICPredictor):
         # the residuals of the data not in e.
         # TODO: find out, whether this isn't equivalent to the slightly faster method of testing the residuals of
         # TODO: each environment e against environment e + 1.
-        for env in envs:
-            env_indices = envs[env]
+        for env, env_indices in envs.items():
             p_value_update = self.residuals_test(
                 residuals[env_indices],
                 residuals[np.logical_not(env_indices)],

@@ -1,8 +1,10 @@
+
 from .icpbase import ICPredictor
 from .utils import VisdomLinePlotter
 
 from typing import *
 
+from operator import mul
 from collections import defaultdict
 from functools import reduce, partial
 
@@ -48,13 +50,9 @@ class ANMPredictor(ICPredictor):
             )
 
         if residual_equality_measure == "mmd":
-            self.residuals_comparison = lambda res_i, res_ip1: self.mmd_multiscale(
-                res_i, res_ip1
-            )
+            self.residuals_comparison = self.mmd_multiscale
         elif residual_equality_measure == "moments":
-            self.residuals_comparison = lambda res_i, res_ip1: self.moments(
-                res_i, res_ip1
-            )
+            self.residuals_comparison = self.moments
         elif isinstance(residual_equality_measure, Callable):
             self.residuals_comparison = residual_equality_measure
         else:
@@ -65,7 +63,7 @@ class ANMPredictor(ICPredictor):
         if variable_independence_measure == "hsic":
             self.variable_independence_measure = self._hilbert_schmidt_independence
 
-    def set_network(self, network):
+    def set_network(self, network: torch.nn.Module):
         self.network = network
         self.reset_optimizer()
 
@@ -76,9 +74,14 @@ class ANMPredictor(ICPredictor):
         )
         self.optimizer.zero_grad()
 
-    def _get_jacobian(self, x):
-        """ Compute Jacobian of net with respect to y"""
-        n_outputs = 1
+    def _get_jacobian(self, x, n_outputs=1):
+        """
+        Compute Jacobian of net with respect to y.
+        The output of torch.autograd.grad will fill a matrix-tensor of shape (nr_output_funcs, nr_variables).
+        E.g. for a linear fully connected network with input dim n and output dim k, we have:
+            nr_output_funcs = k
+            nr_variables = n.
+        """
         x = x.squeeze()
         n = x.size()[0]
         x = x.repeat(n_outputs, 1)
@@ -117,7 +120,7 @@ class ANMPredictor(ICPredictor):
         out = (
             torch.sum(
                 reduce(
-                    lambda x, y: x * y,
+                    mul,
                     map(
                         self._centering,
                         (ANMPredictor.rbf(X, X), ANMPredictor.rbf(Y, Y)),
