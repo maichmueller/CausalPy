@@ -1,17 +1,17 @@
 from examples.simulation import *
 from causalpy import LINGAMPredictor
+from statsmodels.api import families
 
 
 def to_count_data(sample):
-    # sample = pd.DataFrame(
-    #     rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
-    # )
-    # return sample
+    sample = pd.DataFrame(
+        rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
+    )
     return sample
 
 
 if __name__ == "__main__":
-    causal_net = simulate(10, 2, seed=3)
+    causal_net = simulate(5, 2, seed=3)
     print(causal_net)
     rs = np.random.default_rng(8)
     vars = list(causal_net.get_variables())
@@ -43,7 +43,10 @@ if __name__ == "__main__":
     linicp = LINGAMPredictor(
         alpha=0.05, filter_variables=False, log_level="DEBUG", residual_test="ranks"
     )
-    predicted_parents, p_vals = linicp.infer(
+    glmicp = GLMPredictor(
+        glm_family=families.NegativeBinomial(), alpha=0.05, log_level="DEBUG"
+    )
+    predicted_parents, p_vals = glmicp.infer(
         obs, target_variable=target_variable, envs=envs
     )
     actual_parents = list(causal_net.graph.predecessors(target_variable))

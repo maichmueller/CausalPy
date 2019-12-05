@@ -12,7 +12,6 @@ from tqdm.auto import tqdm
 
 
 class GLMPredictor(LINGAMPredictor):
-
     def __init__(
         self,
         glm_family: families.Family,
@@ -45,9 +44,13 @@ class GLMPredictor(LINGAMPredictor):
         self.alpha: float = alpha
         self.accepted_sets: Set = set()
 
-    def _phi_estimator(self, target: np.ndarray, mu_pred: np.ndarray, n_envs: int, n_obs: int):
+    def _phi_estimator(
+        self, target: np.ndarray, mu_pred: np.ndarray, n_envs: int, n_obs: int
+    ):
         n = len(target)
-        phi_hat = 1 / (n - n_envs * (n_obs + 1)) * np.sum((target - mu_pred) ** 2 / self.glm_family.variance(mu_pred))
+        phi_hat = np.sum(
+            (target - mu_pred) ** 2 / self.glm_family.variance(mu_pred)
+        ) / (n - n_envs * (n_obs + 1))
         return phi_hat
 
     def _test_plausible_parents(
@@ -64,14 +67,19 @@ class GLMPredictor(LINGAMPredictor):
         glm_reg = GLM(target, obs_S, family=self.glm_family).fit()
         mu_pred = glm_reg.predict(obs_S)
         deviance_total = glm_reg.deviance
-        phi_S = self._phi_estimator(target, mu_pred, len(envs), len(obs_S))
+        n_envs = len(envs)
+        phi_S = self._phi_estimator(target, mu_pred, n_envs, obs_S.shape[0])
         deviances_env = dict()
         for env, env_indices in envs.items():
-            deviances_env[env] = GLM(target[env_indices], obs_S[env_indices], family=self.glm_family).fit().deviance
-        a = (obs_S.shape[1] + 1) * (len(envs) - 1)
-        b = obs_S.shape[0] * (len(envs) - 1) * (obs_S.shape[1] + 1)
+            deviances_env[env] = (
+                GLM(target[env_indices], obs_S[env_indices], family=self.glm_family)
+                .fit()
+                .deviance
+            )
+        a = (obs_S.shape[1] + 1) * (n_envs - 1)
+        b = obs_S.shape[0] * (n_envs - 1) * (obs_S.shape[1] + 1)
 
-        test_score = 1 / a * deviance_total - sum(deviances_env.values()) / phi_S
+        test_score = 1 / a * (deviance_total - sum(deviances_env.values())) / phi_S
         p_value = scipy.stats.f.cdf(test_score, a, b)
 
         return p_value

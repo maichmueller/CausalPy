@@ -2,45 +2,7 @@ from causalpy import LinearAssignment, PolynomialAssignment, NoiseGenerator, SCM
 import numpy as np
 import pandas as pd
 from numpy.polynomial.polynomial import Polynomial
-
-
-def build_scm(seed=0):
-    cn = SCM(
-        assignment_map={
-            "X_0": (
-                [],
-                LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=seed),
-            ),
-            "X_1": (
-                ["X_0"],
-                LinearAssignment(1, 1, 2),
-                NoiseGenerator("standard_normal", seed=seed+1),
-            ),
-            "X_2": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 1, 3, 2),
-                NoiseGenerator("standard_normal", seed=seed+2),
-            ),
-            "X_3": (
-                ["X_1", "X_2"],
-                PolynomialAssignment([0, 1], [0, 1, 0.5], [0, 0, 4]),
-                NoiseGenerator("standard_normal", seed=seed+3),
-            ),
-            "Y": (
-                ["X_0", "X_2"],
-                PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 2]),
-                NoiseGenerator("standard_normal", seed=seed+4),
-            ),
-        },
-        variable_tex_names={
-            "X_0": "$X_0$",
-            "X_1": "$X_1$",
-            "X_2": "$X_2$",
-            "X_3": "$X_3$",
-        },
-    )
-    return cn
+from test.builld_scm_funcs import *
 
 
 def manual_standard_sample(n, noise_func, dtype, names, seed):
@@ -74,13 +36,13 @@ def test_linear_assignment():
 
 
 def test_scm_build():
-    cn = build_scm()
+    cn = build_scm_linandpoly()
     nodes_in_graph = list(cn.graph.nodes)
     assert nodes_in_graph == ["X_0", "X_1", "X_2", "X_3", "Y"]
 
 
 def test_scm_sample():
-    cn = build_scm()
+    cn = build_scm_linandpoly()
     scm_sample = cn.sample(10)
     sample = manual_standard_sample(
         10, noise, scm_sample.values.dtype, list(cn.graph.nodes), 0
@@ -92,7 +54,7 @@ def test_scm_sample():
 
 
 def test_scm_intervention():
-    cn = build_scm()
+    cn = build_scm_linandpoly()
 
     # do the intervention
     cn.intervention(
