@@ -45,12 +45,12 @@ class GLMPredictor(LINGAMPredictor):
         self.accepted_sets: Set = set()
 
     def _phi_estimator(
-        self, target: np.ndarray, mu_pred: np.ndarray, n_envs: int, n_obs: int
+        self, target: np.ndarray, mu_pred: np.ndarray, n_envs: int, n_features: int
     ):
         n = len(target)
         phi_hat = np.sum(
             (target - mu_pred) ** 2 / self.glm_family.variance(mu_pred)
-        ) / (n - n_envs * (n_obs + 1))
+        ) / (n - n_envs * (n_features + 1))
         return phi_hat
 
     def _test_plausible_parents(
@@ -64,22 +64,29 @@ class GLMPredictor(LINGAMPredictor):
             obs_S = np.ones((self.n, 1))
         else:
             obs_S = sklearn.preprocessing.add_dummy_feature(obs[:, s])
-        glm_reg = GLM(target, obs_S, family=self.glm_family).fit()
-        mu_pred = glm_reg.predict(obs_S)
-        deviance_total = glm_reg.deviance
+
         n_envs = len(envs)
-        phi_S = self._phi_estimator(target, mu_pred, n_envs, obs_S.shape[0])
+
+        glm_reg = GLM(target, obs_S, family=self.glm_family).fit()
+        deviance_total = glm_reg.deviance
+
+        mu_pred = np.empty(obs.shape[0])
         deviances_env = dict()
         for env, env_indices in envs.items():
-            deviances_env[env] = (
-                GLM(target[env_indices], obs_S[env_indices], family=self.glm_family)
-                .fit()
-                .deviance
-            )
-        a = (obs_S.shape[1] + 1) * (n_envs - 1)
-        b = obs_S.shape[0] * (n_envs - 1) * (obs_S.shape[1] + 1)
+            env_data = obs_S[env_indices]
+            env_fit = GLM(
+                target[env_indices], env_data, family=self.glm_family
+            ).fit()
+            deviances_env[env] = env_fit.deviance
+            mu_pred[env_indices] = env_fit.predict(env_data)
 
-        test_score = 1 / a * (deviance_total - sum(deviances_env.values())) / phi_S
-        p_value = scipy.stats.f.cdf(test_score, a, b)
+        phi_S = self._phi_estimator(target, mu_pred, n_envs, obs_S.shape[1])
+        a = (obs_S.shape[1] + 1) * (n_envs - 1)
+        b = obs_S.shape[0] - n_envs * (obs_S.shape[1] + 1)
+
+        test_score = (deviance_total - sum(deviances_env.values())) / phi_S / a
+        p_value = 2 * min(
+            scipy.stats.f.cdf(test_score, a, b), scipy.stats.f.sf(test_score, a, b)
+        )
 
         return p_value
