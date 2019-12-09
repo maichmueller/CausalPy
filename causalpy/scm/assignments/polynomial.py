@@ -1,12 +1,16 @@
-from .assignmentbase import BaseAssignment
+from .assignments import Assignment
 
 import numpy as np
 from numpy.polynomial import polynomial
-from typing import List
+from typing import List, Collection
 
 
-class PolynomialAssignment(BaseAssignment):
-    def __init__(self, *coefficients_list: List[float]):
+class PolynomialAssignment(Assignment):
+    r"""
+    A polynomial assignment function of the form:
+        f(X_S, N) = noise_coeff * N + offset + \sum_{i \in S} \sum_{k = 0}^{p_i} a_{ik} * (X_i)^k
+    """
+    def __init__(self, *coefficients_list: Collection[Collection[float]]):
         polynomials = []
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:
@@ -33,3 +37,12 @@ class PolynomialAssignment(BaseAssignment):
                     )
             assignment.append(" + ".join(this_assign))
         return " + ".join(assignment)
+
+    @staticmethod
+    def random_factory(nr_variables, seed=None):
+        rs = np.random.default_rng(seed)
+        coeffs = []
+        for n in range(nr_variables + 1):
+            deg = rs.integers(1, 6)  # allows degrees d <= 5
+            coeffs.append(np.random.normal(loc=0, scale=0.1, size=deg))
+        return PolynomialAssignment(*coeffs)

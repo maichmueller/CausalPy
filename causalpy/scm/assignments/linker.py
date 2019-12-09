@@ -1,10 +1,9 @@
-from .assignmentbase import BaseAssignment, Assignment
+from .assignments import Assignment, Assignment
 
-import numpy as np
 from typing import Callable
 
 
-class LinkerAssignment(BaseAssignment):
+class LinkerAssignment(Assignment):
     def __init__(self, linker_func: Callable, assignment_func: Assignment):
         self.linker = linker_func
         self.assign_func = assignment_func

@@ -1,1 +1,2 @@
-from .generator import NoiseGenerator, NoiseModel
+from .noise import Noise
+from .generator import NoiseGenerator

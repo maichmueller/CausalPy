@@ -1,4 +1,3 @@
-
 from .icpbase import ICPredictor
 from .utils import VisdomLinePlotter
 
@@ -180,7 +179,7 @@ class ANMPredictor(ICPredictor):
     @staticmethod
     def _null_data_hook(*args, **kwargs):
         """
-        A null method to allow for data extraction of the training process in the case of not needing the data.
+        A null method to allow for data extraction during the training process.
         """
         pass
 

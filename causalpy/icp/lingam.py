@@ -14,7 +14,7 @@ import sklearn.linear_model
 from tqdm.auto import tqdm
 
 
-class LINGAMPredictor(ICPredictor):
+class LiNGAMPredictor(ICPredictor):
     def __init__(
         self,
         alpha: float = 0.05,
@@ -28,6 +28,15 @@ class LINGAMPredictor(ICPredictor):
         **kwargs,
     ):
         """
+        Predictor class for Linear Non-Gaussian Acyclic Models.
+        Full identifiability of the underlying model given only observational data is guaranteed when either of the
+        following conditions hold:
+         - all the residuals don't follow a gaussian distribution or
+         - all the residuals have equal variance
+
+        However, if the observations also contain interventional data, then the identifiable graphs increases depending
+        on the type of interventions provided.
+        For details refer to [1]_.
 
         Parameters
         ----------
@@ -42,6 +51,12 @@ class LINGAMPredictor(ICPredictor):
         nr_parents_limit : (optional) int
             The upper limiting number of causal parents to consider. If not given, the method will search in all
             possible, not excluded subsets.
+
+        References
+        ----------
+        [1] J. Peters, P. Bühlmann, N. Meinshausen:
+        Causal inference using invariant prediction: identification and confidence intervals, arXiv:1501.01332,
+        Journal of the Royal Statistical Society, Series B (with discussion) 78(5):947-1012, 2016.
         """
         super().__init__(**kwargs)
         self.fit_intercept = fit_intercept
@@ -70,28 +85,24 @@ class LINGAMPredictor(ICPredictor):
     def infer(
         self,
         obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
         target_variable: Union[int, str],
+        envs: Optional[np.ndarray] = None,
         alpha: Optional[float] = None,
         *args,
         **kwargs,
     ):
         r"""
-        Perform Linear Invariant Causal Prediction (ICP) on the data provided on object construction.
-        This method assumes the data stems from a linear gaussian SCM, i.e.
-         - all assignment functions are linear in their parents and noise variables,
-         - the residuals follow a gaussian distribution.
-
-        For details refer to [1]_.
+        Perform Linear Invariant Causal Prediction (LinICP).
 
         Parameters
         ----------
         obs : (n, p) ndarray or DataFrame
             The data of all environment observations from the variables of interest.
-        envs : (n,) ndarray
-            Array of environment indices for the observation dataset.
         target_variable : int or ``obs`` DataFrame column accessor
             The target variable to perform causal parent identification on.
+        envs : (optional) (n,) ndarray
+            Array of environment indices for the observation dataset. If not provided, defaults to all
+            observations stemming from the same environment.
         alpha : (optional) float
             Significance level of the test. P(\hat{S} \subset S^*) \gte 1-`alpha`
 
@@ -99,15 +110,12 @@ class LINGAMPredictor(ICPredictor):
         -------
         tuple
             The identified causal parent set, \hat{S}, as tuple of variable names.
-
-        References
-        ----------
-        [1] J. Peters, P. Bühlmann, N. Meinshausen:
-        Causal inference using invariant prediction: identification and confidence intervals, arXiv:1501.01332,
-        Journal of the Royal Statistical Society, Series B (with discussion) 78(5):947-1012, 2016.
         """
         if alpha is None:
             alpha = self.alpha
+
+        if envs is None:
+            envs = np.zeros(len(obs))
 
         obs, target, environments = self.preprocess_input(obs, target_variable, envs)
         if self.filter_variables:

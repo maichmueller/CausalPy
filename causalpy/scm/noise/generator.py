@@ -1,3 +1,4 @@
+from . import Noise
 from typing import *
 
 import numpy as np
@@ -5,7 +6,7 @@ from numpy.random import Generator, PCG64
 from functools import partial, wraps
 
 
-class NoiseGenerator:
+class NoiseGenerator(Noise):
     """
     A simple feed forward convenience class to generate different numpy provided distributions to the user.
 
@@ -138,6 +139,3 @@ class NoiseGenerator:
         return self.distribution(size=size, **kwargs)
 
     _apply_dist_params = staticmethod(_apply_dist_params)
-
-
-NoiseModel = TypeVar('NoiseModel', bound=NoiseGenerator)

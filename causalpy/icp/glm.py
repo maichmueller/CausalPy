@@ -11,7 +11,7 @@ from statsmodels.api import GLM, families
 from tqdm.auto import tqdm
 
 
-class GLMPredictor(LINGAMPredictor):
+class GLMPredictor(LiNGAMPredictor):
     def __init__(
         self,
         glm_family: families.Family,

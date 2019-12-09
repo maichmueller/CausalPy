@@ -1,5 +1,6 @@
 from examples.simulation import *
-from causalpy import LINGAMPredictor
+from experiments.experiment_helpers import *
+from causalpy import LiNGAMPredictor
 from statsmodels.api import families
 
 
@@ -15,7 +16,7 @@ if __name__ == "__main__":
     causal_net = simulate(5, 2, seed=0)
     vars = list(causal_net.get_variables())
 
-    n_iters = 50
+    n_iters = 500
     iter_est_parents = []
     iter_est_pvals = []
     for i in range(n_iters):
@@ -26,10 +27,10 @@ if __name__ == "__main__":
         envs = [0] * n_normal
 
         curr_env = 1
-        target_variable = rs.choice(causal_net.get_variables(False), size=1)[0]
+        target_variable = rs.choice(list(set(causal_net.get_variables(False)) - {"G_0", "G_1"}), size=1)[0]
         for variable in vars:
             if variable != target_variable:
-                n_interv = rs.integers(100, 500 + 1)
+                n_interv = rs.integers(100, 5000 + 1)
 
                 causal_net.do_intervention(
                     [variable], [rs.random() * rs.choice([-1, 1]) * 10]
@@ -44,8 +45,8 @@ if __name__ == "__main__":
         obs = pd.concat(obs, axis=0).reset_index(drop=True)
         envs = np.array(envs)
 
-        linicp = LINGAMPredictor(
-            alpha=0.05, filter_variables=False, log_level="INFO", residual_test="ranks"
+        linicp = LiNGAMPredictor(
+            alpha=0.05, filter_variables=False, log_level="INFO", residual_test="normal"
         )
 
         predicted_parents, p_vals = linicp.infer(
@@ -55,13 +56,7 @@ if __name__ == "__main__":
         iter_est_pvals.append(p_vals)
 
     actual_parents = list(causal_net.graph.predecessors(target_variable))
-
+    print(causal_net)
     # obs.to_csv("rtest.csv", index=False)
     # pd.Series(envs).to_csv("rtest_envs.csv", index=False)
-    success_rate = sum((sorted(iter_est_parents[i]) == ))
-    print(causal_net)
-    print("Target:", target_variable)
-    print("Actual parents:", sorted(actual_parents))
-    print("Predicted parents:")
-    print("\n".join([f"\t Iter {i}: \t {sorted(iter_est_parents[i])}" for i in range(n_iters)]))
-
+    print_results(target_variable, iter_est_parents, actual_parents, as_dataframe=False)

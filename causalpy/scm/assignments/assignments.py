@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Union, TypeVar
 
 
-class BaseAssignment(ABC):
+class Assignment(ABC):
     """
     An abstract base class for assignments. Assignments are supposed to be functions with a fixed call scheme:
     The first positional argument will be the evaluation of a noise variable N.
@@ -27,10 +27,17 @@ class BaseAssignment(ABC):
         It is implicitly necessary in the current framework, that the implemented call method is vectorized, i.e. is
         able to evaluate numpy arrays of consistent shape correctly. This improves sampling from these functions,
         avoiding python loops in favor of numpy C calculations.
-        :param noise: float or np.ndarray, the input of the noise variable of a single sample or of an array of samples.
-        :param args: any arguments needed by the subclass.
-        :param kwargs: any keyword arguments needed by the subclass.
-        :return: float or np.ndarray, the evaluated function at all provided spots.
+
+        Parameters
+        ----------
+        noise: float or np.ndarray,
+            the input of the noise variable of a single sample or of an array of samples.
+        args: any positional arguments needed by the subclass.
+        kwargs: any keyword arguments needed by the subclass.
+
+        Returns
+        -------
+        float or np.ndarray, the evaluated function for all provided inputs.
         """
         raise NotImplementedError(
             "Assignment subclasses must provide '__call__' method."
@@ -40,7 +47,6 @@ class BaseAssignment(ABC):
     def __len__(self):
         """
         Method to return the number of variables the assignment takes.
-        :return:
         """
         raise NotImplementedError(
             "Assignment subclasses must provide '__len__' method."
@@ -49,11 +55,24 @@ class BaseAssignment(ABC):
     @abstractmethod
     def function_str(self, variable_names=None):
         """
-        Method to convert the assignment functor to console printable output of the form: f(N, x_0,...) = ...
+        Method to convert the assignment functor to console printable output of the form:
+            f(N, x_0,...) = math_rep_of_func_as_string_here...
 
-        :param variable_names: (optional) List[str], a list of string names for each of the input variables in sequence.
-        Each position will be i of the list will be the name of the ith positional variable argument in __call__.
-        :return: str, the converted identifier of the function.
+        Notes
+        -----
+        The inheriting class only needs to implement the actual assignment part of the string!
+        This means, that the prefix 'f(N, X_0, X1,...) =' is added by the base class (with correct number of variables),
+        and the child class only needs to provide the string representation of the right hand side of the assignment.
+
+        Parameters
+        ----------
+        variable_names: (optional) List[str],
+            a list of string names for each of the input variables in sequence.
+            Each position will be i of the list will be the name of the ith positional variable argument in __call__.
+
+        Returns
+        -------
+        str, the converted identifier of the function.
         """
         raise NotImplementedError(
             "Assignment subclasses must provide 'function_str' method."
@@ -70,5 +89,3 @@ class BaseAssignment(ABC):
         prefix = f"f({', '.join(variable_names)}) = "
         return prefix + assignment
 
-
-Assignment = TypeVar('Assignment', bound=BaseAssignment)
