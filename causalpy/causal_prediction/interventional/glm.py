@@ -1,4 +1,4 @@
-from . import *
+from causalpy.causal_prediction.interventional import *
 import itertools as it
 from copy import deepcopy
 from typing import *
@@ -11,7 +11,7 @@ from statsmodels.api import GLM, families
 from tqdm.auto import tqdm
 
 
-class GLMPredictor(LiNGAMPredictor):
+class GLMPredictor(LinPredictor):
     def __init__(
         self,
         glm_family: families.Family,

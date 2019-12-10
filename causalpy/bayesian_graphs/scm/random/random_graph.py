@@ -1,10 +1,10 @@
-from causalpy.scm.assignments import *
-from causalpy.scm.noise import *
-from causalpy.scm.scm import SCM
+from causalpy.bayesian_graphs.scm.assignments import *
+from causalpy.bayesian_graphs.scm.noise import *
+from causalpy.bayesian_graphs.scm import SCM
 
 import operator
 from functools import reduce
-from typing import Optional, Collection, Type, Dict
+from typing import Optional, Collection, Type
 
 import numpy as np
 

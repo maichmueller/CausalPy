@@ -3,7 +3,7 @@ from functools import reduce
 import numpy as np
 import pandas as pd
 from test.builld_scm_funcs import build_scm_medium
-from causalpy.icp import GLMPredictor
+from causalpy.causal_prediction import GLMPredictor
 from statsmodels.api import families
 
 

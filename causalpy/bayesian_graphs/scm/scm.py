@@ -32,10 +32,10 @@ class SCM:
     soft-interventions, as well as more general interventions targeting one or more variables with arbitrary
     changes to the assignment and noise structure (including parent-child relationship changes).
 
-    For visualization aid, the scm can plot itself and/or print a summary of itself to the console.
-    To this end, the decision was made to limit the potential input to the scm objects in terms of assignment
+    For visualization aid, the bayesian_graphs can plot itself and/or print a summary of itself to the console.
+    To this end, the decision was made to limit the potential input to the bayesian_graphs objects in terms of assignment
     and noise functors.
-    If a user wishes to add a custom assignment or noise function to their usage of the scm, they will need
+    If a user wishes to add a custom assignment or noise function to their usage of the bayesian_graphs, they will need
     to provide implementations inheriting from the respective base classes of noise or assignment.
 
     Notes
@@ -53,7 +53,7 @@ class SCM:
         scm_name: str = "Structural Causal Model",
     ):
         """
-        Construct the SCM from an assignment map. The simplest way to construct the scm is to fully provide all parental
+        Construct the SCM from an assignment map. The simplest way to construct the bayesian_graphs is to fully provide all parental
         information in a dict form. An example for the usage would be:
             assignment_map = {
                 "X_0": (
@@ -81,7 +81,7 @@ class SCM:
         Parameters
         ----------
         assignment_map: dict,
-            The assignment dictionary for the scm construction as explained above.
+            The assignment dictionary for the bayesian_graphs construction as explained above.
         variable_tex_names: (optional) Collection,
             A collection of the names of the variables in the causal graph. Default is a standard 'X_i' nomenclature.
         function_key: (optional) str,
@@ -89,7 +89,7 @@ class SCM:
         noise_key: (optional) str,
             What to name the noise key in the attribute dictionary of the graph nodes. Default is 'noise'.
         scm_name: (optional) str,
-            The name of the scm to construct. Default is 'Structural Causal Model'.
+            The name of the bayesian_graphs to construct. Default is 'Structural Causal Model'.
         """
 
         self.scm_name: str = scm_name
@@ -198,7 +198,7 @@ class SCM:
                 the order of positional parameters of the assignment function to agree with the iterative order of the
                 new parents!
 
-            - For tuple: the order is (Parent list, assignment functor, noise models).
+            - For tuple: the order is (Parent list, assignment functor, noise neural_networks).
                 In order to omit one of these, set them to None.
             - For ndarray: same as list, but dim == 1 assumed (will be flattened otherwise).
         """
@@ -297,7 +297,7 @@ class SCM:
     def soft_intervention(self, variables: Collection, noise_models: Collection[Noise]):
         """
         Perform hard interventions, i.e. setting specific variables to a constant value.
-        This method doesn't change the current noise models.
+        This method doesn't change the current noise neural_networks.
 
         Convenience wrapper around ``interventions`` method.
 
@@ -374,9 +374,9 @@ class SCM:
         **kwargs,
     ):
         """
-        Plot the causal graph of the scm in a dependency oriented way.
+        Plot the causal graph of the bayesian_graphs in a dependency oriented way.
 
-        This will attempt a tree plot of the scm, in the case that the graph is indeed a tree.
+        This will attempt a tree plot of the bayesian_graphs, in the case that the graph is indeed a tree.
         However, because a causal graph is a DAG and can thus have directionless cycles (but not directional cycles), a
         tree structure often can't be computed. Therefore this method relies on graphviz to compute a feasible
         representation of the causal graph.
@@ -521,7 +521,7 @@ class SCM:
                     queue.append(parent)
                 visited_nodes.add(nn)
         for key, _ in sorted(
-            vars_causal_priority.items(), key=lambda x: x[1], reverse=True
+            vars_causal_priority.items(), key=lambda x: -x[1]
         ):
             yield key
 

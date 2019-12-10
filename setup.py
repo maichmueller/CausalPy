@@ -46,7 +46,7 @@ setup(
     license="MIT license",
     long_description=readme + "\n\n" + history,
     include_package_data=True,
-    keywords="causalpy causality invariant causal prediction scm sem",
+    keywords="causalpy causality invariant causal prediction bayesian graphs scm sem",
     name="CausalPy",
     packages=find_packages(),
     setup_requires=setup_requirements,

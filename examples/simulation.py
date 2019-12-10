@@ -163,8 +163,10 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
 
 if __name__ == "__main__":
-    causal_net = simulate(1000, 2, seed=0)
+    nr_genes = 100
+    causal_net = simulate(nr_genes, 2, seed=0)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
     sample = analyze_distributions(scm_net=causal_net)
     sample_var = sample.var().sort_values()
+    sample.to_csv(f"sc_data_{nr_genes}.csv", index=False)

@@ -1,5 +1,3 @@
-from functools import reduce
-
 from .icpbase import ICPredictor
 
 import itertools as it
@@ -11,10 +9,8 @@ import pandas as pd
 import scipy.stats
 import sklearn.linear_model
 
-from tqdm.auto import tqdm
 
-
-class LiNGAMPredictor(ICPredictor):
+class LinPredictor(ICPredictor):
     def __init__(
         self,
         alpha: float = 0.05,
@@ -28,15 +24,11 @@ class LiNGAMPredictor(ICPredictor):
         **kwargs,
     ):
         """
-        Predictor class for Linear Non-Gaussian Acyclic Models.
-        Full identifiability of the underlying model given only observational data is guaranteed when either of the
-        following conditions hold:
-         - all the residuals don't follow a gaussian distribution or
-         - all the residuals have equal variance
+        Predictor class for Linear Acyclic Models.
 
-        However, if the observations also contain interventional data, then the identifiable graphs increases depending
-        on the type of interventions provided.
-        For details refer to [1]_.
+        This predictor allows to estimate the causal parents of a target variable given interventional data.
+        Full identifiability of the target variable is theoretically guaranteed only when certain conditions are
+        fulfilled. For a list of these, check reference [1]_.
 
         Parameters
         ----------

@@ -1,2 +1,2 @@
-from .scm import *
-from .icp import *
+from .bayesian_graphs import *
+from causalpy.causal_prediction import *

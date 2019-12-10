@@ -1,5 +1,5 @@
 from typing import List
-from causalpy.scm import SCM, LinearAssignment, NoiseGenerator
+from causalpy.bayesian_graphs import SCM, LinearAssignment, NoiseGenerator
 import pandas as pd
 
 

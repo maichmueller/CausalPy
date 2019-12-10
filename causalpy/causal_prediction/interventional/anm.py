@@ -1,11 +1,10 @@
 from .icpbase import ICPredictor
-from .utils import VisdomLinePlotter
 
 from typing import *
 
 from operator import mul
 from collections import defaultdict
-from functools import reduce, partial
+from functools import reduce
 
 import numpy as np
 import pandas as pd
@@ -17,7 +16,6 @@ from torch.optim.lr_scheduler import _LRScheduler
 import matplotlib.pyplot as plt
 
 from tqdm.auto import tqdm
-import logging
 
 
 class ANMPredictor(ICPredictor):
