@@ -3,7 +3,7 @@ from .icpbase import ICPredictor
 from typing import *
 
 from operator import mul
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from functools import reduce
 
 import numpy as np
@@ -18,6 +18,9 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
 
+Hyperparams = namedtuple("Hyperparams", "alpha beta gamma")
+
+
 class ANMPredictor(ICPredictor):
     def __init__(
         self,
@@ -28,7 +31,7 @@ class ANMPredictor(ICPredictor):
         variable_independence_measure: str = "hsic",
         optimizer: Optional[Optimizer] = None,
         scheduler: Optional[_LRScheduler] = None,
-        hyperparams: Optional[Dict] = None,
+        hyperparams: Optional[Hyperparams] = None,
         log_level: bool = True,
     ):
         super().__init__(log_level=log_level)
@@ -36,7 +39,7 @@ class ANMPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.network = network
-        self.hyperparams = {"gamma": 1e-2} if hyperparams is None else hyperparams
+        self.hyperparams = Hyperparams(alpha=1, beta=1, gamma=1e-2) if hyperparams is None else hyperparams
 
         if optimizer is None:
             self.optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
@@ -71,23 +74,14 @@ class ANMPredictor(ICPredictor):
         )
         self.optimizer.zero_grad()
 
-    def _get_jacobian(self, x, n_outputs=1):
-        """
-        Compute Jacobian of net with respect to y.
-        The output of torch.autograd.grad will fill a matrix-tensor of shape (nr_output_funcs, nr_variables).
-        E.g. for a linear fully connected network with input dim n and output dim k, we have:
-            nr_output_funcs = k
-            nr_variables = n.
-        """
+    def _get_jacobian(self, x):
         x = x.squeeze()
         n = x.size()[0]
-        x = x.repeat(n_outputs, 1)
+        x = x.repeat(noutputs, 1)
         x.requires_grad_(True)
         y = self.network(x)
-        jacobian = torch.autograd.grad(
-            y, x, grad_outputs=torch.eye(n, device=self.device), create_graph=True
-        )
-        return jacobian
+        y.backward(torch.eye(self.network.dim_out))
+        return x.grad.data
 
     def _centering(self, K):
         n = K.shape[0]
@@ -240,7 +234,7 @@ class ANMPredictor(ICPredictor):
             # Overall Loss
             loss = (
                 loss_identical_res
-                + self.hyperparams["gamma"] * loss_ind_par
+                + self.hyperparams.gamma * loss_ind_par
                 # + residuals[0].mean().abs()
             )
 

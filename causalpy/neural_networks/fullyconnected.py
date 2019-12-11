@@ -3,7 +3,7 @@ import torch
 
 class FCNet(torch.nn.Module):
     """ Standard feed forward neural network with fully connected layers and ReLUs"""
-    def __init__(self, layer_nodes):
+    def __init__(self, *layer_nodes):
         super().__init__()
         self.net = torch.nn.Sequential()
 

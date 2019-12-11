@@ -8,7 +8,9 @@ from typing import List, Collection
 class PolynomialAssignment(Assignment):
     r"""
     A polynomial assignment function of the form:
-        f(X_S, N) = noise_coeff * N + offset + \sum_{i \in S} \sum_{k = 0}^{p_i} a_{ik} * (X_i)^k
+
+    .. math:: f(X_S, N) = c_{noise} * N + offset + \sum_{i \in S} {\sum^{p_i}}_{k = 0} c_{ik} * X_i^k
+
     """
     def __init__(self, *coefficients_list: Collection[Collection[float]]):
         polynomials = []

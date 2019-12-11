@@ -32,10 +32,10 @@ class SCM:
     soft-interventions, as well as more general interventions targeting one or more variables with arbitrary
     changes to the assignment and noise structure (including parent-child relationship changes).
 
-    For visualization aid, the bayesian_graphs can plot itself and/or print a summary of itself to the console.
-    To this end, the decision was made to limit the potential input to the bayesian_graphs objects in terms of assignment
-    and noise functors.
-    If a user wishes to add a custom assignment or noise function to their usage of the bayesian_graphs, they will need
+    For visualization aid, the SCM can plot itself and/or print a summary of itself to the console.
+    To this end, the decision was made to limit the potential input to the SCM objects in terms of
+    assignment and noise functors.
+    If a user wishes to add a custom assignment or noise function to their usage of the SCM, they will need
     to provide implementations inheriting from the respective base classes of noise or assignment.
 
     Notes
@@ -44,50 +44,65 @@ class SCM:
     type hints. This means, one may well be able to simply provide e.g. a lambda function for their
     assignment or noise function, however no guarantee is given that certain methods wouldn't break then.
     """
+
     def __init__(
         self,
         assignment_map: Mapping[object, Tuple[Collection, Assignment, Noise]],
         variable_tex_names: Dict = None,
-        function_key: str = "function",
-        noise_key: str = "noise",
         scm_name: str = "Structural Causal Model",
     ):
         """
-        Construct the SCM from an assignment map. The simplest way to construct the bayesian_graphs is to fully provide all parental
-        information in a dict form. An example for the usage would be:
-            assignment_map = {
-                "X_0": (
-                    [],
-                    LinearAssignment(1, 0),
-                    NoiseGenerator("normal", scale=0.3)
-                ),
-                "X_1": (
-                    ["X_0"],
-                    LinearAssignment(1, 1, 1),
-                    NoiseGenerator("normal", scale=1)),
-                "Y": (
-                    ["X_0", "X_1"],
-                    LinearAssignment(1, 0, 2, -1),
-                    NoiseGenerator("normal", scale=2),
-                ),
-            }
-
+        Construct the SCM from an assignment map. The simplest way to construct the bayesian_graphs is to fully provide
+        all parental information in a dict form.
         In short, the first tuple input are the parent names in a Collection, the second the assignment function, and
         as third input the Noise function.
+
         Notes
         -----
         Note, that the assignment function needs to align with the parents list (as provided) given as positional input!
+
+        Examples
+        --------
+        >>> assignment_map = {
+        ...     "X_zero": (
+        ...         [],
+        ...         LinearAssignment(1, 0),
+        ...         NoiseGenerator("normal", scale=0.3)
+        ...     ),
+        ...     "X_1": (
+        ...         ["X_zero"],
+        ...         LinearAssignment(1, 1, 1),
+        ...         NoiseGenerator("normal", scale=1)),
+        ...     "Y": (
+        ...         ["X_zero", "X_1"],
+        ...         PolynomialAssignment([0, 1], [0, 2], [0, 0, -1]),
+        ...         NoiseGenerator("normal", scale=2),
+        ...     ),
+        ... }
+
+        This sets up 3 variables of the form:
+
+        .. math:: X_0 = N(0, 0.3)
+        .. math:: X_1 = X_0 + N(0, 1)
+        .. math::   Y = 2 * X_0 - (X_1)^2 + N(0, 2)
+
+        To initialize the scm with this assignment map:
+
+        >>> causal_net = SCM(
+        ...     assignment_map=assignment_map,
+        ...     variable_tex_names={"X_zero": "$X_{zero}$", "X_1": "$X_1$"}
+        ... )
 
         Parameters
         ----------
         assignment_map: dict,
             The assignment dictionary for the bayesian_graphs construction as explained above.
-        variable_tex_names: (optional) Collection,
-            A collection of the names of the variables in the causal graph. Default is a standard 'X_i' nomenclature.
-        function_key: (optional) str,
-            What to name the function key in the attribute dictionary of the graph nodes. Default is 'function'.
-        noise_key: (optional) str,
-            What to name the noise key in the attribute dictionary of the graph nodes. Default is 'noise'.
+        variable_tex_names: (optional) Dict,
+            A collection of the latex names for the variables in the causal graph. The dict needs to provide a tex name
+            for each passed variable name in the form: {"VarName": "VarName_in_TeX"}.
+            Any variable that is missing in the dictionary will be assumed to accept its current name as the TeX
+            version.
+            If not provided defaults to the input names in the assignment map.
         scm_name: (optional) str,
             The name of the bayesian_graphs to construct. Default is 'Structural Causal Model'.
         """
@@ -110,7 +125,7 @@ class SCM:
             self.var_names_draw_dict = dict()
 
         # the attribute list that any given node in the graph has.
-        self.function_key, self.noise_key = function_key, noise_key
+        self.function_key, self.noise_key = "assignment", "noise"
 
         # a backup dictionary of the original assignments of the intervened variables,
         # in order to undo the interventions later.
@@ -133,8 +148,7 @@ class SCM:
         """
         Sample method to generate data for the given variables. If no list of variables is supplied, the method will
         simply generate data for all variables.
-        Setting the seed guarantees reproducibility, however this also currently implies that all randomness is
-        generated by a numpy method!
+        Setting the seed guarantees reproducibility.
 
         Parameters
         ----------
@@ -143,11 +157,12 @@ class SCM:
         variables: list,
             the variable names to consider for sampling. If None, all variables will be sampled.
         seed: int,
-            the seeding for the numpy generator
+            the seeding for the noise generators
 
         Returns
         -------
-        pd.DataFrame, the dataframe containing the samples of all the variables needed for the selection.
+        pd.DataFrame,
+            the dataframe containing the samples of all the variables needed for the selection.
         """
         if seed is not None:
             self.reseed(seed)
@@ -307,10 +322,6 @@ class SCM:
             the variables to intervene on.
         noise_models : Collection[float],
             the constant values the chosen variables should be set to.
-
-        Returns
-        -------
-            None
         """
         interventions_dict: Dict[object, Tuple[None, None, Noise]] = dict()
         for var, noise in zip(variables, noise_models):
@@ -371,6 +382,7 @@ class SCM:
         figsize: Tuple[int, int] = (6, 4),
         dpi: int = 150,
         alpha: float = 0.5,
+        savefig_fullpath: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -389,6 +401,10 @@ class SCM:
 
             ``sudo apt-get install graphviz libgraphviz-dev pkg-config``
 
+        Notes
+        -----
+        One will need to call ``plt.show()`` for the plot to be printed to the backend.
+
         Parameters
         ----------
         draw_labels : (optional) bool,
@@ -403,6 +419,8 @@ class SCM:
             the dots per inch arg for matplotlib. Default is 150.
         alpha : (optional) float,
             the statistical significance level for the test. Default value is 0.05.
+        savefig_fullpath: (opitional) str,
+            the full filepath to the, to which the plot should be saved. If not provided, the plot will not be saved.
         kwargs :
             arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
         """
@@ -425,6 +443,8 @@ class SCM:
             alpha=alpha,
             **kwargs,
         )
+        if savefig_fullpath is not None:
+            plt.savefig(savefig_fullpath)
 
     def str(self):
         """
@@ -500,9 +520,11 @@ class SCM:
             the names of all the variables that are to be considered. Names that cannot be found in the naming list of
             the graph will be ignored (warning raised).
 
-        Returns
-        -------
-        iterator, a generator object giving ancestors in causal order.
+        Yields
+        ------
+        Hashable,
+            the node object used to denote nodes in the graph in causal order. These are usually str or ints, but can be
+            any hashable type passable to a dict.
         """
         if variables is None:
             for node in nx.topological_sort(self.graph):
@@ -520,9 +542,7 @@ class SCM:
                     )
                     queue.append(parent)
                 visited_nodes.add(nn)
-        for key, _ in sorted(
-            vars_causal_priority.items(), key=lambda x: -x[1]
-        ):
+        for key, _ in sorted(vars_causal_priority.items(), key=lambda x: -x[1]):
             yield key
 
     def _hierarchy_pos(
