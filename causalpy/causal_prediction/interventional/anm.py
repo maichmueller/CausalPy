@@ -436,7 +436,6 @@ class ANMPredictor(ICPredictor):
                     )
 
                 self.visualize_training(losses)
-                pass
 
     @staticmethod
     def visualize_training(losses):
