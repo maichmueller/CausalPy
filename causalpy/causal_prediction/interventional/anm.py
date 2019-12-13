@@ -1,4 +1,5 @@
 from .icpbase import ICPredictor
+from causalpy.neural_networks import NeuralBaseNet, FCNet
 
 from typing import *
 
@@ -39,7 +40,11 @@ class ANMPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.network = network
-        self.hyperparams = Hyperparams(alpha=1, beta=1, gamma=1e-2) if hyperparams is None else hyperparams
+        self.hyperparams = (
+            Hyperparams(alpha=1, beta=1, gamma=1e-2)
+            if hyperparams is None
+            else hyperparams
+        )
 
         if optimizer is None:
             self.optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
@@ -74,14 +79,93 @@ class ANMPredictor(ICPredictor):
         )
         self.optimizer.zero_grad()
 
-    def _get_jacobian(self, x):
+    def _get_jacobian(self, x: NeuralBaseNet, dim_in: int = None, dim_out: int = None):
+        """
+        Computes the Jacobian matrix for a batch of input data x with respect to the network of the class.
+
+        Notes
+        -----
+        The output Jacobian for this method is potentially the transpose of the definition one might be familiar with.
+        That is, the output Jacobian J is of the form:
+
+        .. math:: J_{ij} = d_i f_j
+
+        or in matix form
+
+        .. math:: | d_1 f_1 \quad d_1 f_2 \quad \dots \quad d_1 f_m |
+        .. math:: | d_2 f_1 \quad d_2 f_2 \quad \dots \quad d_2 f_m |
+        .. math:: | ... \quad ... \quad ... \quad ... \quad ...  \quad ... \quad ... \quad ... \quad ... |
+        .. math:: | d_n f_1 \quad d_n f_2 \quad \dots \quad d_n f_m |
+
+
+        Parameters
+        ----------
+        x: Tensor,
+            the data tensor of appropriate shape for then network. Can also be supplied in batches.
+        dim_in: int,
+            the input dimension for data intended for the neural network.
+            If not provided by the user, will be inferred from the network.
+        dim_in: int,
+            the output dimension of the data returned by neural network.
+            If not provided by the user, will be inferred from the network.
+
+        Returns
+        -------
+        Jacobian: Tensor,
+            the jacobian matrix for every entry of data in the batch.
+        """
+        if dim_in is None:
+            dim_in = self.network.dim_in
+        if dim_out is None:
+            dim_out = self.network.dim_out
+
         x = x.squeeze()
-        n = x.size()[0]
-        x = x.repeat(noutputs, 1)
+        n = x.size(0)
+
+        # ``torch.autograd.grad`` only returns the product J @ v with J = Jacobian, v = gradient vector, so as to allow
+        # the user to provide external gradients.
+        # Therefore we need to build a matrix of basis vectors v_i = (0, ..., 0, 1, 0, ..., 0), with 1 being on the
+        # i-th position, in order to get each column of J (and with this every derivation of each input variable x_i
+        # and each output function f_j).
+        #
+        # The output of the ``autograd.grad`` method apparently returns a tensor of last shape (..., ``dim_out), which
+        # must mean, that the torch definition of J must be J_ij = d_i f_j, thus we need basis vectors of length
+        # ``dim_out`` to get the correct aforementioned matrix product.
+
+        # Unfortunately this also means that we will need to copy the input data ``dim_out`` times, in order to cover
+        # all derivatives. This could be memory costly, if the input is big and might need to be replaced by iterative
+        # calls to ``grad`` instead for such a case. However, if the data fits into memory, this should be the fastest
+        # way for computing the Jacobian.
+
+        x = x.repeat(dim_out, 1)
         x.requires_grad_(True)
-        y = self.network(x)
-        y.backward(torch.eye(self.network.dim_out))
-        return x.grad.data
+
+        z = self.network(x)
+
+        extraction_matrix = torch.zeros((dim_out * n, dim_out))
+
+        for j in range(dim_out):
+            jth_basis_vec = torch.zeros(dim_out)
+            jth_basis_vec[j] = 1
+            jth_basis_vec = jth_basis_vec.repeat(n, 1)
+            extraction_matrix[j * n : (j + 1) * n] = jth_basis_vec
+
+        z.backward(extraction_matrix)
+        grad_data = x.grad.data
+
+        # we now have the gradient data, but all the derivation vectors D f_j are spread out over ``dim_out`` many
+        # repetitive computations. Therefore we need to find all the deriv. vectors belonging to the same function f_j
+        # and put them into an output tensor of shape (batch_size, dim_in, dim_out). This will provide a Jacobian matrix
+        # for every batch data entry.
+        output = torch.zeros((n, dim_in, dim_out))
+        for batch_entry in range(n):
+            output[batch_entry] = torch.cat(
+                tuple(
+                    grad_data[batch_entry + j * n].view(-1, 1) for j in range(dim_out)
+                ),
+                1,
+            )
+        return output
 
     def _centering(self, K):
         n = K.shape[0]

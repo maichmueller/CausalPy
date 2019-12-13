@@ -1,4 +1,5 @@
 import torch
+from abc import abstractmethod
 
 
 class NeuralBaseNet(torch.nn.Module):
@@ -9,5 +10,19 @@ class NeuralBaseNet(torch.nn.Module):
         self.dim_out = dim_out
         super().__init__()
 
-    def forward(self, tensor_in):
-        return
+    @torch.no_grad()
+    def evaluate(self, data):
+        """
+        Function to evaluate the input in the neural net without accumulating gradients.
+
+        Parameters
+        ----------
+        data: Tensor,
+            the data to evaluate for the network
+
+        Returns
+        -------
+        Tensor,
+            the evaluated data.
+        """
+        return self(data)
