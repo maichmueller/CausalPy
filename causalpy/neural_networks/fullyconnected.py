@@ -1,10 +1,12 @@
 import torch
+from .basemodel import NeuralBaseNet
 
 
-class FCNet(torch.nn.Module):
+class FCNet(NeuralBaseNet):
     """ Standard feed forward neural network with fully connected layers and ReLUs"""
+
     def __init__(self, *layer_nodes):
-        super().__init__()
+        super().__init__(layer_nodes[0], layer_nodes[-1])
         self.net = torch.nn.Sequential()
 
         # Skip Layer -- just a linear mapping
@@ -18,7 +20,5 @@ class FCNet(torch.nn.Module):
 
         self.net.add_module("Linear Layer {}".format(i), torch.nn.Linear(layer_nodes[-2], layer_nodes[-1]))
 
-        print(self.net)
-
     def forward(self, x):
-        return self.net(x)  # + self.skip_layer(x)
+        return self.net(x)
