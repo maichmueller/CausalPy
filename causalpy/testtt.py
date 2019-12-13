@@ -26,19 +26,16 @@ if __name__ == "__main__":
         n = x.size(0)
         x = x.repeat(dim_out, 1)
         x.requires_grad_(True)
-        z = net(x)
+        z = y(x)
         extraction_matrix = torch.zeros((dim_out * n, dim_out))
         # extraction_matrix = torch.empty(2 * n, 2)
 
         for j in range(dim_out):
-            elemental_vec = torch.zeros(dim_out)
-            elemental_vec[j] = 1
-            elemental_vec = elemental_vec.repeat(n, 1)
-            extraction_matrix[j * n : (j + 1) * n] = elemental_vec
+            extraction_matrix[j * n : (j + 1) * n, j] = 1
 
         # z.backward(torch.eye(2).repeat(n, 1))
-        z.backward(extraction_matrix)
-        grad_data = x.grad.data
+        grad_data = torch.autograd.grad(z, x, grad_outputs= extraction_matrix, retain_graph=True, create_graph=True)[0]
+
         output = torch.zeros((n, dim_in, dim_out))
         # output = torch.zeros((n, 2, 2))
         # for var in range(network.dim_out):
@@ -93,28 +90,3 @@ if __name__ == "__main__":
         print(val)
         print(eval)
 
-
-    optimizer = torch.optim.Adam(fcc.parameters(), lr=1e-3)
-    fcc = fcc.to("cuda")
-    for epoch in tqdm(range(100)):
-        for d, t in train_loader:
-            d = d.to("cuda")
-            t = t.to("cuda")
-            loss = ((t - fcc(d)) ** 2).sum()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-    for val, eval in zip(x.repeat(2, 1), compute_jacobian(fcc, x, [x.size(0), fcc.dim_out])):
-        print(val)
-        print(eval)
-
-    fig = plt.figure()
-    ax = Axes3D(fig)
-
-    ax.plot_surface(
-        x.cpu().detach().numpy()[:, 0],
-        x.cpu().detach().numpy()[:, 1],
-        fcc(x).cpu().detach().numpy(),
-    )
-    plt.show()

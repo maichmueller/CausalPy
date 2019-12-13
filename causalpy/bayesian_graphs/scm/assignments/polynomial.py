@@ -2,7 +2,7 @@ from .assignments import Assignment
 
 import numpy as np
 from numpy.polynomial import polynomial
-from typing import List, Collection
+from typing import List, Collection, Union
 
 
 class PolynomialAssignment(Assignment):
@@ -12,7 +12,7 @@ class PolynomialAssignment(Assignment):
     .. math:: f(X_S, N) = c_{noise} * N + offset + \sum_{i \in S} {\sum^{p_i}}_{k = 0} c_{ik} * X_i^k
 
     """
-    def __init__(self, *coefficients_list: Collection[Collection[float]]):
+    def __init__(self, *coefficients_list: Collection[Union[int, float]]):
         polynomials = []
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:

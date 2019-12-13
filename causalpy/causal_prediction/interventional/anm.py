@@ -5,19 +5,19 @@ from typing import *
 
 from operator import mul
 from collections import defaultdict, namedtuple
-from functools import reduce
+from functools import reduce, partial
 
 import numpy as np
 import pandas as pd
 
 import torch
+from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
 import matplotlib.pyplot as plt
 
 from tqdm.auto import tqdm
-
 
 Hyperparams = namedtuple("Hyperparams", "alpha beta gamma")
 
@@ -28,12 +28,16 @@ class ANMPredictor(ICPredictor):
         network: torch.nn.Module,
         epochs: int = 100,
         batch_size: int = 1024,
+        loss_transform_res_to_par: str = "sum",
+        loss_transform_res_to_res: str = "sum",
+        compare_residuals_pairwise: bool = True,
         residual_equality_measure: Union[str, Callable] = "mmd",
-        variable_independence_measure: str = "hsic",
+        variable_independence_metric: str = "hsic",
         optimizer: Optional[Optimizer] = None,
         scheduler: Optional[_LRScheduler] = None,
         hyperparams: Optional[Hyperparams] = None,
         log_level: bool = True,
+        **kwargs,
     ):
         super().__init__(log_level=log_level)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -41,32 +45,64 @@ class ANMPredictor(ICPredictor):
         self.epochs = epochs
         self.network = network
         self.hyperparams = (
-            Hyperparams(alpha=1, beta=1, gamma=1e-2)
+            Hyperparams(alpha=1, beta=1, gamma=1)
             if hyperparams is None
             else hyperparams
         )
 
-        if optimizer is None:
-            self.optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
+        self.optimizer = (
+            torch.optim.Adam(network.parameters(), lr=1e-3)
+            if optimizer is None
+            else optimizer
+        )
 
         if scheduler is None:
             self.scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, step_size=50, gamma=0.9
+                self.optimizer, step_size=50, gamma=0.9
+            )
+
+        self.compute_jacobian_iteratively = False
+        self.compare_residuals_pairwise = compare_residuals_pairwise
+
+        if loss_transform_res_to_par == "sum":
+            self.loss_reduce_par = torch.sum
+        elif loss_transform_res_to_par == "max":
+            self.loss_reduce_par = torch.max
+        elif loss_transform_res_to_par == "alphamoment":
+            self.loss_reduce_par = partial(
+                self._alpha_moment, alpha=kwargs.pop("alpha", 1)
+            )
+        else:
+            raise ValueError(
+                f"Loss Transform function needs to be one of  ['sum', 'max', 'alphamoment']. Provided: '{loss_transform_res_to_par}'."
+            )
+
+        if loss_transform_res_to_res == "sum":
+            self.loss_reduce_res = torch.sum
+        elif loss_transform_res_to_res == "max":
+            self.loss_reduce_res = torch.max
+        elif loss_transform_res_to_res == "alphamoment":
+            self.loss_reduce_res = partial(
+                self._alpha_moment, alpha=kwargs.pop("alpha", 1)
+            )
+        else:
+            raise ValueError(
+                f"Loss Transform function needs to be one of  ['sum', 'max', 'alphamoment']. Provided: '{loss_transform_res_to_res}'."
             )
 
         if residual_equality_measure == "mmd":
-            self.residuals_comparison = self.mmd_multiscale
+            self.identical_distribution_metric = self.mmd_multiscale
         elif residual_equality_measure == "moments":
-            self.residuals_comparison = self.moments
+            self.identical_distribution_metric = self.moments
         elif isinstance(residual_equality_measure, Callable):
-            self.residuals_comparison = residual_equality_measure
+            self.identical_distribution_metric = residual_equality_measure
         else:
             raise ValueError(
                 f"Dependency measure '{residual_equality_measure}' not supported."
             )
 
-        if variable_independence_measure == "hsic":
-            self.variable_independence_measure = self._hilbert_schmidt_independence
+        if variable_independence_metric == "hsic":
+            self.variable_independence_metric = self._hilbert_schmidt_independence
 
     def set_network(self, network: torch.nn.Module):
         self.network = network
@@ -74,13 +110,11 @@ class ANMPredictor(ICPredictor):
 
     def reset_optimizer(self):
         self.optimizer.param_groups = []
-        self.optimizer.add_param_group(
-            {name: params for name, params in self.network.parameters()}
-        )
+        self.optimizer.add_param_group({"params": list(self.network.parameters())})
         self.optimizer.zero_grad()
 
-    def _get_jacobian(self, x: NeuralBaseNet, dim_in: int = None, dim_out: int = None):
-        """
+    def _get_jacobian(self, x: Tensor, dim_in: int = None, dim_out: int = None):
+        r"""
         Computes the Jacobian matrix for a batch of input data x with respect to the network of the class.
 
         Notes
@@ -90,7 +124,7 @@ class ANMPredictor(ICPredictor):
 
         .. math:: J_{ij} = d_i f_j
 
-        or in matix form
+        or in matrix form:
 
         .. math:: | d_1 f_1 \quad d_1 f_2 \quad \dots \quad d_1 f_m |
         .. math:: | d_2 f_1 \quad d_2 f_2 \quad \dots \quad d_2 f_m |
@@ -114,58 +148,80 @@ class ANMPredictor(ICPredictor):
         Jacobian: Tensor,
             the jacobian matrix for every entry of data in the batch.
         """
-        if dim_in is None:
-            dim_in = self.network.dim_in
-        if dim_out is None:
-            dim_out = self.network.dim_out
+        if not self.compute_jacobian_iteratively:
+            if dim_in is None:
+                dim_in = self.network.dim_in
+            if dim_out is None:
+                dim_out = self.network.dim_out
 
-        x = x.squeeze()
-        n = x.size(0)
+            x = x.squeeze()
+            n = x.size(0)
 
-        # ``torch.autograd.grad`` only returns the product J @ v with J = Jacobian, v = gradient vector, so as to allow
-        # the user to provide external gradients.
-        # Therefore we need to build a matrix of basis vectors v_i = (0, ..., 0, 1, 0, ..., 0), with 1 being on the
-        # i-th position, in order to get each column of J (and with this every derivation of each input variable x_i
-        # and each output function f_j).
-        #
-        # The output of the ``autograd.grad`` method apparently returns a tensor of last shape (..., ``dim_out), which
-        # must mean, that the torch definition of J must be J_ij = d_i f_j, thus we need basis vectors of length
-        # ``dim_out`` to get the correct aforementioned matrix product.
+            # ``torch.autograd.grad`` only returns the product J @ v with J = Jacobian, v = gradient vector, so as to
+            # allow the user to provide external gradients.
+            # Therefore we need to build a matrix of basis vectors v_i = (0, ..., 0, 1, 0, ..., 0), with 1 being on the
+            # i-th position, in order to get each column of J (and with this every derivation of each input variable x_i
+            # and each output function f_j).
+            #
+            # The output of the ``autograd.grad`` method apparently returns a tensor of shape (..., ``dim_out), which
+            # must mean, that the torch definition of J must be J_ij = d_i f_j, thus we need basis vectors of length
+            # ``dim_out`` to get the correct aforementioned matrix product.
 
-        # Unfortunately this also means that we will need to copy the input data ``dim_out`` times, in order to cover
-        # all derivatives. This could be memory costly, if the input is big and might need to be replaced by iterative
-        # calls to ``grad`` instead for such a case. However, if the data fits into memory, this should be the fastest
-        # way for computing the Jacobian.
+            # Unfortunately this also means that we will need to copy the input data ``dim_out`` times, in order to
+            # cover all derivatives. This could be memory costly, if the input is big and might is replaced by iterative
+            # calls to ``grad`` instead in case the memory allocation fails. However, if the data fits into memory, this
+            # should be the faster than an iterative python call to ``autograd.grad``.
+            try:
+                x = x.repeat(dim_out, 1)
+                x.requires_grad_(True)
 
-        x = x.repeat(dim_out, 1)
-        x.requires_grad_(True)
+                z = self.network(x)
 
-        z = self.network(x)
+                unit_vec_matrix = torch.zeros(
+                    (dim_out * n, dim_out), device=self.device
+                )
 
-        extraction_matrix = torch.zeros((dim_out * n, dim_out))
+                for j in range(dim_out):
+                    unit_vec_matrix[j * n : (j + 1) * n, j] = 1
 
-        for j in range(dim_out):
-            jth_basis_vec = torch.zeros(dim_out)
-            jth_basis_vec[j] = 1
-            jth_basis_vec = jth_basis_vec.repeat(n, 1)
-            extraction_matrix[j * n : (j + 1) * n] = jth_basis_vec
+                grad_data = torch.autograd.grad(
+                    z,
+                    x,
+                    grad_outputs=unit_vec_matrix,
+                    retain_graph=True,
+                    create_graph=True,
+                )[0]
 
-        z.backward(extraction_matrix)
-        grad_data = x.grad.data
+                # we now have the gradient data, but all the derivation vectors D f_j are spread out over ``dim_out``
+                # many repetitive computations. Therefore we need to find all the deriv. vectors belonging to the same
+                # function f_j and put them into the jacobian batch tensor of shape (batch_size, dim_in, dim_out).
+                # This will provide a Jacobian matrix for every batch data entry.
+                jacobian = torch.zeros((n, dim_in, dim_out))
+                for batch_entry in range(n):
+                    jacobian[batch_entry] = torch.cat(
+                        tuple(
+                            grad_data[batch_entry + j * n].view(-1, 1)
+                            for j in range(dim_out)
+                        ),
+                        1,
+                    )
+                return jacobian
 
-        # we now have the gradient data, but all the derivation vectors D f_j are spread out over ``dim_out`` many
-        # repetitive computations. Therefore we need to find all the deriv. vectors belonging to the same function f_j
-        # and put them into an output tensor of shape (batch_size, dim_in, dim_out). This will provide a Jacobian matrix
-        # for every batch data entry.
-        output = torch.zeros((n, dim_in, dim_out))
-        for batch_entry in range(n):
-            output[batch_entry] = torch.cat(
-                tuple(
-                    grad_data[batch_entry + j * n].view(-1, 1) for j in range(dim_out)
-                ),
-                1,
-            )
-        return output
+            except MemoryError:
+                self.compute_jacobian_iteratively = True
+                return self._get_jacobian(x=x, dim_in=dim_in, dim_out=dim_out)
+
+        else:
+            y = self.network(x)
+            unit_vectors = torch.eye(dim_out)
+            result = [
+                torch.autograd.grad(
+                    outputs=[y], inputs=[x], grad_outputs=[unit_vec], retain_graph=True
+                )[0]
+                for unit_vec in unit_vectors
+            ]
+            jacobian = torch.stack(result, dim=0)
+            return jacobian
 
     def _centering(self, K):
         n = K.shape[0]
@@ -176,6 +232,10 @@ class ANMPredictor(ICPredictor):
 
     @staticmethod
     def rbf(X, Y, sigma=None):
+        if X.dim() == 1:
+            X.unsqueeze_(1)
+        if Y.dim() == 1:
+            Y.unsqueeze_(1)
         GX = torch.mm(X, Y.t())
         KX = torch.diagonal(GX) - GX + (torch.diagonal(GX) - GX).t()
 
@@ -253,6 +313,15 @@ class ANMPredictor(ICPredictor):
             return (a1 + a2) / 2
 
     @staticmethod
+    def max_loss(residuals, environments):
+        return
+
+    @staticmethod
+    def _alpha_moment(data: Tensor, alpha: float):
+        assert alpha > 0, f"Alpha needs to be > 0. Provided: alpha={alpha}."
+        return torch.pow(torch.pow(data, alpha).mean(dim=0), 1 / alpha)
+
+    @staticmethod
     def _null_data_hook(*args, **kwargs):
         """
         A null method to allow for data extraction during the training process.
@@ -260,7 +329,7 @@ class ANMPredictor(ICPredictor):
         pass
 
     def infer(self, obs, target_variable, envs, *args, **kwargs):
-
+        self.network.to(self.device)
         data_hook = kwargs.pop("data_hook", self._null_data_hook)
 
         residual_ground_truth = kwargs.pop("ground_truth", None)
@@ -272,7 +341,8 @@ class ANMPredictor(ICPredictor):
             losses = defaultdict(list)
 
         obs, target, environments = self.preprocess_input(obs, target_variable, envs)
-
+        obs = torch.as_tensor(obs.astype(np.float32)).to(self.device)
+        target = torch.as_tensor(target.astype(np.float32)).to(self.device)
         torch.autograd.set_detect_anomaly(True)
         self.reset_optimizer()
 
@@ -290,37 +360,48 @@ class ANMPredictor(ICPredictor):
                 loss_regression = (residual ** 2).mean()
 
             # Compute Expectation of absolute values of the partial derivatives
-            jacobians = dict()
-            for env, env_ind in environments.items():
-                jacobians[env] = self._get_jacobian(obs[env_ind])[0].abs().mean(0)
+            # Expectation is estimated via the mean of each entry in the jacobian (i.e. gradient in this case, as f is
+            # 1-dimensional in its output).
+            gradient_abs_expectation = (
+                self._get_jacobian(obs, dim_out=1).abs().mean(dim=0)
+            )
 
             # Loss that computes the dependence of parent variables and residuals per context
-            # Loss is weighted by Expectation of absolute values of the partial derivatives
-            loss_ind_par = sum(
-                jacobian
-                * sum(
-                    self.variable_independence_measure(
-                        residuals[env], obs[env_ind, var]
+            # loss is weighted by expectation of absolute values of the partial derivatives
+            loss_ind_parents = sum(
+                grad
+                * self.loss_reduce_par(
+                    torch.as_tensor(
+                        list(
+                            self.variable_independence_metric(
+                                residuals[env], obs[env_ind, var]
+                            )
+                            for env, env_ind in environments.items()
+                        )
                     )
-                    for env, env_ind in environments.items()
                 )
-                for var, jacobian in jacobians.items()
+                for var, grad in zip(range(self.p), gradient_abs_expectation)
             )
 
             # Measure for the dependence of Residuals and Context
             # Formulated differently: Measure for how close the residuals are distributed across different contexts.
-            # Note that we compare only residual_i to residual_{i+1}, which greatly reduces the computational amount.
-            loss_identical_res = sum(
-                self.residuals_comparison(residuals[i], residuals[i + 1])
-                for i in range(len(residuals) - 1)
+            if self.compare_residuals_pairwise:
+                residuals_compared = list(
+                    self.identical_distribution_metric(residuals[i], residuals[i + 1])
+                    for i in range(len(residuals) - 1)
+                )
+            else:
+                residuals_compared = list(
+                    self.identical_distribution_metric(residuals[i], residuals[j])
+                    for i, j in zip(range(len(residuals)), range(len(residuals)))
+                    if i != j
+                )
+            loss_identical_res = self.loss_reduce_res(
+                torch.as_tensor(residuals_compared)
             )
 
             # Overall Loss
-            loss = (
-                loss_identical_res
-                + self.hyperparams.gamma * loss_ind_par
-                # + residuals[0].mean().abs()
-            )
+            loss = loss_identical_res + self.hyperparams.gamma * loss_ind_parents
 
             loss.backward()
             self.optimizer.step()
@@ -333,26 +414,28 @@ class ANMPredictor(ICPredictor):
                 environments,
                 loss,
                 loss_identical_res,
-                loss_ind_par,
-                jacobians,
+                loss_ind_parents,
+                gradient_abs_expectation,
             )
+
+            if (epoch + 1) % 10 == 0:
+                self.logger.info(str(losses))
 
             if visualize:
                 losses["residual"].append(loss_identical_res.item())
                 losses["regression"].append(loss_regression.item())
                 losses["total"].append(loss.item())
 
-            if residual_ground_truth is not None:
-                # Regression loss if the true causal model is used
-                losses["regression_truth"].append(
-                    sum(
-                        (residual_ground_truth[env_ind] ** 2).mean()
-                        for env_ind in environments.values()
+                if residual_ground_truth is not None:
+                    # Regression loss if the true causal model is used
+                    losses["regression_truth"].append(
+                        sum(
+                            (residual_ground_truth[env_ind] ** 2).mean()
+                            for env_ind in environments.values()
+                        )
                     )
-                )
-            if (epoch + 1) % 10 == 0:
-                self.logger.info(str(losses))
-            self.visualize_training(losses)
+
+                self.visualize_training(losses)
 
     @staticmethod
     def visualize_training(losses):
