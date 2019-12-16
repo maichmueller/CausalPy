@@ -236,22 +236,21 @@ class ANMPredictor(ICPredictor):
             X.unsqueeze_(1)
         if Y.dim() == 1:
             Y.unsqueeze_(1)
+
         GX = torch.mm(X, Y.t())
-        KX = torch.diagonal(GX) - GX + (torch.diagonal(GX) - GX).t()
+        diag = torch.diagonal(GX) - GX
+        KX = diag + diag.t()
 
         if sigma is None:
-            try:
-                mdist = torch.median(KX[KX != 0])
-                sigma = torch.sqrt(mdist)
-            except:
-                sigma = 1.2
-        KX *= -0.5 / sigma / sigma
-        KX = torch.exp(KX)
-        return KX
+            mdist = torch.median(KX[KX != 0])
+            sigma = torch.sqrt(mdist)
+
+        return torch.exp(KX * (-0.5 / (sigma ** 2)))
 
     def _hilbert_schmidt_independence(self, X, Y):
         """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
-
+        if torch.sum(X - torch.flatten(X)[0]) == 0:
+            kernel =
         out = (
             torch.sum(
                 reduce(
@@ -265,6 +264,25 @@ class ANMPredictor(ICPredictor):
             / self.batch_size
         )
         return out
+
+    def discrete_kernel(self, data_in: Tensor):
+        tmp = 0
+        kernel = torch.zeros_like(data_in)
+        for (int i = 0; i < n; ++i){
+            int j = i;
+        while (j < n){
+        for (int l = 0; l < d; ++l){
+        tmp += (x(i, l) == x(j, l));
+        }
+        K(i, j) = double(tmp == d);
+        K(j, i) = K(i, j);
+        tmp = 0;
+        ++j;
+        }
+        }
+        return K;
+
+    }
 
     @staticmethod
     def normalize_jointly(x, y):
@@ -291,9 +309,9 @@ class ANMPredictor(ICPredictor):
         dxy = rx.t() + ry - 2.0 * zz
 
         XX, YY, XY = (
-            torch.zeros(xx.shape, device=self.device),
-            torch.zeros(xx.shape, device=self.device),
-            torch.zeros(xx.shape, device=self.device),
+            torch.zeros_like(xx),
+            torch.zeros_like(xx),
+            torch.zeros_like(xx),
         )
 
         for a in [6e-2, 1e-1, 3e-1, 5e-1, 7e-1, 1, 1.2, 1.5, 1.8, 2, 2.5]:

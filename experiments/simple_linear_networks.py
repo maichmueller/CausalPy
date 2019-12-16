@@ -1,4 +1,4 @@
-from causalpy import LiNGAMPredictor
+from causalpy.causal_prediction.interventional import LinPredictor
 from experiments.experiment_helpers import *
 import numpy as np
 import pandas as pd
@@ -46,7 +46,7 @@ if __name__ == "__main__":
             obs = pd.concat(obs, axis=0).reset_index(drop=True)
             envs = np.array(envs)
 
-            linicp = LiNGAMPredictor(
+            linicp = LinPredictor(
                 alpha=0.05, filter_variables=False, log_level="INFO", residual_test="normal"
             )
 
