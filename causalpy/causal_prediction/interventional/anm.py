@@ -14,6 +14,7 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import DataLoader, TensorDataset
 
 import matplotlib.pyplot as plt
 
@@ -73,8 +74,9 @@ class ANMPredictor(ICPredictor):
                 self._alpha_moment, alpha=kwargs.pop("alpha", 1)
             )
         else:
+            args = ['sum', 'max', 'alphamoment']
             raise ValueError(
-                f"Loss Transform function needs to be one of  ['sum', 'max', 'alphamoment']. Provided: '{loss_transform_res_to_par}'."
+                f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_par}'."
             )
 
         if loss_transform_res_to_res == "sum":
@@ -86,10 +88,12 @@ class ANMPredictor(ICPredictor):
                 self._alpha_moment, alpha=kwargs.pop("alpha", 1)
             )
         else:
+            args = ['sum', 'max', 'alphamoment']
             raise ValueError(
-                f"Loss Transform function needs to be one of  ['sum', 'max', 'alphamoment']. Provided: '{loss_transform_res_to_res}'."
+                f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_res}'."
             )
 
+        self.residual_equality_measure_str = residual_equality_measure
         if residual_equality_measure == "mmd":
             self.identical_distribution_metric = self.mmd_multiscale
         elif residual_equality_measure == "moments":
@@ -101,8 +105,9 @@ class ANMPredictor(ICPredictor):
                 f"Dependency measure '{residual_equality_measure}' not supported."
             )
 
+        self.variable_independence_metric_str = variable_independence_metric
         if variable_independence_metric == "hsic":
-            self.variable_independence_metric = self._hilbert_schmidt_independence
+            self.variable_independence_metric = self.hsic
 
     def set_network(self, network: torch.nn.Module):
         self.network = network
@@ -223,81 +228,71 @@ class ANMPredictor(ICPredictor):
             jacobian = torch.stack(result, dim=0)
             return jacobian
 
-    def _centering(self, K):
+    @staticmethod
+    def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
+
+        # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
+        # the numpy code looks like the following:
+        #   XY = X @ Y.transpose()
+        #   XX_d = np.ones(XY.shape) * np.diag(X @ X.transpose())[:, np.newaxis]  # row wise mult of diagonal with mat
+        #   YY_d = np.ones(XY.shape) * np.diag(Y @ Y.transpose())[np.newaxis, :]  # col wise mult of diagonal with mat
+        #   pairwise_norm = XX_d + YY_d - 2 * XY
+        if Y is not None:
+            if X.dim() == 1:
+                X.unsqueeze_(1)
+            if Y.dim() == 1:
+                Y.unsqueeze_(1)
+            # adapted for torch:
+            XY = X @ Y.t()
+            XY_ones = torch.ones_like(XY)
+            XX_d = XY_ones * torch.diagonal(X @ X.t()).unsqueeze(1)
+            YY_d = XY_ones * torch.diagonal(Y @ Y.t()).unsqueeze(0)
+            pairwise_norm = XX_d + YY_d - 2 * XY
+        else:
+            if X.dim() == 1:
+                X.unsqueeze_(1)
+            # one can save some time by not recomputing the same values in some steps
+            XX = X @ X.t()
+            XX_ones = torch.ones_like(XX)
+            XX_diagonal = torch.diagonal(XX)
+            XX_row_diag = XX_ones * XX_diagonal.unsqueeze(1)
+            XX_col_diag = XX_ones * XX_diagonal.unsqueeze(0)
+            pairwise_norm = XX_row_diag + XX_col_diag - 2 * XX
+
+        if sigma is None:
+            try:
+                mdist = torch.median(pairwise_norm[pairwise_norm != 0])
+                sigma = torch.sqrt(mdist)
+            except RuntimeError:
+                sigma = 1.0
+
+        gaussian_rbf = torch.exp(pairwise_norm * (-0.5 / (sigma ** 2)))
+        return gaussian_rbf
+
+    def centering(self, K: Tensor):
         n = K.shape[0]
         unit = torch.ones(n, n).to(self.device)
         I = torch.eye(n, device=self.device)
         Q = I - unit / n
         return torch.mm(torch.mm(Q, K), Q)
 
-    @staticmethod
-    def rbf(X, Y, sigma=None):
-        if X.dim() == 1:
-            X.unsqueeze_(1)
-        if Y.dim() == 1:
-            Y.unsqueeze_(1)
-
-        GX = torch.mm(X, Y.t())
-        diag = torch.diagonal(GX) - GX
-        KX = diag + diag.t()
-
-        if sigma is None:
-            mdist = torch.median(KX[KX != 0])
-            sigma = torch.sqrt(mdist)
-
-        return torch.exp(KX * (-0.5 / (sigma ** 2)))
-
-    def _hilbert_schmidt_independence(self, X, Y):
+    def hsic(self, X, Y):
         """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
-        if torch.sum(X - torch.flatten(X)[0]) == 0:
-            kernel =
         out = (
-            torch.sum(
-                reduce(
-                    mul,
-                    map(
-                        self._centering,
-                        (ANMPredictor.rbf(X, X), ANMPredictor.rbf(Y, Y)),
-                    ),
-                )
-            )
+            torch.sum(self.centering(self.rbf(X, X)) * self.centering(self.rbf(Y, Y)))
             / self.batch_size
         )
         return out
 
-    def discrete_kernel(self, data_in: Tensor):
-        tmp = 0
-        kernel = torch.zeros_like(data_in)
-        for (int i = 0; i < n; ++i){
-            int j = i;
-        while (j < n){
-        for (int l = 0; l < d; ++l){
-        tmp += (x(i, l) == x(j, l));
-        }
-        K(i, j) = double(tmp == d);
-        K(j, i) = K(i, j);
-        tmp = 0;
-        ++j;
-        }
-        }
-        return K;
-
-    }
-
-    @staticmethod
-    def normalize_jointly(x, y):
-        """ Normalize x and y separately with the mean and sd computed from both x and y"""
-        xy = torch.cat((x, y), 0).detach()
-        sd = torch.sqrt(xy.var(0))
-        mean = xy.mean(0)
-        x = (x - mean) / sd
-        y = (y - mean) / sd
-        return x, y
-
     def mmd_multiscale(self, x, y, normalize_j=True):
         """ MMD with rationale kernel"""
         # Normalize Inputs Jointly
-        x, y = self.normalize_jointly(x, y)
+        if normalize_j:
+            xy = torch.cat((x, y), 0).detach()
+            sd = torch.sqrt(xy.var(0))
+            mean = xy.mean(0)
+            x = (x - mean) / sd
+            y = (y - mean) / sd
 
         xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
 
@@ -331,10 +326,6 @@ class ANMPredictor(ICPredictor):
             return (a1 + a2) / 2
 
     @staticmethod
-    def max_loss(residuals, environments):
-        return
-
-    @staticmethod
     def _alpha_moment(data: Tensor, alpha: float):
         assert alpha > 0, f"Alpha needs to be > 0. Provided: alpha={alpha}."
         return torch.pow(torch.pow(data, alpha).mean(dim=0), 1 / alpha)
@@ -355,22 +346,26 @@ class ANMPredictor(ICPredictor):
             residual_ground_truth = np.array(residual_ground_truth)
 
         visualize = any(kwargs.pop(kwarg, False) for kwarg in ("plot", "visualize"))
-        if visualize:
-            losses = defaultdict(list)
+        losses = defaultdict(list)
 
         obs, target, environments = self.preprocess_input(obs, target_variable, envs)
         obs = torch.as_tensor(obs.astype(np.float32)).to(self.device)
         target = torch.as_tensor(target.astype(np.float32)).to(self.device)
+        envs = torch.as_tensor(envs)
         torch.autograd.set_detect_anomaly(True)
         self.reset_optimizer()
+
+        tensor_dataset = TensorDataset(obs, target, envs)
+        dataloader = DataLoader(tensor_dataset, pin_memory=True)
 
         pbar = tqdm(range(self.epochs), desc="Training Additive Noise Model Network")
 
         for epoch in pbar:
+
             # Compute Residuals for different contexts
             residuals = dict()
             for env, env_ind in environments.items():
-                residuals[env] = target[env_ind] - self.network(obs[env_ind])
+                residuals[env] = target[env_ind].view(-1, 1) - self.network(obs[env_ind])
 
             # Regression Loss
             loss_regression = 0
@@ -386,6 +381,12 @@ class ANMPredictor(ICPredictor):
 
             # Loss that computes the dependence of parent variables and residuals per context
             # loss is weighted by expectation of absolute values of the partial derivatives
+
+            # Computing the sigma for when HSIC is being used, as do-interventional data (i.e. a constant value for a
+            # whole environment for a variable) breaks the rbf methods computation.
+            # if self.variable_independence_metric_str == "hsic":
+            #     sigma = {var: self.rbf(obs[:, var], obs[:, var]) for var in range(self.p)}
+
             loss_ind_parents = sum(
                 grad
                 * self.loss_reduce_par(
@@ -436,9 +437,6 @@ class ANMPredictor(ICPredictor):
                 gradient_abs_expectation,
             )
 
-            if (epoch + 1) % 10 == 0:
-                self.logger.info(str(losses))
-
             if visualize:
                 losses["residual"].append(loss_identical_res.item())
                 losses["regression"].append(loss_regression.item())
@@ -453,6 +451,8 @@ class ANMPredictor(ICPredictor):
                         )
                     )
 
+                if (epoch + 1) % 10 == 0:
+                    self.logger.info(str(losses))
                 self.visualize_training(losses)
 
     @staticmethod
