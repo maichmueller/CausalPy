@@ -88,7 +88,7 @@ def simulate(
         offset = 0
         noise_coeff = 1
         coeffs = []
-        activation_factor = rs.integers(1, 10)
+        activation_factor = rs.integers(1, 1000)
         for this_level in range(gene_level - 1, -1, -1):
             if this_level in levels_to_genes:
                 parent_pool = levels_to_genes[this_level]
@@ -100,7 +100,7 @@ def simulate(
                 signs = alternating_signs(nr_coeffs)
                 coeffs.append(
                     rs.random(nr_coeffs)
-                    * rs.choice([.5, .25, 1], p=[0.8, 0.1, 0.1])
+                    * rs.choice([1, 0.5, 2], p=[0.8, 0.1, 0.1])
                     * signs
                 )
 
@@ -110,15 +110,14 @@ def simulate(
         assignment_dict[gene] = [
             reduce(lambda x, y: x + y.tolist(), parents.values(), []),
             LinkerAssignment(
-                Scale(activation_factor),
-                LinkerAssignment(
-                    sigmoid, LinearAssignment(noise_coeff, offset, *coeffs)
-                ),
+                scaler(sigmoid, np.sqrt(activation_factor), activation_factor),
+                LinearAssignment(noise_coeff, offset, *coeffs),
             ),
             NoiseGenerator(
-                "normal",
-                scale=rs.random() * (nr_dep_levels ),
-                source="numpy",
+                "skewnorm",
+                scale=rs.random() * (nr_dep_levels - gene_level),
+                a=0.4,
+                source="scipy",
             ),
         ]
 
@@ -137,7 +136,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
         rs = np.random.RandomState()
         sample = scm_net.sample(10000)
         sample = pd.DataFrame(
-            rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
+            rs.poisson(np.log(1 + np.exp(sample.values.astype(np.float128)))), columns=sample.columns
         )
 
     sample[genes].hist(bins=bins, figsize=figsize)
@@ -148,7 +147,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
     mean = sample.mean(axis=0)
     var = sample.var(axis=0)
-    plt.scatter(mean, var, color="black")
+    plt.scatter(mean, var, color="black", alpha=0.2)
     plt.xlabel("Mean $\mu$")
     plt.ylabel("Variance")
     popt, _ = curve_fit(quadr_poly, mean, var)

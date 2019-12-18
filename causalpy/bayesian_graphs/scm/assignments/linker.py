@@ -1,3 +1,5 @@
+import functools
+
 from .assignments import Assignment, Assignment
 
 from scipy.special import expit
@@ -26,18 +28,15 @@ class LinkerAssignment(Assignment):
         return f"{linker_name}({self.assign_func.function_str(variable_names)})"
 
 
+def scaler(func, x=1, y=1):
+    def scaled(data_in, **kwargs):
+        return y * func(data_in / x, **kwargs)
+    return scaled
+
+
 def sigmoid(x, *args, **kwargs):
     return expit(x, *args, **kwargs)
 
 
 def identity(x):
     return x
-
-
-class Scale:
-    def __init__(self, scale):
-        self.scale = np.array([scale])
-
-    def __call__(self, *args, **kwargs):
-        return self.scale @ args
-

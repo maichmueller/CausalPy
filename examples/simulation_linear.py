@@ -144,7 +144,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
     mean = sample.mean(axis=0)
     var = sample.var(axis=0)
-    plt.scatter(mean, var, color="black")
+    plt.scatter(mean, var, color="black", alpha=0.5)
     plt.xlabel("Mean $\mu$")
     plt.ylabel("Variance")
     popt, _ = curve_fit(quadr_poly, mean, var)
@@ -163,7 +163,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
 
 if __name__ == "__main__":
-    nr_genes = 10
+    nr_genes = 15000
     causal_net = simulate(nr_genes, 2, seed=0)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)

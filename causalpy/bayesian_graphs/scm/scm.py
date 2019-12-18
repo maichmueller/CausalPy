@@ -32,7 +32,7 @@ class SCM:
     soft-interventions, as well as more general interventions targeting one or more variables with arbitrary
     changes to the assignment and noise structure (including parent-child relationship changes).
 
-    For visualization aid, the SCM can plot itself and/or print a summary of itself to the console.
+    For visualization aid, the SCM can plot itself and also print a summary of itself to the console.
     To this end, the decision was made to limit the potential input to the SCM objects in terms of
     assignment and noise functors.
     If a user wishes to add a custom assignment or noise function to their usage of the SCM, they will need
@@ -54,7 +54,7 @@ class SCM:
         """
         Construct the SCM from an assignment map. The simplest way to construct the bayesian_graphs is to fully provide
         all parental information in a dict form.
-        In short, the first tuple input are the parent names in a Collection, the second the assignment function, and
+        In short, the first tuple input is the parent names in a Collection, the second is the assignment function, and
         as third input the Noise function.
 
         Notes
