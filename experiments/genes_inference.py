@@ -1,4 +1,4 @@
-from examples.simulation import *
+from examples.simulation_linear import *
 from experiments.experiment_helpers import *
 from causalpy import LiNGAMPredictor
 from statsmodels.api import families
