@@ -133,6 +133,10 @@ class NoiseGenerator(Noise):
                     f"No distribution found in source scipy for "
                     f"distribution={distribution_str}."
                 )
+        else:
+            raise ValueError(
+                f"Source '{source}' unknown/not supported yet."
+            )
 
     @_apply_dist_params
     def __call__(self, size=1, **kwargs):

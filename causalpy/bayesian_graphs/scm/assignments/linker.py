@@ -1,5 +1,3 @@
-import functools
-
 from .assignments import Assignment, Assignment
 
 from scipy.special import expit
@@ -31,11 +29,16 @@ class LinkerAssignment(Assignment):
 def scaler(func, x=1, y=1):
     def scaled(data_in, **kwargs):
         return y * func(data_in / x, **kwargs)
+
     return scaled
 
 
 def sigmoid(x, *args, **kwargs):
     return expit(x, *args, **kwargs)
+
+
+def tanh(x, *args, **kwargs):
+    return (x / (1 + np.abs(x)) + 1) / 2
 
 
 def identity(x):

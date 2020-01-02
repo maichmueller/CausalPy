@@ -139,34 +139,81 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
     sample[genes].hist(bins=bins, figsize=figsize)
     plt.show()
 
-    def quadr_poly(mu, phi):
+    def neg_binomial(mu, phi):
         return phi * np.power(mu, 2) + mu
+
+    def zinb(mu, pi, alpha):
+        return (1-pi) * mu * (mu + (pi + alpha) * mu)
 
     mean = sample.mean(axis=0)
     var = sample.var(axis=0)
-    plt.scatter(mean, var, color="black", alpha=0.5)
-    plt.xlabel("Mean $\mu$")
-    plt.ylabel("Variance")
-    popt, _ = curve_fit(quadr_poly, mean, var)
+    # fig, ax = plt.subplots(2, 1, sharex=True, sharey=True, figsize=(10, 10))
+    #
+    # ax[0].scatter(mean, var, color="black", alpha=0.5)
+    # popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()
+    # mean_sorted = np.sort(mean)
+    # ax[0].plot(
+    #     mean_sorted,
+    #     neg_binomial(mean_sorted, *popt_nb),
+    #     color="red",
+    #     label=f"Var$(\mu, \phi) = \mu + \phi \mu^2$ with $\phi = {popt_nb.round(5)[0]}$",
+    # )
+    # ax[0].legend(fancybox=True, shadow=True)
+    # ax[0].loglog()
+    #
+    # ax[1].scatter(mean, var, color="black", alpha=0.5)
+    # ax[1].set_xlabel("Mean $\mu$")
+    # ax[1].set_ylabel("Variance")
+    # popt_zinb = curve_fit(zinb, mean, var)[0].flatten()
+    # mean_sorted = np.sort(mean)
+    # ax[1].plot(
+    #     mean_sorted,
+    #     zinb(mean_sorted, *popt_zinb),
+    #     color="red",
+    #     label=r"Var$(\mu, \pi, \alpha) = (1 + \pi)\mu (\mu + (\pi + \alpha) \mu)$ with $\pi = {}, \alpha = {}$".format(popt_zinb.round(5)[0], popt_zinb.round(5)[1]),
+    # )
+    # ax[1].legend(fancybox=True, shadow=True)
+    # ax[1].loglog()
+    # plt.xlabel("Mean $\mu$")
+    # plt.ylabel("Variance")
+    # fig.suptitle("Mean-Variance-Relationship")
+    # plt.show()
+
+    fig = plt.figure(figsize=(10, 8))
+
+    plt.scatter(mean, var, color="black", alpha=0.1)
+    popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()
     mean_sorted = np.sort(mean)
     plt.plot(
         mean_sorted,
-        quadr_poly(mean_sorted, *popt),
+        neg_binomial(mean_sorted, *popt_nb),
         color="red",
-        label=f"Var$(\mu, \phi) = \mu + \phi \mu^2$ with $\phi = {popt.round(5)[0]}$",
+        label=f"NB~~: Var$(\mu, \phi) = \mu + \phi \mu^2$ \quad [$\phi = {popt_nb.round(3)[0]}$]",
     )
-    plt.legend()
+
+    popt_zinb = curve_fit(zinb, mean, var)[0].flatten()
+    mean_sorted = np.sort(mean)
+    plt.plot(
+        mean_sorted,
+        zinb(mean_sorted, *popt_zinb),
+        color="green",
+        label=r"ZINB: Var$(\mu, \pi, \alpha) = (1 - \pi)\mu (\mu + (\pi + \alpha) \mu)$ \quad [$\pi = {}, \alpha = {}$]".format(popt_zinb.round(3)[0], popt_zinb.round(3)[1]),
+    )
+    plt.legend(fancybox=True, shadow=True)
     plt.loglog()
+    plt.xlabel("Mean $\mu$")
+    plt.ylabel("Variance")
     plt.title("Mean-Variance-Relationship")
     plt.show()
     return sample
 
 
 if __name__ == "__main__":
-    nr_genes = 15000
-    causal_net = simulate(nr_genes, 2, seed=0)
+    nr_genes = 10000
+    causal_net = simulate(nr_genes, 2, seed=1)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
+    # plt.show()
     sample = analyze_distributions(scm_net=causal_net)
     sample_var = sample.var().sort_values()
     sample.to_csv(f"sc_data_{nr_genes}.csv", index=False)
