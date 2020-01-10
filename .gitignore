@@ -5,3 +5,6 @@
 .mypy_cache/*
 
 **/*.json
+
+.eggs
+**/*.egg-info
