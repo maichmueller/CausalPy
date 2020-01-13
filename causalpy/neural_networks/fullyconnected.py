@@ -1,3 +1,5 @@
+from typing import Iterable, Union
+
 import torch
 import numpy as np
 from .basemodel import NeuralBaseNet
@@ -19,56 +21,74 @@ class FCNet(NeuralBaseNet):
             self.net.add_module("ReLU Layer {}".format(i), torch.nn.ReLU())
             i += 1
 
-        self.net.add_module("Linear Layer {}".format(i), torch.nn.Linear(layer_nodes[-2], layer_nodes[-1]))
+        self.net.add_module(
+            "Linear Layer {}".format(i),
+            torch.nn.Linear(layer_nodes[-2], layer_nodes[-1]),
+        )
 
     def forward(self, x):
         return self.net(x)
 
 
-class MatrixSampler(th.nn.Module):
-    """Matrix Sampler, following a Bernoulli distribution. with learnable
-    parameters.
-    Args:
-        graph_size (int or tuple): shape of the matrix to sample. If is int,
-           samples a square matrix.
-        mask (torch.Tensor): Allows to forbid some elements to be sampled.
-           Defaults to ``1 - th.eye()``.
-        gumbel (bool): Use either gumbel softmax (True) or gumbel sigmoid (False)
-    Attributes:
-        weights: the learnable weights of the module of shape
-            `(graph_size x graph_size)` if the input was `int` else `(*graph_size)`
-    Shape:
-        - output: `graph_size` if tuple given, else `(graph_size, graph_size)`
+class MatrixSampler(torch.nn.Module):
     """
-    def __init__(self, graph_size, mask=None, gumbel=False):
-        super(MatrixSampler, self).__init__()
-        if not isinstance(graph_size, (list, tuple)):
-            self.graph_size = (graph_size, graph_size)
-        else:
-            self.graph_size = graph_size
-        self.weights = th.nn.Parameter(th.FloatTensor(*self.graph_size))
-        self.weights.data.zero_()
-        if mask is None:
-            mask = 1 - th.eye(*self.graph_size)
-        if not (type(mask)==bool and not mask):
-            self.register_buffer("mask", mask)
-        self.gumble = gumbel
+    Matrix Sampler, following a Bernoulli distribution with trainable parameters.
 
-        ones_tensor = th.ones(*self.graph_size)
+    Parameters
+    ----------
+    graph_size: int or Iterable,
+        shape of the matrix to sample. If it's an int, it samples a square matrix.
+    mask: torch.Tensor,
+        Allows to forbid some elements to be sampled. Defaults to ``1 - torch.eye()``.
+    gumbel: bool,
+        Use either gumbel softmax (True) or gumbel sigmoid (False)
+
+    Attributes
+    ----------
+    weights: int or iterable,
+        the learnable weights of the module of shape `(graph_size x graph_size)`, if the input was `int`,
+        else `(*graph_size)`.
+    """
+
+    def __init__(self, graph_size: Union[int, Iterable], mask=None, gumbel=False):
+        super().__init__()
+        if isinstance(graph_size, int):
+            self.graph_size = (graph_size, graph_size)
+        elif isinstance(graph_size, Iterable):
+            self.graph_size = graph_size
+        else:
+            raise ValueError(f"'graph_size' type needs to be either int or iterable. "
+                             f"Provided type {graph_size} not supported")
+        self.weights = torch.nn.Parameter(torch.zeros(*self.graph_size), requires_grad=True)
+        if mask is None:
+            mask = -torch.eye(*self.graph_size) + 1
+        if not (type(mask) == bool and not mask):
+            self.register_buffer("mask", mask)
+        self.gumbel = gumbel
+
+        ones_tensor = torch.ones(*self.graph_size)
         self.register_buffer("ones_tensor", ones_tensor)
 
-        zeros_tensor = th.zeros(*self.graph_size)
+        zeros_tensor = torch.zeros(*self.graph_size)
         self.register_buffer("zeros_tensor", zeros_tensor)
 
     def forward(self, tau=1, drawhard=True):
         """Return a sampled graph."""
 
-        if(self.gumble):
-
-            drawn_proba = gumbel_softmax(th.stack([self.weights.view(-1), -self.weights.view(-1)], 1),
-                               tau=tau, hard=drawhard)[:, 0].view(*self.graph_size)
+        if self.gumbel:
+            drawn_proba = gumbel_softmax(
+                torch.stack([self.weights.view(-1), -self.weights.view(-1)], 1),
+                tau=tau,
+                hard=drawhard,
+            )[:, 0].view(*self.graph_size)
         else:
-            drawn_proba = gumbel_sigmoid(2 * self.weights, self.ones_tensor, self.zeros_tensor, tau=tau, hard=drawhard)
+            drawn_proba = gumbel_sigmoid(
+                2 * self.weights,
+                self.ones_tensor,
+                self.zeros_tensor,
+                tau=tau,
+                hard=drawhard,
+            )
 
         if hasattr(self, "mask"):
             return self.mask * drawn_proba
@@ -77,9 +97,9 @@ class MatrixSampler(th.nn.Module):
 
     def get_proba(self):
         if hasattr(self, "mask"):
-            return th.sigmoid(2 * self.weights) * self.mask
+            return torch.sigmoid(2 * self.weights) * self.mask
         else:
-            return th.sigmoid(2 * self.weights)
+            return torch.sigmoid(2 * self.weights)
 
     def set_skeleton(self, mask):
         self.register_buffer("mask", mask)
@@ -130,15 +150,19 @@ class Linear3D(torch.nn.Module):
         self.in_features = sizes[1]
         self.out_features = sizes[2]
         self.channels = sizes[0]
-        self.weight = torch.nn.Parameter(data=torch.Tensor((self.channels, self.in_features, self.out_features)))
+        self.weight = torch.nn.Parameter(
+            data=torch.Tensor((self.channels, self.in_features, self.out_features))
+        )
         if bias:
-            self.bias = torch.nn.Parameter(data=torch.Tensor((self.channels, self.out_features)))
+            self.bias = torch.nn.Parameter(
+                data=torch.Tensor((self.channels, self.out_features))
+            )
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         self.reset_parameters()
 
     def reset_parameters(self):
-        stdv = 1. / np.sqrt(self.weight.size(1))
+        stdv = 1.0 / np.sqrt(self.weight.size(1))
         self.weight.data.uniform_(-stdv, stdv)
         if self.bias is not None:
             self.bias.data.uniform_(-stdv, stdv)
@@ -147,18 +171,29 @@ class Linear3D(torch.nn.Module):
 
         if input.dim() == 2:
             if noise is None:
-                input = input.unsqueeze(1).expand([input.shape[0], self.channels, self.in_features])
+                input = input.unsqueeze(1).expand(
+                    [input.shape[0], self.channels, self.in_features]
+                )
             else:
-                input = th.cat([input.unsqueeze(1).expand([input.shape[0],
-                                                           self.channels,
-                                                           self.in_features - 1]),
-                                noise.unsqueeze(2)], 2)
+                input = torch.cat(
+                    [
+                        input.unsqueeze(1).expand(
+                            [input.shape[0], self.channels, self.in_features - 1]
+                        ),
+                        noise.unsqueeze(2),
+                    ],
+                    2,
+                )
         if adj_matrix is not None:
             input = input * adj_matrix.t().unsqueeze(0)
 
         return functional_linear3d(input, self.weight, self.bias)
 
     def extra_repr(self):
-        return 'in_features={}, out_features={}, bias={}'.format(
+        return "in_features={}, out_features={}, bias={}".format(
             self.in_features, self.out_features, self.bias is not None
-)
+        )
+
+
+class AgnosticModel(object):
+    pass
