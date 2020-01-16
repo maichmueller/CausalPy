@@ -1,5 +1,15 @@
 from functools import partial
-from typing import Iterator, Union, List, Callable, Optional, Tuple, Any, Iterable
+from typing import (
+    Iterator,
+    Union,
+    List,
+    Callable,
+    Optional,
+    Tuple,
+    Any,
+    Iterable,
+    Collection,
+)
 
 import torch
 from torch.nn import Hardtanh
@@ -142,49 +152,47 @@ class L0Mask(torch.nn.Module):
         else:
             self.device = device
 
-        for i, params in enumerate(parameters):
-            if i > 0:
-                raise ValueError("Currently the parameters of only a single layer is supported.")
-            dim_in, dim_out = params.shape
-
-        self.dim_in = dim_in if dimensions_in is None else dimensions_in
-        self.dim_out = dim_out if dimensions_out is None else dimensions_out
-
         # the log alpha locations are learnable parameters
-        self.log_alpha = torch.nn.Parameter(
-            torch.empty(self.dim_in, dtype=torch.float32), requires_grad=True
-        )
+        log_alphas = []
+        for params in parameters:
+            log_alphas.append(
+                torch.nn.Parameter(
+                    torch.empty(params.shape, device=self.device), requires_grad=True
+                )
+            )
+
+        self.nr_masks = len(log_alphas)
+        self.log_alphas = torch.nn.ParameterList(log_alphas)
+
         self.initialize_weights()
 
-        self.hard_concrete_dist = HardConcreteDist(
-            q_dist=BinaryConcreteDist(
-                alpha=self.log_alpha.exp(), beta=temperature, seed=seed
-            ),
-            gamma=gamma,
-            zeta=zeta,
-            seed=seed,
-        )
+        self.hard_concrete_dists = [
+            HardConcreteDist(
+                q_dist=BinaryConcreteDist(
+                    alpha=log_alpha.exp(), beta=temperature, seed=seed
+                ),
+                gamma=gamma,
+                zeta=zeta,
+                seed=seed,
+            )
+            for log_alpha in self.log_alphas
+        ]
 
-        # the function named g in the paper, which computes z
+        # the function named g in the paper, which computes z. It's mathematical form is:
+        # g(x) = min(1, max(0, x))
         self.hard_tanh = Hardtanh(min_val=0, max_val=1)
 
         self.random_state = np.random.default_rng(seed)
 
     def initialize_weights(self):
-        torch.nn.init.kaiming_normal(self.weights, mode="fan_out")
-
-        self.log_alpha.data.normal_(
+        self.log_alphas.data.normal_(
             mean=np.log(1 - self.initial_sparsity_rate)
             - np.log(self.initial_sparsity_rate),
             std=1e-2,
         )
 
     def forward(self, batch_size: int):
-        # if self.local_rep or not self.training:
-        z = self.sample_z(batch_size, sample=self.training)
-        # else:
-        #     weights = self.sample_weights()
-        #     tensor_out = tensor_in.mm(weights)
+        z = self.sample_mask(batch_size, deterministic=self.training)
         return z
 
     def _sample_epsilon(self, size=(1,), low=EPS, high=1 - EPS):
@@ -205,7 +213,12 @@ class L0Mask(torch.nn.Module):
             + self.gamma
         )
 
-    def sample_mask(self, batch_size: int, sample=True):
+    def sample_mask(
+        self,
+        batch_size: int,
+        weight_layer_indices: Optional[Iterable[int]] = None,
+        deterministic=False,
+    ):
         r"""
         Sample the hard-concrete gates for training and use a deterministic value for testing
 
@@ -219,24 +232,55 @@ class L0Mask(torch.nn.Module):
         .. math:: \theta^{\star} = \tilde{\theta}^{\star} \cdot \hat{z}
 
         """
-        if sample:
-            z = self._quantile_stretched_concrete(self._sample_epsilon(self.dim_in))
-            mask = self.hard_tanh(z)
-        else:
-            # test time:
-            pi = (
-                torch.sigmoid(self.qz_loga)
-                .view(1, self.in_features)
-                .expand(batch_size, self.in_features)
-            )
-            mask = self.hard_tanh(pi * (self.zeta - self.gamma) + self.gamma)
-        return mask
-
-    def compute_loss(self, loss_func, tensor_input):
-        """Expected L0 norm under the stochastic gates, takes into account and re-weights also a potential L2 penalty"""
-        logpw_col = torch.sum(
-            -(0.5 * self.prior_prec * self.weights.pow(2)) - self.lamba, 1
+        layers = (
+            range(self.nr_masks)
+            if weight_layer_indices is None
+            else weight_layer_indices
         )
-        logpw = torch.sum((1 - self._cdf_stretched_concrete(0)) * logpw_col)
 
+        masks = []
+        if not deterministic:
+            # this should be reached at train time
+            for layer_idx in layers:
+                z = self._quantile_stretched_concrete(
+                    self._sample_epsilon((batch_size,) + self.log_alphas[layer_idx].shape)
+                )
+                masks.append(self.hard_tanh(z))
+        else:
+            # this should be reached for test time:
+            for layer_idx in layers:
+                pi = (
+                    torch.sigmoid(self.log_alphas[layer_idx])
+                    .view(1, self.dim_in)
+                    .expand(batch_size, self.dim_in)
+                )
+                masks.append(self.hard_tanh(pi * (self.zeta - self.gamma) + self.gamma))
+        return masks
+
+    def compute_loss(
+        self,
+        loss_func: Callable,
+        model: torch.nn.Module,
+        mcs_size: int,
+        weights_iter: Optional[Iterable] = None,
+    ):
+        """
+        Notes
+        -----
+        It is assumed that the weights stem from the model parameter. However the option is left open, to provide
+        weights, that differ from the model's own weights (but fit in shape and size).
+        """
+        if weights_iter is None:
+            weights_iter = model.parameters()
+        for mask_sample, weights in zip(self.sample_mask(batch_size=mcs_size), weights_iter):
+            backup = weights.clone().detach()  # should copy the data
+            weights.data = weights.data.repeat((batch_size,) + tuple(1 for _ in weights.data.shape)) * mask_sample
+
+
+
+
+    def compute_l0l2_reg(self, weights):
+        """Expected L0 norm under the stochastic gates, takes into account and re-weights also a potential L2 penalty"""
+        logpw_col = torch.sum(weights.pow(2), 1)
+        logpw = torch.sum((1 - self._cdf_stretched_concrete(0)) * logpw_col)
         return logpw
