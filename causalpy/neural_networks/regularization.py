@@ -1,3 +1,4 @@
+from copy import copy
 from functools import partial
 from typing import (
     Iterator,
@@ -201,14 +202,18 @@ class L0Mask(torch.nn.Module):
         """
         return torch.as_tensor(self.random_state.uniform(low=low, high=high, size=size))
 
-    def _cdf_stretched_concrete(self, x, *args, **kwargs):
-        return self.hard_concrete_dist.get_base_dist().cdf(
-            (x - self.gamma) / (self.zeta - self.gamma), *args, **kwargs
+    def _cdf_stretched_concrete(self, x, layer_nr, *args, **kwargs):
+        return (
+            self.hard_concrete_dist[layer_nr]
+            .get_base_dist()
+            .cdf((x - self.gamma) / (self.zeta - self.gamma), *args, **kwargs)
         )
 
-    def _quantile_stretched_concrete(self, p, *args, **kwargs):
+    def _quantile_stretched_concrete(self, p, layer_nr, *args, **kwargs):
         return (
-            self.hard_concrete_dist.get_base_dist().quantile(p, *args, **kwargs)
+            self.hard_concrete_dist[layer_nr]
+            .get_base_dist()
+            .quantile(p, *args, **kwargs)
             * (self.zeta - self.gamma)
             + self.gamma
         )
@@ -217,7 +222,7 @@ class L0Mask(torch.nn.Module):
         self,
         batch_size: int,
         weight_layer_indices: Optional[Iterable[int]] = None,
-        deterministic=False,
+        deterministic: bool = False,
     ):
         r"""
         Sample the hard-concrete gates for training and use a deterministic value for testing
@@ -243,7 +248,9 @@ class L0Mask(torch.nn.Module):
             # this should be reached at train time
             for layer_idx in layers:
                 z = self._quantile_stretched_concrete(
-                    self._sample_epsilon((batch_size,) + self.log_alphas[layer_idx].shape)
+                    self._sample_epsilon(
+                        (batch_size,) + self.log_alphas[layer_idx].shape
+                    )
                 )
                 masks.append(self.hard_tanh(z))
         else:
@@ -259,28 +266,50 @@ class L0Mask(torch.nn.Module):
 
     def compute_loss(
         self,
+        data_in: torch.Tensor,
+        target: torch.Tensor,
         loss_func: Callable,
         model: torch.nn.Module,
         mcs_size: int,
-        weights_iter: Optional[Iterable] = None,
     ):
+        backups = []
+        for mask_sample, weights in zip(
+            self.sample_mask(batch_size=mcs_size), model.parameters()
+        ):
+            backups.append(
+                weights.clone().detach().data
+            )  # store a backup for reassigning after evaluation.
+            weights.data = (
+                weights.data.repeat((mcs_size,) + tuple(1 for _ in weights.data.shape))
+                * mask_sample
+            )
+        loss = loss_func(model(data_in), target).mean()
+        for backup, weights in zip(backups, model.parameters()):
+            weights.data = backup
+        return loss
+
+    def l0_regularization(self):
         """
-        Notes
-        -----
-        It is assumed that the weights stem from the model parameter. However the option is left open, to provide
-        weights, that differ from the model's own weights (but fit in shape and size).
+        Expected L0 norm under the stochastic gates
         """
-        if weights_iter is None:
-            weights_iter = model.parameters()
-        for mask_sample, weights in zip(self.sample_mask(batch_size=mcs_size), weights_iter):
-            backup = weights.clone().detach()  # should copy the data
-            weights.data = weights.data.repeat((batch_size,) + tuple(1 for _ in weights.data.shape)) * mask_sample
+        logpw = sum(
+            (
+                torch.sum((1 - self.hard_concrete_dists[i].get_base_dist().cdf(0)))
+                for i in range(self.nr_masks)
+            )
+        )
+        return logpw
 
-
-
-
-    def compute_l0l2_reg(self, weights):
-        """Expected L0 norm under the stochastic gates, takes into account and re-weights also a potential L2 penalty"""
-        logpw_col = torch.sum(weights.pow(2), 1)
-        logpw = torch.sum((1 - self._cdf_stretched_concrete(0)) * logpw_col)
+    def l2_regularization(self, weights_iter: Iterable):
+        """
+        Expected L2 norm under the stochastic gates
+        """
+        logpw = sum(
+            (
+                torch.sum(
+                    (1 - self._cdf_stretched_concrete(0, layer_nr=i)) * weights.pow(2)
+                )
+                for i, weights in zip(range(self.nr_masks), weights_iter)
+            )
+        )
         return logpw
