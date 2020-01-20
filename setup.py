@@ -16,7 +16,8 @@ requirements = [
     "scikit-learn>=0.2",
     "scipy>=1.3",
     "matplotlib>=3.0",
-    "tqdm>=4.24.0"
+    "tqdm>=4.24.0",
+    "torch>=1.0"
 ]
 
 setup_requirements = ["pytest-runner"]

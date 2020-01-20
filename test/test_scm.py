@@ -61,7 +61,7 @@ def test_scm_intervention():
         {
             "X_3": {
                 "parents": ["X_0", "Y"],
-                "function": LinearAssignment(1, 0, 3.3, 3.3),
+                "assignment": LinearAssignment(1, 0, 3.3, 3.3),
                 "noise": NoiseGenerator("t", df=1, source="scipy", seed=0),
             }
         }

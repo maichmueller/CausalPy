@@ -20,12 +20,6 @@ from numpy.random import Generator
 from .basemodel import NeuralBaseNet
 
 
-def hard_sigmoid(x: Union[np.ndarray, torch.Tensor]):
-    if isinstance(x, np.ndarray):
-        x = torch.as_tensor(x)
-    return torch.min(torch.ones_like(x), torch.max(torch.zeros_like(x), x))
-
-
 class BinaryConcreteDist:
     def __init__(
         self,
@@ -47,8 +41,12 @@ class BinaryConcreteDist:
         else:
             raise ValueError("Parameter 'beta' needs to be either float or iterable.")
 
-        assert torch.all(alpha > 0), "Location parameter 'alpha' needs to be > 0."
-        assert torch.all(beta > 0), "Temperature parameter 'beta' needs to be > 0."
+        assert torch.all(
+            torch.as_tensor(alpha) > 0
+        ), "Location parameter 'alpha' needs to be > 0."
+        assert torch.all(
+            torch.as_tensor(beta) > 0
+        ), "Temperature parameter 'beta' needs to be > 0."
 
         self.alpha = alpha  # the 'location'
         self.log_alpha = torch.log(alpha)
@@ -62,19 +60,21 @@ class BinaryConcreteDist:
         return bin_concrete_sample
 
     def pdf(self, x: Union[np.ndarray, torch.Tensor, float]):
-        beta_min_1 = -self.beta - 1
         if isinstance(x, np.ndarray):
-            x = torch.as_tensor(x)
+            x = torch.as_tensor(x, dtype=torch.float)
+        beta_min_1 = -self.beta - 1
         numerator = torch.pow(x, beta_min_1) * torch.pow(-x + 1, beta_min_1)
         denominator = np.power(x, -self.beta) + np.power(1 - x, -self.beta)
         return (self.beta / self.alpha) * numerator / torch.pow(denominator, 2)
 
-    def cdf(self, x: Union[np.ndarray, float]):
-        logits = np.log(x) - np.log(1 - x)
-        return torch.sigmoid(torch.as_tensor(logits * self.beta - self.log_alpha))
+    def cdf(self, x: Union[torch.Tensor, np.ndarray, float]):
+        if not isinstance(x, torch.Tensor):
+            x = torch.as_tensor(x, dtype=torch.float)
+        logits = torch.log(x) - torch.log(1 - x)
+        return torch.sigmoid(logits * self.beta - self.log_alpha)
 
-    def quantile(self, p: Union[np.ndarray, float]):
-        p = torch.as_tensor(p)
+    def quantile(self, p: Union[torch.Tensor, np.ndarray, float]):
+        p = torch.as_tensor(p, dtype=torch.float)
         logits = torch.log(p) - torch.log(-p + 1)
         return torch.sigmoid((logits + self.log_alpha / self.beta)).clamp(min=0, max=1)
 
@@ -133,14 +133,11 @@ class L0Mask(torch.nn.Module):
     def __init__(
         self,
         parameters: Iterable,
-        dimensions_in: Optional[int] = None,
-        dimensions_out: Optional[int] = None,
         temperature: float = 2.0 / 3.0,
         gamma: float = -0.1,
         zeta: float = 1.1,
         initial_sparsity_rate: float = 0.5,
         device: Optional[torch.device] = None,
-        transformation_f: Callable = torch.nn.Softplus(),
         seed: Optional[int] = None,
     ):
         super().__init__()
@@ -154,16 +151,14 @@ class L0Mask(torch.nn.Module):
             self.device = device
 
         # the log alpha locations are learnable parameters
-        log_alphas = []
+        self.log_alphas = torch.nn.ParameterList()
         for params in parameters:
-            log_alphas.append(
+            self.log_alphas.append(
                 torch.nn.Parameter(
                     torch.empty(params.shape, device=self.device), requires_grad=True
                 )
             )
-
-        self.nr_masks = len(log_alphas)
-        self.log_alphas = torch.nn.ParameterList(log_alphas)
+        self.nr_masks = len(self.log_alphas)
 
         self.initialize_weights()
 
@@ -186,11 +181,12 @@ class L0Mask(torch.nn.Module):
         self.random_state = np.random.default_rng(seed)
 
     def initialize_weights(self):
-        self.log_alphas.data.normal_(
-            mean=np.log(1 - self.initial_sparsity_rate)
-            - np.log(self.initial_sparsity_rate),
-            std=1e-2,
-        )
+        for log_alpha in self.log_alphas:
+            log_alpha.data.normal_(
+                mean=np.log(1 - self.initial_sparsity_rate)
+                - np.log(self.initial_sparsity_rate),
+                std=1e-2,
+            )
 
     def forward(self, batch_size: int):
         z = self.sample_mask(batch_size, deterministic=self.training)
@@ -198,30 +194,33 @@ class L0Mask(torch.nn.Module):
 
     def _sample_epsilon(self, size=(1,), low=EPS, high=1 - EPS):
         """
-        distribution of the noise 'epsilon'
+        distribution of the noise 'epsilon'. Implemented as uniform(0,1).
         """
-        return torch.as_tensor(self.random_state.uniform(low=low, high=high, size=size))
+        return torch.as_tensor(
+            self.random_state.uniform(low=low, high=high, size=size),
+            dtype=torch.float32,
+        )
 
     def _cdf_stretched_concrete(self, x, layer_nr, *args, **kwargs):
-        return (
-            self.hard_concrete_dist[layer_nr]
-            .get_base_dist()
-            .cdf((x - self.gamma) / (self.zeta - self.gamma), *args, **kwargs)
+        hard_concrete_dist = self.hard_concrete_dists[layer_nr]
+        gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
+        return hard_concrete_dist.get_base_dist().cdf(
+            (x - gamma) / (zeta - gamma), *args, **kwargs
         )
 
     def _quantile_stretched_concrete(self, p, layer_nr, *args, **kwargs):
+        hard_concrete_dist = self.hard_concrete_dists[layer_nr]
+        gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return (
-            self.hard_concrete_dist[layer_nr]
-            .get_base_dist()
-            .quantile(p, *args, **kwargs)
-            * (self.zeta - self.gamma)
-            + self.gamma
+            hard_concrete_dist.get_base_dist().quantile(p, *args, **kwargs)
+            * (zeta - gamma)
+            + gamma
         )
 
     def sample_mask(
         self,
-        batch_size: int,
-        weight_layer_indices: Optional[Iterable[int]] = None,
+        batch_size: int = 1,
+        weight_layer_indices: Union[Iterable[int], int, None] = None,
         deterministic: bool = False,
     ):
         r"""
@@ -237,10 +236,11 @@ class L0Mask(torch.nn.Module):
         .. math:: \theta^{\star} = \tilde{\theta}^{\star} \cdot \hat{z}
 
         """
+
         layers = (
             range(self.nr_masks)
             if weight_layer_indices is None
-            else weight_layer_indices
+            else np.atleast_1d(weight_layer_indices)
         )
 
         masks = []
@@ -250,18 +250,22 @@ class L0Mask(torch.nn.Module):
                 z = self._quantile_stretched_concrete(
                     self._sample_epsilon(
                         (batch_size,) + self.log_alphas[layer_idx].shape
-                    )
+                    ),
+                    layer_idx,
                 )
                 masks.append(self.hard_tanh(z))
         else:
             # this should be reached for test time:
             for layer_idx in layers:
+                log_alpha = self.log_alphas[layer_idx]
+                hard_concrete_dist = self.hard_concrete_dists[layer_idx]
+                gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
                 pi = (
-                    torch.sigmoid(self.log_alphas[layer_idx])
-                    .view(1, self.dim_in)
-                    .expand(batch_size, self.dim_in)
-                )
-                masks.append(self.hard_tanh(pi * (self.zeta - self.gamma) + self.gamma))
+                    torch.sigmoid(log_alpha)
+                    .view(1, *log_alpha.size())
+                    .expand(batch_size, *log_alpha.size())
+                ).detach()
+                masks.append(self.hard_tanh(pi * (zeta - gamma) + gamma))
         return masks
 
     def compute_loss(
@@ -270,46 +274,49 @@ class L0Mask(torch.nn.Module):
         target: torch.Tensor,
         loss_func: Callable,
         model: torch.nn.Module,
-        mcs_size: int,
+        mcs_size: int = 1,
+        output_transformation: Optional[Callable] = lambda tensor: tensor,
     ):
+        sampled_masks = self.sample_mask(batch_size=mcs_size)
         backups = []
-        for mask_sample, weights in zip(
-            self.sample_mask(batch_size=mcs_size), model.parameters()
-        ):
-            backups.append(
-                weights.clone().detach().data
-            )  # store a backup for reassigning after evaluation.
-            weights.data = (
-                weights.data.repeat((mcs_size,) + tuple(1 for _ in weights.data.shape))
-                * mask_sample
-            )
-        loss = loss_func(model(data_in), target).mean()
+        loss = 0
+        for mcs_run in range(mcs_size):
+            for layer_idx, weights in enumerate(model.parameters()):
+                if mcs_run == 0:
+                    backups.append(
+                        weights.clone().detach().data
+                    )  # store a backup for reassigning after evaluation.
+                weights.data = backups[layer_idx] * sampled_masks[layer_idx][mcs_run]
+            loss += loss_func(output_transformation(model(data_in)), target)
+        # apply the backup to get back the original weights for gradient update.
         for backup, weights in zip(backups, model.parameters()):
             weights.data = backup
-        return loss
+        return loss / mcs_size
 
     def l0_regularization(self):
         """
         Expected L0 norm under the stochastic gates
         """
-        logpw = sum(
-            (
-                torch.sum((1 - self.hard_concrete_dists[i].get_base_dist().cdf(0)))
+        logpw = torch.as_tensor(
+            [
+                torch.sum((1 - self.hard_concrete_dists[i].get_base_dist().cdf(0.0)))
                 for i in range(self.nr_masks)
-            )
-        )
+            ],
+            dtype=torch.float,
+        ).sum()
         return logpw
 
     def l2_regularization(self, weights_iter: Iterable):
         """
-        Expected L2 norm under the stochastic gates
+        Expected L2 (combined with L0) norm under the stochastic gates
         """
-        logpw = sum(
-            (
+        logpw = torch.as_tensor(
+            [
                 torch.sum(
-                    (1 - self._cdf_stretched_concrete(0, layer_nr=i)) * weights.pow(2)
+                    (1 - self._cdf_stretched_concrete(0.0, layer_nr=i)) * weights.pow(2)
                 )
                 for i, weights in zip(range(self.nr_masks), weights_iter)
-            )
-        )
+            ],
+            dtype=torch.float
+        ).sum()
         return logpw
