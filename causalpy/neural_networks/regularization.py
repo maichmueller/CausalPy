@@ -23,58 +23,58 @@ from .basemodel import NeuralBaseNet
 class BinaryConcreteDist:
     def __init__(
         self,
-        alpha: Union[float, Iterable] = 0.5,
+        log_alpha: Union[float, Iterable] = 0.,
         beta: Union[float, Iterable] = 1.0,
         seed: Optional[int] = None,
     ):
-        if isinstance(alpha, torch.Tensor):
+        if isinstance(log_alpha, torch.Tensor):
             pass  # preserve potential torch.nn.Parameter without copying them into standard Tensor
-        elif isinstance(alpha, (float, Iterable)):
-            alpha = torch.tensor(alpha)
+        elif isinstance(log_alpha, (float, Iterable)):
+            log_alpha = torch.tensor(log_alpha)
         else:
             raise ValueError("Parameter 'alpha' needs to be either float or iterable.")
 
-        if isinstance(alpha, torch.Tensor):
+        if isinstance(beta, torch.Tensor):
             pass  # preserve potential torch.nn.Parameter without copying them into standard Tensor
         elif isinstance(beta, float):
             beta = torch.tensor(beta)
         else:
             raise ValueError("Parameter 'beta' needs to be either float or iterable.")
 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         assert torch.all(
-            torch.as_tensor(alpha) > 0
-        ), "Location parameter 'alpha' needs to be > 0."
-        assert torch.all(
-            torch.as_tensor(beta) > 0
+            torch.as_tensor(beta, device=self.device) > 0
         ), "Temperature parameter 'beta' needs to be > 0."
 
-        self.alpha = alpha  # the 'location'
-        self.log_alpha = torch.log(alpha)
+        self.log_alpha = log_alpha.to(device=self.device)
         self.beta = beta  # the 'temperature'
         self.uniform_dist = np.random.default_rng(seed).uniform
 
     def rsample(self, size: Tuple = (1,)):
-        uniform_sample = torch.as_tensor(self.uniform_dist(size=size))
+        uniform_sample = torch.as_tensor(
+            self.uniform_dist(size=size), device=self.device
+        )
         logit_sample = torch.log(uniform_sample) - torch.log(-uniform_sample + 1)
         bin_concrete_sample = torch.sigmoid((logit_sample + self.log_alpha) / self.beta)
         return bin_concrete_sample
 
     def pdf(self, x: Union[np.ndarray, torch.Tensor, float]):
         if isinstance(x, np.ndarray):
-            x = torch.as_tensor(x, dtype=torch.float)
+            x = torch.as_tensor(x, dtype=torch.float, device=self.device)
         beta_min_1 = -self.beta - 1
         numerator = torch.pow(x, beta_min_1) * torch.pow(-x + 1, beta_min_1)
         denominator = np.power(x, -self.beta) + np.power(1 - x, -self.beta)
-        return (self.beta / self.alpha) * numerator / torch.pow(denominator, 2)
+        return (self.beta / torch.exp(self.log_alpha)) * numerator / torch.pow(denominator, 2)
 
     def cdf(self, x: Union[torch.Tensor, np.ndarray, float]):
         if not isinstance(x, torch.Tensor):
-            x = torch.as_tensor(x, dtype=torch.float)
+            x = torch.as_tensor(x, dtype=torch.float, device=self.device)
         logits = torch.log(x) - torch.log(1 - x)
         return torch.sigmoid(logits * self.beta - self.log_alpha)
 
     def quantile(self, p: Union[torch.Tensor, np.ndarray, float]):
-        p = torch.as_tensor(p, dtype=torch.float)
+        p = torch.as_tensor(p, dtype=torch.float, device=self.device)
         logits = torch.log(p) - torch.log(-p + 1)
         return torch.sigmoid((logits + self.log_alpha / self.beta)).clamp(min=0, max=1)
 
@@ -146,7 +146,7 @@ class L0Mask(torch.nn.Module):
         else:
             self.initial_sparsity_rate = 0.5
         if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
 
@@ -165,7 +165,7 @@ class L0Mask(torch.nn.Module):
         self.hard_concrete_dists = [
             HardConcreteDist(
                 q_dist=BinaryConcreteDist(
-                    alpha=log_alpha.exp(), beta=temperature, seed=seed
+                    log_alpha=log_alpha, beta=temperature, seed=seed
                 ),
                 gamma=gamma,
                 zeta=zeta,
@@ -199,6 +199,7 @@ class L0Mask(torch.nn.Module):
         return torch.as_tensor(
             self.random_state.uniform(low=low, high=high, size=size),
             dtype=torch.float32,
+            device=self.device,
         )
 
     def _cdf_stretched_concrete(self, x, layer_nr, *args, **kwargs):
@@ -303,6 +304,7 @@ class L0Mask(torch.nn.Module):
                 for i in range(self.nr_masks)
             ],
             dtype=torch.float,
+            device=self.device
         ).sum()
         return logpw
 
@@ -317,6 +319,7 @@ class L0Mask(torch.nn.Module):
                 )
                 for i, weights in zip(range(self.nr_masks), weights_iter)
             ],
-            dtype=torch.float
+            dtype=torch.float,
+            device=self.device
         ).sum()
         return logpw
