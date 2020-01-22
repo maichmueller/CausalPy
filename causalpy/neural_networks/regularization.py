@@ -23,7 +23,7 @@ from .basemodel import NeuralBaseNet
 class BinaryConcreteDist:
     def __init__(
         self,
-        log_alpha: Union[float, Iterable] = 0.,
+        log_alpha: Union[float, Iterable] = 0.0,
         beta: Union[float, Iterable] = 1.0,
         seed: Optional[int] = None,
     ):
@@ -65,7 +65,11 @@ class BinaryConcreteDist:
         beta_min_1 = -self.beta - 1
         numerator = torch.pow(x, beta_min_1) * torch.pow(-x + 1, beta_min_1)
         denominator = np.power(x, -self.beta) + np.power(1 - x, -self.beta)
-        return (self.beta / torch.exp(self.log_alpha)) * numerator / torch.pow(denominator, 2)
+        return (
+            (self.beta / torch.exp(self.log_alpha))
+            * numerator
+            / torch.pow(denominator, 2)
+        )
 
     def cdf(self, x: Union[torch.Tensor, np.ndarray, float]):
         if not isinstance(x, torch.Tensor):
@@ -132,7 +136,7 @@ class L0Mask(torch.nn.Module):
 
     def __init__(
         self,
-        parameters: Iterable,
+        module: torch.nn.Module,
         temperature: float = 2.0 / 3.0,
         gamma: float = -0.1,
         zeta: float = 1.1,
@@ -152,13 +156,22 @@ class L0Mask(torch.nn.Module):
 
         # the log alpha locations are learnable parameters
         self.log_alphas = torch.nn.ParameterList()
-        for params in parameters:
+        for params in module.parameters():
             self.log_alphas.append(
                 torch.nn.Parameter(
                     torch.empty(params.shape, device=self.device), requires_grad=True
                 )
             )
-        self.nr_masks = len(self.log_alphas)
+        self.nr_param_tensors = len(self.log_alphas)
+        self.backups = []
+        # register the hooks for the wrapped module.
+        self.masked_module = module
+        self.handle_forward = module.register_forward_pre_hook(
+            self.forward_hook_factory()
+        )
+        self.handle_backward = module.register_backward_hook(
+            self.backward_hook_factory()
+        )
 
         self.initialize_weights()
 
@@ -191,6 +204,10 @@ class L0Mask(torch.nn.Module):
     def forward(self, batch_size: int):
         z = self.sample_mask(batch_size, deterministic=self.training)
         return z
+
+    def remove_module_hooks(self):
+        self.handle_backward.remove()
+        self.handle_forward.remove()
 
     def _sample_epsilon(self, size=(1,), low=EPS, high=1 - EPS):
         """
@@ -239,7 +256,7 @@ class L0Mask(torch.nn.Module):
         """
 
         layers = (
-            range(self.nr_masks)
+            range(self.nr_param_tensors)
             if weight_layer_indices is None
             else np.atleast_1d(weight_layer_indices)
         )
@@ -269,6 +286,32 @@ class L0Mask(torch.nn.Module):
                 masks.append(self.hard_tanh(pi * (zeta - gamma) + gamma))
         return masks
 
+    def forward_hook_factory(self):
+        def hook(module, _):
+            self.backup = []
+            masks = self.sample_mask()
+            for layer_idx, weights in enumerate(module.parameters()):
+                if len(self.backups) != self.nr_param_tensors:
+                    self.backups.append(
+                        weights.data.clone()
+                    )  # store a backup for reassigning after evaluation.
+                weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
+
+        return hook
+
+    def backward_hook_factory(self):
+        def hook(module, grad_input, grad_output):
+            for backup, weights in zip(self.backups, module.parameters()):
+                weights.data = backup.data
+
+            # print("grad_input: ", type(grad_input))
+            # print("grad_input[0]: ", type(grad_input[0]))
+            # print("grad_output: ", type(grad_output))
+            # print("grad_output[0]: ", type(grad_output[0]))
+
+        self.backups = []
+        return hook
+
     def compute_loss(
         self,
         data_in: torch.Tensor,
@@ -278,20 +321,10 @@ class L0Mask(torch.nn.Module):
         mcs_size: int = 1,
         output_transformation: Optional[Callable] = lambda tensor: tensor,
     ):
-        sampled_masks = self.sample_mask(batch_size=mcs_size)
         backups = []
         loss = 0
         for mcs_run in range(mcs_size):
-            for layer_idx, weights in enumerate(model.parameters()):
-                if mcs_run == 0:
-                    backups.append(
-                        weights.clone().detach().data
-                    )  # store a backup for reassigning after evaluation.
-                weights.data = backups[layer_idx] * sampled_masks[layer_idx][mcs_run]
             loss += loss_func(output_transformation(model(data_in)), target)
-        # apply the backup to get back the original weights for gradient update.
-        for backup, weights in zip(backups, model.parameters()):
-            weights.data = backup
         return loss / mcs_size
 
     def l0_regularization(self):
@@ -301,14 +334,14 @@ class L0Mask(torch.nn.Module):
         logpw = torch.as_tensor(
             [
                 torch.sum((1 - self.hard_concrete_dists[i].get_base_dist().cdf(0.0)))
-                for i in range(self.nr_masks)
+                for i in range(self.nr_param_tensors)
             ],
             dtype=torch.float,
-            device=self.device
+            device=self.device,
         ).sum()
         return logpw
 
-    def l2_regularization(self, weights_iter: Iterable):
+    def l2_regularization(self):
         """
         Expected L2 (combined with L0) norm under the stochastic gates
         """
@@ -317,9 +350,9 @@ class L0Mask(torch.nn.Module):
                 torch.sum(
                     (1 - self._cdf_stretched_concrete(0.0, layer_nr=i)) * weights.pow(2)
                 )
-                for i, weights in zip(range(self.nr_masks), weights_iter)
+                for i, weights in zip(range(self.nr_param_tensors), self.masked_module.parameters())
             ],
             dtype=torch.float,
-            device=self.device
+            device=self.device,
         ).sum()
         return logpw
