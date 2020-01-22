@@ -306,7 +306,7 @@ class L0Mask(torch.nn.Module):
         return hook
 
     def backward_hook_factory(self):
-        def hook(module: torch.nn.Module, _):
+        def hook(module: torch.nn.Module, grad_input, grad_output):
             for backup, weights in zip(self.backups, module.parameters()):
                 weights.data = backup.data
 
@@ -359,7 +359,7 @@ class L0Mask(torch.nn.Module):
             )
         return reg_loss
 
-    def l2_regularization(self):
+    def l2_regularization(self, weight_decay=.5, ):
         """
         Expected L2 (combined with L0) norm under the stochastic gates.
         """
