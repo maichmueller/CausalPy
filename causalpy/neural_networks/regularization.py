@@ -55,6 +55,7 @@ class BinaryConcreteDist:
         uniform_sample = torch.as_tensor(
             self.uniform_dist(size=size), device=self.device
         )
+        uniform_sample.requires_grad_(True)
         logit_sample = torch.log(uniform_sample) - torch.log(-uniform_sample + 1)
         bin_concrete_sample = torch.sigmoid((logit_sample + self.log_alpha) / self.beta)
         return bin_concrete_sample
@@ -74,13 +75,17 @@ class BinaryConcreteDist:
     def cdf(self, x: Union[torch.Tensor, np.ndarray, float]):
         if not isinstance(x, torch.Tensor):
             x = torch.as_tensor(x, dtype=torch.float, device=self.device)
-        logits = torch.log(x) - torch.log(1 - x)
-        return torch.sigmoid(logits * self.beta - self.log_alpha)
+        # TODO check whether this needs numeric adaptation or you simply didnt fully understand the paper here for the
+        # TODO complexity loss!
+        return torch.sigmoid(
+            (torch.log(x) - torch.log(-x + 1)) * self.beta - self.log_alpha
+        )
 
     def quantile(self, p: Union[torch.Tensor, np.ndarray, float]):
         p = torch.as_tensor(p, dtype=torch.float, device=self.device)
-        logits = torch.log(p) - torch.log(-p + 1)
-        return torch.sigmoid((logits + self.log_alpha / self.beta)).clamp(min=0, max=1)
+        return torch.sigmoid(
+            (torch.log(p) - torch.log(-p + 1) + self.log_alpha / self.beta)
+        ).clamp(min=0, max=1)
 
 
 class HardConcreteDist:
@@ -189,7 +194,7 @@ class L0Mask(torch.nn.Module):
 
         # the function named g in the paper, which computes z. It's mathematical form is:
         # g(x) = min(1, max(0, x))
-        self.hard_tanh = Hardtanh(min_val=0, max_val=1)
+        self.hard_sigmoid = Hardtanh(min_val=0, max_val=1)
 
         self.random_state = np.random.default_rng(seed)
 
@@ -209,19 +214,26 @@ class L0Mask(torch.nn.Module):
         self.handle_backward.remove()
         self.handle_forward.remove()
 
-    def _sample_epsilon(self, size: Tuple[int] = (1,), low: float = EPS, high: float =1 - EPS):
+    def _sample_epsilon(
+        self, size: Tuple[int] = (1,), low: float = EPS, high: float = 1 - EPS
+    ):
         """
         distribution of the noise 'epsilon'. Implemented as uniform(0,1).
         """
-        return torch.as_tensor(
+        eps = torch.as_tensor(
             self.random_state.uniform(low=low, high=high, size=size),
             dtype=torch.float32,
             device=self.device,
         )
+        eps.requires_grad_(True)
+        return eps
 
     def _cdf_stretched_concrete(
         self, x: Union[float, Iterable[float]], layer_nr: int, *args, **kwargs
     ):
+        """
+        Compute the cdf of the stretched concrete distribution for the given samples x and layer number.
+        """
         hard_concrete_dist = self.hard_concrete_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return hard_concrete_dist.get_base_dist().cdf(
@@ -231,6 +243,10 @@ class L0Mask(torch.nn.Module):
     def _quantile_stretched_concrete(
         self, p: Union[float, Iterable[float]], layer_nr: int, *args, **kwargs
     ):
+        """
+        Compute the quantile, aka the inverse cdf, of the stretched concrete distribution for the given probability p
+        and layer number.
+        """
         hard_concrete_dist = self.hard_concrete_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return (
@@ -269,13 +285,11 @@ class L0Mask(torch.nn.Module):
         if not deterministic:
             # this should be reached at train time
             for layer_idx in layers:
-                z = self._quantile_stretched_concrete(
-                    self._sample_epsilon(
-                        (batch_size,) + self.log_alphas[layer_idx].shape
-                    ),
-                    layer_idx,
+                epsilon = self._sample_epsilon(
+                    (batch_size,) + self.log_alphas[layer_idx].shape
                 )
-                masks.append(self.hard_tanh(z))
+                z = self._quantile_stretched_concrete(epsilon, layer_idx)
+                masks.append(self.hard_sigmoid(z))
         else:
             # this should be reached for test time:
             for layer_idx in layers:
@@ -287,7 +301,7 @@ class L0Mask(torch.nn.Module):
                     .view(1, *log_alpha.size())
                     .expand(batch_size, *log_alpha.size())
                 ).detach()
-                masks.append(self.hard_tanh(pi * (zeta - gamma) + gamma))
+                masks.append(self.hard_sigmoid(pi * (zeta - gamma) + gamma))
         return masks
 
     def forward_hook_factory(self):
@@ -359,7 +373,9 @@ class L0Mask(torch.nn.Module):
             )
         return reg_loss
 
-    def l2_regularization(self, weight_decay=.5, ):
+    def l2_regularization(
+        self, weight_decay=0.5,
+    ):
         """
         Expected L2 (combined with L0) norm under the stochastic gates.
         """

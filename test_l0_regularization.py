@@ -160,9 +160,9 @@ if __name__ == "__main__":
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # l0 = L0Dense(3, 1).to(dev)
-    # x = torch.rand(1000, 3).to(dev)
-    # y = (50 * x[:, 1]).view(-1, 1)
+    # l0 = L0Dense(6, 1).to(dev)
+    # x = torch.rand(1000, 6).to(dev)
+    # y = (2*x[:, 1]).view(-1, 1)
     # dataset = TensorDataset(x, y)
     # optimizer = torch.optim.Adam(itertools.chain(l0.parameters()), lr=0.01)
     # optimizer.zero_grad()
@@ -173,19 +173,20 @@ if __name__ == "__main__":
     #         loss = loss_f(l0(data), target)
     #         loss += 0.01 * l0.regularization()
     #         # loss = loss_f(fc(data), target)
-    #         print(loss)
+    #         # print(loss)
     #         if loss < 0.1:
-    #             pause=3
+    #             print(l0.sample_z(1, sample=False))
     #         losses.append(loss.detach().item())
-    #         plotter.plot('loss', 'train', 'Class Loss', epoch, np.mean(losses))
+    #         plotter.plot('loss', 'train', 'Class Loss', epoch, np.array(losses)[-1:].mean())
     #         loss.backward()
     # #         # for pa in l0.log_alphas:
     # #         #     print(pa.grad)
     #         optimizer.step()
-    fc_inp = FCNet(3, 1)
+
+    fc_inp = FCNet(6, 1)
     # fc = FCNet(3, 20, 10, 1).to(dev)
-    x = torch.rand(10000, 3).to(dev)
-    y = (50 * x[:, 1]).view(-1, 1)
+    x = torch.rand(10000, 6).to(dev)
+    y = (2 * x[:, 1]).view(-1, 1)
     dataset = TensorDataset(x, y)
     l0 = L0Mask(fc_inp).to(dev)
     # # params = [fc.parameters(), l0.parameters()]
@@ -204,17 +205,20 @@ if __name__ == "__main__":
             for i in range(mcs_size):
                 loss += loss_f(fc_inp(data), target)
             loss /= mcs_size
-            loss += 0.1 * l0.l2_regularization()
+            loss += 10 * l0.l0_regularization()
+            print(l0.l0_regularization())
             # loss = loss_f(fc(data), target)
-            print(loss)
+            # print(l0.sample_mask(1, deterministic=True)[0])
             losses.append(loss.detach().item())
             plotter.plot('loss', 'train', 'Class Loss', epoch, np.mean(losses))
             loss.backward()
+            for loga in  l0.log_alphas:
+                print(loga.grad)
             # for pa in l0.log_alphas:
             #     print(pa.grad)
             optimizer.step()
-    # print(*l0.sample_mask(1, deterministic=True), sep="\n")
-    # print("FC params")
-    # print(*fc.parameters(), sep="\n")
-    plt.plot(losses)
-    plt.show()
+    # # print(*l0.sample_mask(1, deterministic=True), sep="\n")
+    # # print("FC params")
+    # # print(*fc.parameters(), sep="\n")
+    # plt.plot(losses)
+    # plt.show()
