@@ -25,13 +25,13 @@ if __name__ == "__main__":
     # print(*l0.sample_mask(1, deterministic=True), sep="\n")
     # print("FC params")
     # print(*fc.parameters(), sep="\n")
-    for i in tqdm(range(100)):
-        for data, target in DataLoader(dataset, 1000):
+    for i in tqdm(range(1000)):
+        for data, target in DataLoader(dataset, 10000):
             loss = 0
-            for i in range(100):
+            for i in range(1000):
                 loss += loss_f(fc(data), target)
-            loss /= 100
-            loss += l0.l2_regularization()
+            loss /= 1000
+            loss += 0.01 * l0.l0_regularization()
             # loss = loss_f(fc(data), target)
             print(loss)
             losses.append(loss.detach())

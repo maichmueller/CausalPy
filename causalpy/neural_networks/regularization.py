@@ -209,7 +209,7 @@ class L0Mask(torch.nn.Module):
         self.handle_backward.remove()
         self.handle_forward.remove()
 
-    def _sample_epsilon(self, size=(1,), low=EPS, high=1 - EPS):
+    def _sample_epsilon(self, size: Tuple[int] = (1,), low: float = EPS, high: float =1 - EPS):
         """
         distribution of the noise 'epsilon'. Implemented as uniform(0,1).
         """
@@ -219,14 +219,18 @@ class L0Mask(torch.nn.Module):
             device=self.device,
         )
 
-    def _cdf_stretched_concrete(self, x, layer_nr, *args, **kwargs):
+    def _cdf_stretched_concrete(
+        self, x: Union[float, Iterable[float]], layer_nr: int, *args, **kwargs
+    ):
         hard_concrete_dist = self.hard_concrete_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return hard_concrete_dist.get_base_dist().cdf(
             (x - gamma) / (zeta - gamma), *args, **kwargs
         )
 
-    def _quantile_stretched_concrete(self, p, layer_nr, *args, **kwargs):
+    def _quantile_stretched_concrete(
+        self, p: Union[float, Iterable[float]], layer_nr: int, *args, **kwargs
+    ):
         hard_concrete_dist = self.hard_concrete_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return (
@@ -287,72 +291,83 @@ class L0Mask(torch.nn.Module):
         return masks
 
     def forward_hook_factory(self):
-        def hook(module, _):
-            self.backup = []
+        def hook(module: torch.nn.Module, _):
             masks = self.sample_mask()
-            for layer_idx, weights in enumerate(module.parameters()):
-                if len(self.backups) != self.nr_param_tensors:
+            if len(self.backups) != self.nr_param_tensors:
+                for layer_idx, weights in enumerate(module.parameters()):
                     self.backups.append(
                         weights.data.clone()
                     )  # store a backup for reassigning after evaluation.
-                weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
+                    weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
+            else:
+                for layer_idx, weights in enumerate(module.parameters()):
+                    weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
 
         return hook
 
     def backward_hook_factory(self):
-        def hook(module, grad_input, grad_output):
+        def hook(module: torch.nn.Module, _):
             for backup, weights in zip(self.backups, module.parameters()):
                 weights.data = backup.data
 
-            # print("grad_input: ", type(grad_input))
-            # print("grad_input[0]: ", type(grad_input[0]))
-            # print("grad_output: ", type(grad_output))
-            # print("grad_output[0]: ", type(grad_output[0]))
-
+        # reset the backup
         self.backups = []
         return hook
 
-    def compute_loss(
+    def estimate_loss(
         self,
         data_in: torch.Tensor,
         target: torch.Tensor,
         loss_func: Callable,
-        model: torch.nn.Module,
         mcs_size: int = 1,
         output_transformation: Optional[Callable] = lambda tensor: tensor,
     ):
-        backups = []
+        """
+        Perform a monte carlo sampling estimation of the loss of the original model.
+        This method will sample `mcs_size` many parameter masks, apply them on the parameters (all in forward_hook),
+        and run the data through the model with the respective masks.
+        The average of these losses will be the estimate of the overall loss evaluation given the current weights and
+        mask parameters.
+        Parameters
+        ----------
+        data_in: torch.Tensor,
+            the data tensor for the model to evaluate.
+        target: torch.Tensor,
+            the target, to which we compare the output of the model.
+        loss_func: Callable,
+            the loss function.
+        mcs_size: int,
+            the number of monte carlo samples N, that we are to compute.
+        output_transformation: (optional) Callable,
+            a function to transform the model's output to an appropriate value (e.g. taking the argmax of the output).
+        """
         loss = 0
         for mcs_run in range(mcs_size):
-            loss += loss_func(output_transformation(model(data_in)), target)
+            loss += loss_func(
+                output_transformation(self.masked_module(data_in)), target
+            )
         return loss / mcs_size
 
     def l0_regularization(self):
         """
-        Expected L0 norm under the stochastic gates
+        Expected L0 norm under the stochastic gates.
         """
-        logpw = torch.as_tensor(
-            [
-                torch.sum((1 - self.hard_concrete_dists[i].get_base_dist().cdf(0.0)))
-                for i in range(self.nr_param_tensors)
-            ],
-            dtype=torch.float,
-            device=self.device,
-        ).sum()
-        return logpw
+        reg_loss = 0
+        for i in range(self.nr_param_tensors):
+            reg_loss += torch.sum(
+                (1 - self.hard_concrete_dists[i].get_base_dist().cdf(0.0))
+            )
+        return reg_loss
 
     def l2_regularization(self):
         """
-        Expected L2 (combined with L0) norm under the stochastic gates
+        Expected L2 (combined with L0) norm under the stochastic gates.
         """
-        logpw = torch.as_tensor(
-            [
-                torch.sum(
-                    (1 - self._cdf_stretched_concrete(0.0, layer_nr=i)) * weights.pow(2)
-                )
-                for i, weights in zip(range(self.nr_param_tensors), self.masked_module.parameters())
-            ],
-            dtype=torch.float,
-            device=self.device,
-        ).sum()
-        return logpw
+        reg_loss = 0
+        for i, weights in zip(
+            range(self.nr_param_tensors), self.masked_module.parameters()
+        ):
+            reg_loss += torch.sum(
+                (1 - self._cdf_stretched_concrete(0.0, layer_nr=i)) * weights.pow(2)
+            )
+        return reg_loss
