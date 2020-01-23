@@ -91,12 +91,18 @@ class BinaryConcreteDist:
 class HardConcreteDist:
     def __init__(
         self,
-        q_dist: Any = BinaryConcreteDist(0.5, 0.1),
+        binary_concrete_dist: Optional[BinaryConcreteDist] = None,
         gamma: Optional[float] = 0.5,
         zeta: Optional[float] = 2.0,
         seed: Optional[int] = None,
     ):
-        self.q_dist = q_dist
+
+        self.bc_dist = (
+            BinaryConcreteDist(0.5, 0.1)
+            if binary_concrete_dist is None
+            else binary_concrete_dist
+        )
+
         self.gamma = gamma
         self.zeta = zeta
         rs = np.random.default_rng(seed)
@@ -105,22 +111,19 @@ class HardConcreteDist:
         # the function h(x) = min(1, max(0, x)) is implemented in torch as Hardtanh(0, 1)(x)
         self.hard_tanh = Hardtanh(0, 1)
 
-    def get_base_dist(self):
-        return self.q_dist
-
     def rsample(self, size: Tuple = (1,)):
-        s = self.q_dist.rsample(size=size)
+        s = self.bc_dist.rsample(size=size)
         s_tilde = s * (self.zeta - self.gamma) + self.gamma
         return self.hard_tanh(s_tilde)
 
     def pdf(self, x: Union[np.ndarray, torch.Tensor, float]):
         if 0 < x < 1:
-            edge_probs = self.q_dist.quantile(np.ndarray([0, 1]))
-            return (edge_probs[1] - edge_probs[0]) * self.q_dist.pdf(x)
+            edge_probs = self.bc_dist.quantile(np.ndarray([0.0, 1.0]))
+            return (edge_probs[1] - edge_probs[0]) * self.bc_dist.pdf(x)
         elif x == 1:
-            return 1 - self.q_dist.quantile(1)
+            return -self.bc_dist.quantile(1.0) + 1
         elif x == 0:
-            return self.q_dist.quantile(0)
+            return self.bc_dist.quantile(0.0)
         else:
             return 0
 
@@ -180,9 +183,9 @@ class L0Mask(torch.nn.Module):
 
         self.initialize_weights()
 
-        self.hard_concrete_dists = [
+        self.hc_dists = [
             HardConcreteDist(
-                q_dist=BinaryConcreteDist(
+                binary_concrete_dist=BinaryConcreteDist(
                     log_alpha=log_alpha, beta=temperature, seed=seed
                 ),
                 gamma=gamma,
@@ -234,9 +237,9 @@ class L0Mask(torch.nn.Module):
         """
         Compute the cdf of the stretched concrete distribution for the given samples x and layer number.
         """
-        hard_concrete_dist = self.hard_concrete_dists[layer_nr]
+        hard_concrete_dist = self.hc_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
-        return hard_concrete_dist.get_base_dist().cdf(
+        return hard_concrete_dist.bc_dist.cdf(
             (x - gamma) / (zeta - gamma), *args, **kwargs
         )
 
@@ -247,11 +250,10 @@ class L0Mask(torch.nn.Module):
         Compute the quantile, aka the inverse cdf, of the stretched concrete distribution for the given probability p
         and layer number.
         """
-        hard_concrete_dist = self.hard_concrete_dists[layer_nr]
+        hard_concrete_dist = self.hc_dists[layer_nr]
         gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
         return (
-            hard_concrete_dist.get_base_dist().quantile(p, *args, **kwargs)
-            * (zeta - gamma)
+            hard_concrete_dist.bc_dist.quantile(p, *args, **kwargs) * (zeta - gamma)
             + gamma
         )
 
@@ -294,7 +296,7 @@ class L0Mask(torch.nn.Module):
             # this should be reached for test time:
             for layer_idx in layers:
                 log_alpha = self.log_alphas[layer_idx]
-                hard_concrete_dist = self.hard_concrete_dists[layer_idx]
+                hard_concrete_dist = self.hc_dists[layer_idx]
                 gamma, zeta = hard_concrete_dist.gamma, hard_concrete_dist.zeta
                 pi = (
                     torch.sigmoid(log_alpha)
@@ -367,9 +369,14 @@ class L0Mask(torch.nn.Module):
         Expected L0 norm under the stochastic gates.
         """
         reg_loss = 0
-        for i in range(self.nr_param_tensors):
+        for layer_idx in range(self.nr_param_tensors):
+            hc_dist = self.hc_dists[layer_idx]
+            zeta_over_gamma = torch.as_tensor(hc_dist.zeta / hc_dist.gamma)
             reg_loss += torch.sum(
-                (1 - self.hard_concrete_dists[i].get_base_dist().cdf(0.0))
+                torch.sigmoid(
+                    self.log_alphas[layer_idx]
+                    - hc_dist.bc_dist.beta * torch.log(-zeta_over_gamma)
+                )
             )
         return reg_loss
 
@@ -380,10 +387,15 @@ class L0Mask(torch.nn.Module):
         Expected L2 (combined with L0) norm under the stochastic gates.
         """
         reg_loss = 0
-        for i, weights in zip(
+        for layer_idx, weights in zip(
             range(self.nr_param_tensors), self.masked_module.parameters()
         ):
+            hc_dist = self.hc_dists[layer_idx]
+            zeta_over_gamma = torch.as_tensor(hc_dist.zeta / hc_dist.gamma)
             reg_loss += torch.sum(
-                (1 - self._cdf_stretched_concrete(0.0, layer_nr=i)) * weights.pow(2)
+                torch.sigmoid(
+                    self.log_alphas[layer_idx]
+                    - hc_dist.bc_dist.beta * torch.log(-zeta_over_gamma)
+                ) * weights.pow(2)
             )
         return reg_loss
