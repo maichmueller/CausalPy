@@ -3,6 +3,7 @@ import torch
 
 class PfndBase(torch.nn.Module):
     def __init__(self, dim=1, ls=16, n_condim=4, subnet_constructor=None):
+        super().__init__()
         self.sig = torch.nn.Sigmoid()
         self.log_jacobian = 0
         self.log_jacobian_latest = None

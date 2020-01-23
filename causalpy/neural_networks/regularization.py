@@ -145,7 +145,6 @@ class L0Mask(torch.nn.Module):
     def __init__(
         self,
         module: torch.nn.Module,
-        temperature: float = 2.0 / 3.0,
         gamma: float = -0.1,
         zeta: float = 1.1,
         initial_sparsity_rate: float = 0.5,
@@ -170,6 +169,9 @@ class L0Mask(torch.nn.Module):
                     torch.empty(params.shape, device=self.device), requires_grad=True
                 )
             )
+        self.beta = torch.nn.Parameter(
+            2.0 / 3.0 * torch.ones(1, dtype=torch.float), requires_grad=True
+        )
         self.nr_param_tensors = len(self.log_alphas)
         self.backups = []
         # register the hooks for the wrapped module.
@@ -186,7 +188,7 @@ class L0Mask(torch.nn.Module):
         self.hc_dists = [
             HardConcreteDist(
                 binary_concrete_dist=BinaryConcreteDist(
-                    log_alpha=log_alpha, beta=temperature, seed=seed
+                    log_alpha=log_alpha, beta=self.beta, seed=seed
                 ),
                 gamma=gamma,
                 zeta=zeta,
@@ -375,7 +377,7 @@ class L0Mask(torch.nn.Module):
             reg_loss += torch.sum(
                 torch.sigmoid(
                     self.log_alphas[layer_idx]
-                    - hc_dist.bc_dist.beta * torch.log(-zeta_over_gamma)
+                    - torch.sigmoid(self.beta) * torch.log(-zeta_over_gamma)
                 )
             )
         return reg_loss
@@ -395,7 +397,96 @@ class L0Mask(torch.nn.Module):
             reg_loss += torch.sum(
                 torch.sigmoid(
                     self.log_alphas[layer_idx]
-                    - hc_dist.bc_dist.beta * torch.log(-zeta_over_gamma)
-                ) * weights.pow(2)
+                    - torch.sigmoid(self.beta) * torch.log(-zeta_over_gamma)
+                )
+                * weights.pow(2)
+                * weight_decay
             )
         return reg_loss
+
+
+class L0InputGate(torch.nn.Module):
+    """
+    Single Layer network which masks by element-wise multiplication with a relaxed binary mask, mimicing an input
+    L0 loss. General idea from the paper:
+    """
+
+    def __init__(
+        self,
+        dim_input: int = 10,
+        monte_carlo_sample_size: int = 1,
+        gamma: float = -0.1,
+        zeta: float = 1.1,
+    ):
+        super(L0InputGate, self).__init__()
+        self.n_dim = dim_input
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.log_alpha = torch.nn.Parameter(
+            0.3 + 1e-2 * torch.randn(1, dim_input), requires_grad=True
+        )
+        self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
+        self.gamma = gamma
+        self.zeta = zeta
+        self.monte_carlo_sample_size = monte_carlo_sample_size
+        self.gates = None
+
+        self.hardTanh = torch.nn.Hardtanh(0, 1)
+        self.sigmoid = torch.nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor):
+        batch_size = x.shape[0]
+
+        self.gates = self.create_gates().view(
+            self.monte_carlo_sample_size, 1, self.n_dim
+        )
+
+        x = x.repeat(self.monte_carlo_sample_size, 1).view(
+            self.L, batch_size, self.n_dim
+        )
+
+        x *= self.gates
+
+        x = x.view(self.monte_carlo_sample_size * batch_size, self.n_dim)
+
+        return x
+
+    def complexity_loss(self):
+        beta_sig = self.sigmoid(self.beta)
+
+        return self.sigmoid(
+            self.log_alpha - beta_sig * torch.log(-torch.tensor(self.gamma) / self.zeta)
+        ).sum()
+
+    def hard_sigmoid(self, x):
+        return self.hardTanh(x)
+
+    @staticmethod
+    def stretch(s: float, gamma: float, chi: float):
+        return s * (chi - gamma) + gamma
+
+    def reparameterize(self, u, log_alpha, beta):
+        """ Transform uniform distribution to CONCRETE distr."""
+        return self.sigmoid(
+            (torch.log(u) - torch.log(1 - u) + log_alpha) / beta
+        )
+
+    def final_layer(self):
+        """Estimates the gates at test time (i.e. after finished training)."""
+        return self.hard_sigmoid(self.log_alpha * (self.zeta - self.gamma) + self.gamma)
+
+    def create_gates(self):
+        """Creates input gates using parameters log_alpha, beta"""
+        dim = self.log_alpha.shape[0]
+        m = torch.distributions.uniform.Uniform(
+            torch.tensor([0.0]), torch.tensor([1.0])
+        )
+        u = (
+            m.sample(sample_shape=(self.monte_carlo_sample_size, dim))
+            .view(self.monte_carlo_sample_size, dim)
+            .to(self.device)
+        )
+        s = self.reparameterize(u, self.log_alpha, self.sigmoid(self.beta))
+        s_strech = self.stretch(s, self.gamma, self.zeta)
+        return self.hard_sigmoid(s_strech)
