@@ -1,9 +1,9 @@
 import torch as t
 
 
-class PfndELU(t.nn.Module):
+class PfndBase(t.nn.Module):
     def __init__(self, dim=1, ls=16, n_condim=4, subnet_constructor=None):
-        super(PfndELU, self).__init__()
+        super().__init__()
         self.sig = t.nn.Sigmoid()
         self.log_jacobian = 0
         self.dim = dim
@@ -25,6 +25,25 @@ class PfndELU(t.nn.Module):
             self.bias2 = t.nn.Parameter(t.randn(1, dim), True)
             self.eps = t.nn.Parameter(t.zeros(1, dim) - 1, True)
             self.alpha = t.nn.Parameter(t.zeros(1, dim), True)
+
+    def getParas(self, y):
+        if self.con:
+            size = len(y)
+            param = self.subnet(y)
+            self.mat1 = t.reshape(param[:, :self.dim * self.ls], (size, self.dim, self.ls))
+            self.bias1 = t.reshape(param[:, self.dim * self.ls:2 * self.dim * self.ls], (size, self.dim, self.ls))
+            self.mat2 = t.reshape(param[:, 2 * self.dim * self.ls:3 * self.dim * self.ls], (size, self.dim, self.ls))
+            self.bias2 = t.reshape(param[:, 3 * self.dim * self.ls:3 * self.dim * self.ls + self.dim], (size, self.dim))
+            self.eps = t.reshape(param[:, 3 * self.dim * self.ls + self.dim:3 * self.dim * self.ls + 2 * self.dim],
+                                 (size, self.dim)) / 10.0
+            self.alpha = t.reshape(param[:, 3 * self.dim * self.ls + 2 * self.dim:], (size, self.dim)) / 10.0
+
+    def jacobian(self, x, rev=False):
+        return self.log_jacobian
+
+class PfndELU(PfndBase):
+    def __init__(self, dim=1, ls=16, n_condim=4, subnet_constructor=None):
+        super().__init__(dim, ls, n_condim, subnet_constructor)
 
     def actfunc(self, x):
         return t.nn.ELU()(x)
@@ -61,47 +80,11 @@ class PfndELU(t.nn.Module):
             yn = yn - (self.function(yn) - y) / self.abl(yn)
         return yn
 
-    def jacobian(self, x, rev=False):
-        return self.log_jacobian
 
-    def getParas(self, y):
-        if self.con:
-            size = len(y)
-            param = self.subnet(y)
-            self.mat1 = t.reshape(param[:, :self.dim * self.ls], (size, self.dim, self.ls))
-            self.bias1 = t.reshape(param[:, self.dim * self.ls:2 * self.dim * self.ls], (size, self.dim, self.ls))
-            self.mat2 = t.reshape(param[:, 2 * self.dim * self.ls:3 * self.dim * self.ls], (size, self.dim, self.ls))
-            self.bias2 = t.reshape(param[:, 3 * self.dim * self.ls:3 * self.dim * self.ls + self.dim], (size, self.dim))
-            self.eps = t.reshape(param[:, 3 * self.dim * self.ls + self.dim:3 * self.dim * self.ls + 2 * self.dim],
-                                 (size, self.dim)) / 10.0
-            self.alpha = t.reshape(param[:, 3 * self.dim * self.ls + 2 * self.dim:], (size, self.dim)) / 10.0
-
-
-class PfndTanh(t.nn.Module):
+class PfndTanh(PfndBase):
     def __init__(self, dim=1, ls=16, n_condim=4, subnet_constructor=None):
-        super(PfndTanh, self).__init__()
-        self.sig = t.nn.Sigmoid()
-        self.log_jacobian = 0
-        self.dim = dim
-        self.ls = ls
+        super().__init__(dim, ls, n_condim, subnet_constructor)
         self.clamp = 5
-        self.inviter = 10
-        if n_condim > 0:
-            self.con = True
-            if subnet_constructor is None:
-                self.subnet = t.nn.Sequential(t.nn.Linear(n_condim, 50), t.nn.ReLU(),
-                                          t.nn.Linear(50, 3*dim*(ls+1)))
-            else:
-                self.subnet = subnet_constructor(n_condim, 3*dim*(ls+1))
-            self.getParas(t.zeros(1, n_condim))
-        else:
-            self.con = False
-            self.mat1 = t.nn.Parameter(t.randn(1, dim, ls), True)
-            self.bias1 = t.nn.Parameter(t.randn(1, dim, ls), True)
-            self.mat2 = t.nn.Parameter(t.randn(1, dim, ls), True)
-            self.bias2 = t.nn.Parameter(t.randn(1, dim), True)
-            self.eps = t.nn.Parameter(t.zeros(1, dim) - 1, True)
-            self.alpha = t.nn.Parameter(t.zeros(1, dim), True)
 
     def forward(self, x, y=None, rev=False):
         if self.con:
@@ -113,7 +96,6 @@ class PfndTanh(t.nn.Module):
             z = self.inv(x, n=self.inviter)
             self.log_jacobian = - t.log(self.abl(z))
             return z
-
 
     def actfunc(self, x):
         # return t.tanh(x)
@@ -139,20 +121,7 @@ class PfndTanh(t.nn.Module):
             yn = yn - (self.function(yn) - y) / self.abl(yn)
         return yn
 
-    def jacobian(self, x, rev=False):
-        return self.log_jacobian
 
-    def getParas(self, y):
-        if self.con:
-            size = len(y)
-            param = self.subnet(y)
-            self.mat1 = t.reshape(param[:, :self.dim * self.ls], (size, self.dim, self.ls))
-            self.bias1 = t.reshape(param[:, self.dim * self.ls:2 * self.dim * self.ls], (size, self.dim, self.ls))
-            self.mat2 = t.reshape(param[:, 2 * self.dim * self.ls:3 * self.dim * self.ls], (size, self.dim, self.ls))
-            self.bias2 = t.reshape(param[:, 3 * self.dim * self.ls:3 * self.dim * self.ls + self.dim], (size, self.dim))
-            self.eps = t.reshape(param[:, 3 * self.dim * self.ls + self.dim:3 * self.dim * self.ls + 2 * self.dim],
-                                 (size, self.dim)) / 10.0
-            self.alpha = t.reshape(param[:, 3 * self.dim * self.ls + 2 * self.dim:], (size, self.dim)) / 10.0
 
 
 class Net(t.nn.Module):
