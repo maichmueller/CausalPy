@@ -337,7 +337,7 @@ class L0Mask(torch.nn.Module):
         data_in: torch.Tensor,
         target: torch.Tensor,
         loss_func: Callable,
-        mcs_size: int = 1,
+        mc_sample_size: int = 1,
         output_transformation: Optional[Callable] = lambda tensor: tensor,
     ):
         """
@@ -354,17 +354,17 @@ class L0Mask(torch.nn.Module):
             the target, to which we compare the output of the model.
         loss_func: Callable,
             the loss function.
-        mcs_size: int,
+        mc_sample_size: int,
             the number of monte carlo samples N, that we are to compute.
         output_transformation: (optional) Callable,
             a function to transform the model's output to an appropriate value (e.g. taking the argmax of the output).
         """
         loss = 0
-        for mcs_run in range(mcs_size):
+        for mcs_run in range(mc_sample_size):
             loss += loss_func(
                 output_transformation(self.masked_module(data_in)), target
             )
-        return loss / mcs_size
+        return loss / mc_sample_size
 
     def l0_regularization(self):
         """

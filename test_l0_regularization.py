@@ -176,14 +176,24 @@ if __name__ == "__main__":
     # x = torch.rand(1000, 6).to(dev)
     # y = (2*x[:, 1]).view(-1, 1)
     # dataset = TensorDataset(x, y)
+    # l0 = L0Mask(fc_inp).to(dev)
+    # # # params = [fc.parameters(), l0.parameters()]
+    # # # params = [fc.parameters()]
     # optimizer = torch.optim.Adam(itertools.chain(l0.parameters()), lr=0.01)
     # optimizer.zero_grad()
     # loss_f = torch.nn.MSELoss()
     # losses = []
-    # for epoch in tqdm(range(10000)):
-    #     for data, target in DataLoader(dataset, 5000):
-    #         loss = loss_f(l0(data), target)
-    #         loss += 0.01 * l0.regularization()
+    # # # print(*l0.sample_mask(1, deterministic=True), sep="\n")
+    # # # print("FC params")
+    # # # print(*fc.parameters(), sep="\n")
+    # for epoch in tqdm(range(1000)):
+    #     for data, target in DataLoader(dataset, 10000):
+    #         loss = 0
+    #         mcs_size = 10
+    #         for i in range(mcs_size):
+    #             loss += loss_f(fc_inp(data), target)
+    #         loss /= mcs_size
+    #         loss += 100 * l0.l2_regularization()
     #         # loss = loss_f(fc(data), target)
     #         # print(loss)
     #         if loss < 0.1:
@@ -191,8 +201,8 @@ if __name__ == "__main__":
     #         losses.append(loss.detach().item())
     #         plotter.plot('loss', 'train', 'Class Loss', epoch, np.array(losses)[-1:].mean())
     #         loss.backward()
-    # #         # for pa in l0.log_alphas:
-    # #         #     print(pa.grad)
+    #         # for pa in l0.log_alphas:
+    #         #     print(pa.grad)
     #         optimizer.step()
 
     # fc_inp = FCNet(6, 1)

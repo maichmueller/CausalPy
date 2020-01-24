@@ -4,24 +4,26 @@ import math
 from causalpy.neural_networks import singleDINN
 
 
-def s(x): return x.squeeze().cpu()
+def s(x):
+    return x.squeeze().cpu()
 
 
-def std(x): return 1/math.sqrt(2*math.pi) * t.exp(-x**2/2)
+def std(x):
+    return 1 / math.sqrt(2 * math.pi) * t.exp(-(x ** 2) / 2)
 
 
 def subnet_fc(c_in, c_out):
-    return t.nn.Sequential(t.nn.Linear(c_in, 100), t.nn.ReLU(), t.nn.Linear(100,  c_out))
+    return t.nn.Sequential(t.nn.Linear(c_in, 100), t.nn.ReLU(), t.nn.Linear(100, c_out))
 
 
 dev = t.device("cuda" if t.cuda.is_available() else "cpu")
 viz = visdom.Visdom()
 size = 10**3
 n_conDim = 10
-data = t.randn((size, 1))/4
+data = t.randn((size, 1)) / 4
 con = t.zeros((size, n_conDim))
 for i in range(1, 6):
-    data = t.cat((data,  t.randn((size, 1))/4+i), dim=0)
+    data = t.cat((data, t.randn((size, 1)) / 4 + i), dim=0)
     con = t.cat((con, t.zeros(size, n_conDim)), dim=0)
 data = (data-t.mean(data)).to(dev)
 con = con.to(dev)
