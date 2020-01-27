@@ -2,134 +2,191 @@ from typing import Optional, Callable, Type
 
 import torch
 from .utils import get_jacobian
-from abc import ABC
+from abc import ABC, abstractmethod
 
 
-class PfndBase(torch.nn.Module, ABC):
+class CouplingBase(torch.nn.Module, ABC):
     def __init__(
         self,
-        dim: int = 1,
-        ls: int = 16,
-        dim_condition: int = 4,
-        subnet_constructor: Optional[Type[torch.nn.Module]] = None,
+        dim: int,
+        dim_condition: int,
+        nr_layers: int = 16,
+        conditional_net: Optional[torch.nn.Module] = None,
         device: torch.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         ),
     ):
         super().__init__()
         self.device = device
-        self.sig = torch.nn.Sigmoid()
-        self.log_jacobian_latest = 0
+        self.log_jacobian_cache = 0
         self.dim = dim
-        self.ls = ls
-        self.inviter = 10
-        if dim_condition > 0:
-            self.is_conditional = True
-            if subnet_constructor is None:
-                self.subnet: torch.nn.Module = torch.nn.Sequential(
+        self.nr_layers = nr_layers
+        self.nr_inverse_iters = 10
+
+        self.mat1 = torch.randn(1, dim, nr_layers, requires_grad=False)
+        self.bias1 = torch.randn(1, dim, nr_layers, requires_grad=False)
+        self.mat2 = torch.randn(1, dim, nr_layers, requires_grad=False)
+        self.bias2 = torch.randn(1, dim, requires_grad=False)
+        self.eps = torch.ones(1, dim, requires_grad=False) * -1
+        self.alpha = torch.zeros(1, dim, requires_grad=False)
+
+        self.is_conditional = dim_condition > 0
+        if self.is_conditional:
+            self.matrix_shape = (self.dim, self.nr_layers)
+            self.bias_shape = (self.dim,)
+
+            if conditional_net is None:
+                self.conditional_net: torch.nn.Module = torch.nn.Sequential(
                     torch.nn.Linear(dim_condition, 50),
                     torch.nn.ReLU(),
-                    torch.nn.Linear(50, 3 * dim * (ls + 1)),
+                    torch.nn.Linear(50, 3 * dim * (nr_layers + 1)),
                 )
             else:
-                self.subnet: torch.nn.Module = subnet_constructor(
-                    dim_condition, 3 * dim * (ls + 1)
-                )
-            self.get_paras(torch.zeros((1, dim_condition)))
+                # conditional net needs to fulfill:
+                # ( dimension in = dim_condition, dimension out = 3 * dim * (layers + 1) )
+                self.conditional_net: torch.nn.Module = conditional_net
         else:
-            self.is_conditional = False
-            self.mat1 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
-            self.bias1 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
-            self.mat2 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
-            self.bias2 = torch.nn.Parameter(torch.randn(1, dim), requires_grad=True)
-            self.eps = torch.nn.Parameter(torch.ones(1, dim) * (-1), requires_grad=True)
-            self.alpha = torch.nn.Parameter(torch.zeros(1, dim), requires_grad=True)
+            self.set_conditional_params(torch.zeros((1, dim_condition)))
+
+            # only in the case of no conditional neural network are these trainable parameters.
+            # Otherwise their data will be provided by the condition generating network.
+            self.mat1 = torch.nn.Parameter(self.mat1, requires_grad=True)
+            self.bias1 = torch.nn.Parameter(self.bias1, requires_grad=True)
+            self.mat2 = torch.nn.Parameter(self.mat2, requires_grad=True)
+            self.bias2 = torch.nn.Parameter(self.bias2, requires_grad=True)
+            self.eps = torch.nn.Parameter(self.eps, requires_grad=True)
+            self.alpha = torch.nn.Parameter(self.alpha, requires_grad=True)
 
     def forward(
-        self, x: torch.Tensor, y: Optional[torch.Tensor] = None, rev: bool = False
+        self,
+        x: torch.Tensor,
+        condition: Optional[torch.Tensor] = None,
+        rev: bool = False,
     ):
         if self.is_conditional:
-            self.get_paras(y)
+            self.set_conditional_params(condition)
+
         if not rev:
-            self.log_jacobian_latest = torch.log(self.abl(x))
-            return self.function(x)
+            self.log_jacobian_cache = torch.log(self.abl(x))
+            return self.bijective_map(x)
         else:
-            z = self.inv(x, n=self.inviter)
-            self.log_jacobian_latest = -torch.log(self.abl(z))
+            z = self.inverse(x, n=self.nr_inverse_iters)
+            self.log_jacobian_cache = -torch.log(self.abl(z))
             return z
 
-    def get_paras(self, y: torch.Tensor):
-        if self.is_conditional:
-            size = len(y)
-            param = self.subnet(y)
-            self.mat1 = torch.reshape(
-                param[:, : self.dim * self.ls], (size, self.dim, self.ls)
-            )
-            self.bias1 = torch.reshape(
-                param[:, self.dim * self.ls : 2 * self.dim * self.ls],
-                (size, self.dim, self.ls),
-            )
-            self.mat2 = torch.reshape(
-                param[:, 2 * self.dim * self.ls : 3 * self.dim * self.ls],
-                (size, self.dim, self.ls),
-            )
-            self.bias2 = torch.reshape(
-                param[:, 3 * self.dim * self.ls : 3 * self.dim * self.ls + self.dim],
-                (size, self.dim),
-            )
-            self.eps = (
-                torch.reshape(
-                    param[
-                        :,
-                        3 * self.dim * self.ls
-                        + self.dim : 3 * self.dim * self.ls
-                        + 2 * self.dim,
-                    ],
-                    (size, self.dim),
-                )
-                / 10.0
-            )
-            self.alpha = (
-                torch.reshape(
-                    param[:, 3 * self.dim * self.ls + 2 * self.dim :], (size, self.dim)
-                )
-                / 10.0
-            )
+    @abstractmethod
+    def inverse(self, x, n):
+        raise NotImplementedError
+
+    @abstractmethod
+    def abl(self, x):
+        raise NotImplementedError
+
+    def set_conditional_params(self, condition_tensor: torch.Tensor):
+        """
+        In the case of a conditional INN set the parameters of the bijective map for the condition.
+
+        Notes
+        -----
+        If this method was called although the INN is unconditional, this method will raise uncaught errors.
+        """
+
+        size = condition_tensor.size(0)
+        new_params = self.conditional_net(condition_tensor)
+
+        shapes_params = [
+            (self.matrix_shape, self.mat1),
+            (self.matrix_shape, self.mat2),
+            (self.matrix_shape, self.bias1),
+            (self.bias_shape, self.bias2),
+            (self.bias_shape, self.eps),
+            (self.bias_shape, self.alpha)
+        ]
+        for i, (new_shape, param) in enumerate(shapes_params):
+            if i == 0:
+                start = 0
+            else:
+                # i * nr_previous_params_elements
+                start = i * shapes_params[i-1][1].nelement() // size
+            stop = (i + 1) * param.nelement()
+
+            param.data = torch.reshape(new_params[:, slice(start, stop)], new_shape).repeat(size, *new_shape)
+        #
+        # self.mat1 = torch.reshape(
+        #     new_params[:, : self.dim * self.nr_layers], (size, self.dim, self.nr_layers)
+        # )
+        # self.bias1 = torch.reshape(
+        #     new_params[:, self.dim * self.nr_layers : 2 * self.dim * self.nr_layers],
+        #     (size, self.dim, self.nr_layers),
+        # )
+        # self.mat2 = torch.reshape(
+        #     new_params[:, 2 * self.dim * self.nr_layers : 3 * self.dim * self.nr_layers],
+        #     (size, self.dim, self.nr_layers),
+        # )
+        # self.bias2 = torch.reshape(
+        #     new_params[
+        #         :,
+        #         3 * self.dim * self.nr_layers : 3 * self.dim * self.nr_layers
+        #         + self.dim,
+        #     ],
+        #     (size, self.dim),
+        # )
+        # self.eps = (
+        #     torch.reshape(
+        #         new_params[
+        #             :,
+        #             3 * self.dim * self.nr_layers
+        #             + self.dim : 3 * self.dim * self.nr_layers
+        #             + 2 * self.dim,
+        #         ],
+        #         (size, self.dim),
+        #     )
+        #     / 10.0
+        # )
+        # self.alpha = (
+        #     torch.reshape(
+        #         new_params[:, 3 * self.dim * self.nr_layers + 2 * self.dim :],
+        #         (size, self.dim),
+        #     )
+        #     / 10.0
+        # )
 
     def jacobian(self, x: Optional[torch.Tensor] = None, rev: bool = False):
         if x is None:
-            return self.log_jacobian_latest
+            return self.log_jacobian_cache
         else:
             return get_jacobian(self, x, dim_in=1, dim_out=1, device=self.device)
 
 
-class PfndELU(PfndBase):
-    def __init__(self, dim=1, ls=16, dim_condition=4, subnet_constructor=None):
-        super().__init__(dim, ls, dim_condition, subnet_constructor)
+class CouplingMonotone(CouplingBase):
+    def __init__(self, dim=1, nr_layers=16, dim_condition=4, conditional_net=None):
+        super().__init__(dim, nr_layers, dim_condition, conditional_net)
+        self.elu = torch.nn.ELU()
 
-    def actfunc(self, x):
-        return torch.nn.ELU()(x)
+    def activation_func(self, x):
+        return self.elu(x)
         # return torch.nn.ReLU()(x)
 
-    def actderiv(self, x):
-        return 1 + self.actfunc(-torch.nn.ReLU()(-x))
+    def activation_deriv(self, x):
+        return 1 + self.activation_func(-torch.relu(-x))
         # return (x > torch.zeros_like(x)).float()
 
-    def function(self, x):
+    def bijective_map(self, x):
         return (
             torch.exp(self.alpha)
             * (
                 x
                 + 0.8
-                * self.sig(self.eps)
+                * torch.sigmoid(self.eps)
                 * torch.sum(
-                    self.actfunc(
-                        x.unsqueeze(2).expand(-1, -1, self.ls) * self.mat1 + self.bias1
+                    self.activation_func(
+                        x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
+                        + self.bias1
                     )
                     * self.mat2,
                     dim=2,
                 )
-                / (torch.sum(torch.nn.ReLU()(-self.mat1 * self.mat2), dim=2) + 1)
+                / (torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1)
             )
             + self.bias2
         )
@@ -138,10 +195,11 @@ class PfndELU(PfndBase):
         return torch.exp(self.alpha) * (
             1
             + 0.8
-            * self.sig(self.eps)
+            * torch.sigmoid(self.eps)
             * torch.sum(
-                self.actderiv(
-                    x.unsqueeze(2).expand(-1, -1, self.ls) * self.mat1 + self.bias1
+                self.activation_deriv(
+                    x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
+                    + self.bias1
                 )
                 * self.mat1
                 * self.mat2,
@@ -150,16 +208,16 @@ class PfndELU(PfndBase):
             / (torch.sum(torch.nn.ReLU()(-self.mat1 * self.mat2), dim=2) + 1)
         )
 
-    def inv(self, y, n=10):
+    def inverse(self, y, n=10):
         yn = y  # * torch.exp(-self.alpha) - self.bias2
         for i in range(n):
-            yn = yn - (self.function(yn) - y) / self.abl(yn)
+            yn = yn - (self.bijective_map(yn) - y) / self.abl(yn)
         return yn
 
 
-class PfndTanh(PfndBase):
-    def __init__(self, dim=1, ls=16, dim_condition=4, subnet_constructor=None):
-        super().__init__(dim, ls, dim_condition, subnet_constructor)
+class CouplingGeneral(CouplingBase):
+    def __init__(self, dim=1, nr_layers=16, dim_condition=4, conditional_net=None):
+        super().__init__(dim, nr_layers, dim_condition, conditional_net)
         self.clamp = 5
 
     def actfunc(self, x):
@@ -170,16 +228,17 @@ class PfndTanh(PfndBase):
         # return 1-self.actfunc(x)**2
         return -2 * x * self.actfunc(x)
 
-    def function(self, x):
+    def bijective_map(self, x):
         return (
             torch.exp(self.alpha)
             * (
                 x
                 + 0.8
-                * self.sig(self.eps)
+                * torch.sigmoid(self.eps)
                 * torch.sum(
                     self.actfunc(
-                        x.unsqueeze(2).expand(-1, -1, self.ls) * self.mat1 + self.bias1
+                        x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
+                        + self.bias1
                     )
                     * self.mat2,
                     dim=2,
@@ -193,10 +252,11 @@ class PfndTanh(PfndBase):
         return torch.exp(self.alpha) * (
             1
             + 0.8
-            * self.sig(self.eps)
+            * torch.sigmoid(self.eps)
             * torch.sum(
                 self.actderiv(
-                    x.unsqueeze(2).expand(-1, -1, self.ls) * self.mat1 + self.bias1
+                    x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
+                    + self.bias1
                 )
                 * self.mat1
                 * self.mat2,
@@ -205,7 +265,7 @@ class PfndTanh(PfndBase):
             / (torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1)
         )
 
-    def inv(self, y, n=5):
+    def inverse(self, y, n=5):
         yn = y  # *torch.exp(-self.alpha)-self.bias2
         for i in range(n):
             yn = yn - (self.function(yn) - y) / self.abl(yn)
@@ -213,48 +273,58 @@ class PfndTanh(PfndBase):
 
 
 class INN(torch.nn.Module):
-    def __init__(self, n_blocks=3, n_dim=1, ls=16, n_condim=4, subnet_constructor=None):
+    def __init__(
+        self,
+        dim: int,
+        dim_condition,
+        nr_blocks: int = 3,
+        nr_layers: int = 16,
+        conditional_net: Optional[torch.nn.Module] = None,
+    ):
         super().__init__()
-        self.n_blocks = n_blocks
+        self.nr_blocks = nr_blocks
         mods = []
-        for i in range(n_blocks):
+        for i in range(nr_blocks):
             mods.append(
-                PfndTanh(
-                    dim=n_dim,
-                    ls=ls,
-                    dim_condition=n_condim,
-                    subnet_constructor=subnet_constructor,
+                CouplingGeneral(
+                    dim=dim,
+                    nr_layers=nr_layers,
+                    dim_condition=dim_condition,
+                    conditional_net=conditional_net,
                 )
             )
             mods.append(
-                PfndELU(
-                    dim=n_dim,
-                    ls=ls,
-                    dim_condition=n_condim,
-                    subnet_constructor=subnet_constructor,
+                CouplingMonotone(
+                    dim=dim,
+                    nr_layers=nr_layers,
+                    dim_condition=dim_condition,
+                    conditional_net=conditional_net,
                 )
             )
         self.blocks = torch.nn.ModuleList(mods)
-        self.log_jacobian_latest = torch.zeros(n_dim)
+        self.log_jacobian_cache = torch.zeros(dim)
 
     def forward(
-        self, x: torch.Tensor, y: Optional[torch.Tensor] = None, rev: bool = False
+        self,
+        x: torch.Tensor,
+        condition: Optional[torch.Tensor] = None,
+        rev: bool = False,
     ):
-        self.log_jacobian_latest = 0.0
+        self.log_jacobian_cache = 0.0
         if not rev:
             for block in self.blocks:
-                x = block.forward(x=x, y=y)
-                self.log_jacobian_latest += block.jacobian()
+                x = block.forward(x=x, condition=condition)
+                self.log_jacobian_cache += block.jacobian()
             return x
         else:
             for block in self.blocks[::-1]:
-                x = block.forward(x=x, y=y, rev=True)
-                self.log_jacobian_latest += block.jacobian()
+                x = block.forward(x=x, condition=condition, rev=True)
+                self.log_jacobian_cache += block.jacobian()
             return x
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):
         if x is None:
-            return self.log_jacobian_latest
+            return self.log_jacobian_cache
         else:
             return get_jacobian(
                 self, x, dim_in=1, dim_out=1, device=self.device, rev=rev
@@ -270,7 +340,9 @@ class CN(torch.nn.Module):
             # mods.append(GlowLikeCouplingBlock(dims_in=n_dim, subnet_constructor=subnet_constructor, net=PfndTanh))
             mods.append(
                 GlowLikeCouplingBlock(
-                    dims_in=n_dim, subnet_constructor=subnet_constructor, net=PfndELU
+                    dims_in=n_dim,
+                    subnet_constructor=subnet_constructor,
+                    net=CouplingMonotone,
                 )
             )
         self.blocks = torch.nn.ModuleList(mods)
@@ -295,7 +367,12 @@ class CN(torch.nn.Module):
 
 class GlowLikeCouplingBlock(torch.nn.Module):
     def __init__(
-        self, dims_in, dims_c=[], subnet_constructor=None, clamp=5.0, net=PfndELU
+        self,
+        dims_in,
+        dims_c=[],
+        subnet_constructor=None,
+        clamp=5.0,
+        net=CouplingMonotone,
     ):
         super().__init__()
         # channels = dims_in[0][0]

@@ -29,17 +29,17 @@ data = (data-t.mean(data)).to(dev)
 con = con.to(dev)
 
 xV = t.arange(-3, 3, 0.1).unsqueeze(1).to(dev)
-net = singleDimINN.INN(n_blocks=4, n_dim=1, ls=30, n_condim=n_conDim, subnet_constructor=subnet_fc).to(dev)
+net = singleDimINN.INN(nr_blocks=4, dim=1, nr_layers=30, dim_condition=0).to(dev)
 
 win1 = viz.histogram(X=data.squeeze(), opts=dict(numbins=50, title='ground truth'))
-z = net(x=xV, y=t.zeros(len(xV), n_conDim).to(dev), rev=False)
+z = net(x=xV, condition=t.zeros(len(xV), n_conDim).to(dev), rev=False)
 win2 = viz.line(X=s(xV), Y=s(z), opts=dict(title='flow'))
-win3 = viz.line(X=s(xV), Y=s(std(z) * t.exp(net.log_jacobian_latest)), opts=dict(title='estimated density'))
+win3 = viz.line(X=s(xV), Y=s(std(z) * t.exp(net.log_jacobian_cache)), opts=dict(title='estimated density'))
 optimizer = t.optim.Adam(net.parameters(), lr=0.01, weight_decay=1e-5)
 
 for i in range(1000):
-    z = net.forward(x=data, y=con, rev=False)
-    grad = net.log_jacobian_latest
+    z = net.forward(x=data, condition=con, rev=False)
+    grad = net.log_jacobian_cache
     loss = t.mean(z ** 2 / 2 - grad)
     optimizer.zero_grad()
     loss.backward()
@@ -49,4 +49,4 @@ for i in range(1000):
         z = net(x=xV, y=t.zeros(len(xV), n_conDim).to(dev), rev=False)
 
         viz.line(X=s(xV), Y=s(z), win=win2, opts=dict(title='flow'))
-        viz.line(X=s(xV), Y=s(std(z) * t.exp(net.log_jacobian_latest)), win=win3, opts=dict(title='estimated density'))
+        viz.line(X=s(xV), Y=s(std(z) * t.exp(net.log_jacobian_cache)), win=win3, opts=dict(title='estimated density'))
