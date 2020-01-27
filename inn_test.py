@@ -1,7 +1,7 @@
 import visdom
 import torch as t
 import math
-from causalpy.neural_networks import singleDINN
+from causalpy.neural_networks import singleDimINN
 
 
 def s(x):
@@ -29,7 +29,7 @@ data = (data-t.mean(data)).to(dev)
 con = con.to(dev)
 
 xV = t.arange(-3, 3, 0.1).unsqueeze(1).to(dev)
-net = singleDINN.INN(n_blocks=4, n_dim=1, ls=30, n_condim=n_conDim, subnet_constructor=subnet_fc).to(dev)
+net = singleDimINN.INN(n_blocks=4, n_dim=1, ls=30, n_condim=n_conDim, subnet_constructor=subnet_fc).to(dev)
 
 win1 = viz.histogram(X=data.squeeze(), opts=dict(numbins=50, title='ground truth'))
 z = net(x=xV, y=t.zeros(len(xV), n_conDim).to(dev), rev=False)

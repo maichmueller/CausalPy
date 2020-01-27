@@ -38,12 +38,12 @@ class PfndBase(torch.nn.Module, ABC):
             self.get_paras(torch.zeros((1, dim_condition)))
         else:
             self.is_conditional = False
-            self.mat1 = torch.nn.Parameter(torch.randn(1, dim, ls), True)
-            self.bias1 = torch.nn.Parameter(torch.randn(1, dim, ls), True)
-            self.mat2 = torch.nn.Parameter(torch.randn(1, dim, ls), True)
-            self.bias2 = torch.nn.Parameter(torch.randn(1, dim), True)
-            self.eps = torch.nn.Parameter(torch.zeros(1, dim) - 1, True)
-            self.alpha = torch.nn.Parameter(torch.zeros(1, dim), True)
+            self.mat1 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
+            self.bias1 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
+            self.mat2 = torch.nn.Parameter(torch.randn(1, dim, ls), requires_grad=True)
+            self.bias2 = torch.nn.Parameter(torch.randn(1, dim), requires_grad=True)
+            self.eps = torch.nn.Parameter(torch.ones(1, dim) * (-1), requires_grad=True)
+            self.alpha = torch.nn.Parameter(torch.zeros(1, dim), requires_grad=True)
 
     def forward(
         self, x: torch.Tensor, y: Optional[torch.Tensor] = None, rev: bool = False
@@ -256,7 +256,9 @@ class INN(torch.nn.Module):
         if x is None:
             return self.log_jacobian_latest
         else:
-            return get_jacobian(self, x, dim_in=1, dim_out=1, device=self.device, rev=rev)
+            return get_jacobian(
+                self, x, dim_in=1, dim_out=1, device=self.device, rev=rev
+            )
 
 
 class CN(torch.nn.Module):
