@@ -6,7 +6,8 @@ def get_jacobian(
         x: torch.Tensor,
         dim_in: int = None,
         dim_out: int = None,
-        device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu",),
+        **kwargs
 ):
     r"""
     Computes the Jacobian matrix for a batch of input data x with respect to the network of the class.
@@ -28,18 +29,23 @@ def get_jacobian(
 
     Parameters
     ----------
-    x: Tensor,
+    network: torch.nn.Module,
+        the network, of which to compute the Jacobian for.
+    x: torch.Tensor,
         the data tensor of appropriate shape for then network. Can also be supplied in batches.
     dim_in: int,
         the input dimension for data intended for the neural network.
         If not provided by the user, will be inferred from the network.
-    dim_in: int,
+    dim_out: int,
         the output dimension of the data returned by neural network.
         If not provided by the user, will be inferred from the network.
+    device: (optional) torch.device,
+        the device to use for the tensor. If not provided, will fall back to cuda, if available,
+        otherwise falls back onto cpu.
 
     Returns
     -------
-    Jacobian: Tensor,
+    Jacobian: torch.Tensor,
         the jacobian matrix for every entry of data in the batch.
     """
     x = x.squeeze()
@@ -62,7 +68,7 @@ def get_jacobian(
     x = x.repeat(dim_out, 1)
     x.requires_grad_(True)
 
-    z = network(x)
+    z = network(x, **kwargs)
 
     unit_vec_matrix = torch.zeros((dim_out * batch_size, dim_out), device=device)
 
