@@ -1,8 +1,10 @@
-from typing import Optional, Callable, Type
+import itertools
+from typing import Optional, Callable, Type, Tuple, List, Union
 
 import torch
 from .utils import get_jacobian
 from abc import ABC, abstractmethod
+import numpy as np
 
 
 class CouplingBase(torch.nn.Module, ABC):
@@ -20,15 +22,20 @@ class CouplingBase(torch.nn.Module, ABC):
         self.device = device
         self.log_jacobian_cache = 0
         self.dim = dim
+        self.dim_condition = dim_condition
         self.nr_layers = nr_layers
         self.nr_inverse_iters = 10
 
-        self.mat1 = torch.randn(1, dim, nr_layers, requires_grad=False)
-        self.bias1 = torch.randn(1, dim, nr_layers, requires_grad=False)
-        self.mat2 = torch.randn(1, dim, nr_layers, requires_grad=False)
-        self.bias2 = torch.randn(1, dim, requires_grad=False)
-        self.eps = torch.ones(1, dim, requires_grad=False) * -1
-        self.alpha = torch.zeros(1, dim, requires_grad=False)
+        self.mat_like_params = [
+            torch.randn(1, dim, nr_layers, requires_grad=False),
+            torch.randn(1, dim, nr_layers, requires_grad=False),
+            torch.randn(1, dim, nr_layers, requires_grad=False),
+        ]
+        self.vec_like_params = [
+            torch.randn(1, dim, requires_grad=False),  # bias2
+            torch.ones(1, dim, requires_grad=False) * -1,  # eps
+            torch.zeros(1, dim, requires_grad=False),  # alpha
+        ]
 
         self.is_conditional = dim_condition > 0
         if self.is_conditional:
@@ -43,19 +50,54 @@ class CouplingBase(torch.nn.Module, ABC):
                 )
             else:
                 # conditional net needs to fulfill:
-                # ( dimension in = dim_condition, dimension out = 3 * dim * (layers + 1) )
+                # ( dimension in = dim_condition, dimension out = 3 * dim * (nr_layers + 1) )
+                with torch.no_grad():
+                    out = conditional_net(torch.ones(1, dim_condition))
+                    assert out.size() == (1, 3 * dim * (nr_layers + 1),), (
+                        f"Size mismatch: Conditional network needs to output size "
+                        f"[batch_size, 3*dim*(nr_layers+1) = {3 * dim * (nr_layers + 1)}]. "
+                        f"Provided was [out] = [{tuple([*out.size()])}]."
+                    )
                 self.conditional_net: torch.nn.Module = conditional_net
         else:
-            self.set_conditional_params(torch.zeros((1, dim_condition)))
-
             # only in the case of no conditional neural network are these trainable parameters.
             # Otherwise their data will be provided by the condition generating network.
-            self.mat1 = torch.nn.Parameter(self.mat1, requires_grad=True)
-            self.bias1 = torch.nn.Parameter(self.bias1, requires_grad=True)
-            self.mat2 = torch.nn.Parameter(self.mat2, requires_grad=True)
-            self.bias2 = torch.nn.Parameter(self.bias2, requires_grad=True)
-            self.eps = torch.nn.Parameter(self.eps, requires_grad=True)
-            self.alpha = torch.nn.Parameter(self.alpha, requires_grad=True)
+            self.mat_like_params = torch.nn.ParameterList(
+                [
+                    torch.nn.Parameter(tensor, requires_grad=True)
+                    for tensor in self.mat_like_params
+                ]
+            )
+            self.vec_like_params = torch.nn.ParameterList(
+                [
+                    torch.nn.Parameter(tensor, requires_grad=True)
+                    for tensor in self.vec_like_params
+                ]
+            )
+
+    @property
+    def mat1(self):
+        return self.mat_like_params[0]
+
+    @property
+    def bias1(self):
+        return self.mat_like_params[1]
+
+    @property
+    def mat2(self):
+        return self.mat_like_params[2]
+
+    @property
+    def bias2(self):
+        return self.vec_like_params[0]
+
+    @property
+    def eps(self):
+        return self.vec_like_params[1]
+
+    @property
+    def alpha(self):
+        return self.vec_like_params[2]
 
     def forward(
         self,
@@ -67,22 +109,31 @@ class CouplingBase(torch.nn.Module, ABC):
             self.set_conditional_params(condition)
 
         if not rev:
-            self.log_jacobian_cache = torch.log(self.abl(x))
-            return self.bijective_map(x)
+            self.log_jacobian_cache = torch.log(self.transform_deriv(x))
+            return self.transform(x)
         else:
-            z = self.inverse(x, n=self.nr_inverse_iters)
-            self.log_jacobian_cache = -torch.log(self.abl(z))
+            z = self.transform_inverse(x, nr_iters=self.nr_inverse_iters)
+            self.log_jacobian_cache = -torch.log(self.transform_deriv(z))
             return z
 
     @abstractmethod
-    def inverse(self, x, n):
+    def transform(self, x: torch.Tensor):
         raise NotImplementedError
 
     @abstractmethod
-    def abl(self, x):
+    def transform_deriv(self, x: torch.Tensor):
         raise NotImplementedError
 
-    def set_conditional_params(self, condition_tensor: torch.Tensor):
+    def transform_inverse(self, y: torch.Tensor, nr_iters=10):
+        """
+        Newton method for iterative approximation of the inverse g of the transformation f at point y: g(y).
+        """
+        yn = y  # * torch.exp(-self.alpha) - self.bias2
+        for i in range(nr_iters):
+            yn = yn - (self.transform(yn) - y) / self.transform_deriv(yn)
+        return yn
+
+    def set_conditional_params(self, condition: torch.Tensor):
         """
         In the case of a conditional INN set the parameters of the bijective map for the condition.
 
@@ -90,66 +141,24 @@ class CouplingBase(torch.nn.Module, ABC):
         -----
         If this method was called although the INN is unconditional, this method will raise uncaught errors.
         """
+        assert (
+            self.is_conditional
+        ), "Conditional parameters can only be set when the INN is conditional. They are learned otherwise."
+        size = condition.size(0)
+        new_params = self.conditional_net(condition)
 
-        size = condition_tensor.size(0)
-        new_params = self.conditional_net(condition_tensor)
+        begin = 0
 
-        shapes_params = [
-            (self.matrix_shape, self.mat1),
-            (self.matrix_shape, self.mat2),
-            (self.matrix_shape, self.bias1),
-            (self.bias_shape, self.bias2),
-            (self.bias_shape, self.eps),
-            (self.bias_shape, self.alpha)
-        ]
-        for i, (new_shape, param) in enumerate(shapes_params):
-            if i == 0:
-                start = 0
-            else:
+        def reshape(param_list, new_shape):
+            nonlocal begin
+            for i, param in enumerate(param_list):
                 # i * nr_previous_params_elements
-                start = i * shapes_params[i-1][1].nelement() // size
-            stop = (i + 1) * param.nelement()
+                end = begin + np.prod(param.size()[1:])  # ignore batch size of last run
+                param_list[i] = torch.reshape(new_params[:, begin:end], new_shape)
+                begin = end
 
-            param.data = torch.reshape(new_params[:, slice(start, stop)], new_shape).repeat(size, *new_shape)
-        #
-        # self.mat1 = torch.reshape(
-        #     new_params[:, : self.dim * self.nr_layers], (size, self.dim, self.nr_layers)
-        # )
-        # self.bias1 = torch.reshape(
-        #     new_params[:, self.dim * self.nr_layers : 2 * self.dim * self.nr_layers],
-        #     (size, self.dim, self.nr_layers),
-        # )
-        # self.mat2 = torch.reshape(
-        #     new_params[:, 2 * self.dim * self.nr_layers : 3 * self.dim * self.nr_layers],
-        #     (size, self.dim, self.nr_layers),
-        # )
-        # self.bias2 = torch.reshape(
-        #     new_params[
-        #         :,
-        #         3 * self.dim * self.nr_layers : 3 * self.dim * self.nr_layers
-        #         + self.dim,
-        #     ],
-        #     (size, self.dim),
-        # )
-        # self.eps = (
-        #     torch.reshape(
-        #         new_params[
-        #             :,
-        #             3 * self.dim * self.nr_layers
-        #             + self.dim : 3 * self.dim * self.nr_layers
-        #             + 2 * self.dim,
-        #         ],
-        #         (size, self.dim),
-        #     )
-        #     / 10.0
-        # )
-        # self.alpha = (
-        #     torch.reshape(
-        #         new_params[:, 3 * self.dim * self.nr_layers + 2 * self.dim :],
-        #         (size, self.dim),
-        #     )
-        #     / 10.0
-        # )
+        reshape(self.mat_like_params, (size,) + self.matrix_shape)
+        reshape(self.vec_like_params, (size,) + self.bias_shape)
 
     def jacobian(self, x: Optional[torch.Tensor] = None, rev: bool = False):
         if x is None:
@@ -159,117 +168,85 @@ class CouplingBase(torch.nn.Module, ABC):
 
 
 class CouplingMonotone(CouplingBase):
-    def __init__(self, dim=1, nr_layers=16, dim_condition=4, conditional_net=None):
-        super().__init__(dim, nr_layers, dim_condition, conditional_net)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.elu = torch.nn.ELU()
 
     def activation_func(self, x):
         return self.elu(x)
-        # return torch.nn.ReLU()(x)
 
     def activation_deriv(self, x):
         return 1 + self.activation_func(-torch.relu(-x))
-        # return (x > torch.zeros_like(x)).float()
 
-    def bijective_map(self, x):
+    def transform(self, x):
+        internal_sum = torch.sum(
+            self.mat2
+            * self.activation_func(
+                x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1 + self.bias1
+            ),
+            dim=2,
+        )
+        divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
         return (
-            torch.exp(self.alpha)
-            * (
-                x
-                + 0.8
-                * torch.sigmoid(self.eps)
-                * torch.sum(
-                    self.activation_func(
-                        x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
-                        + self.bias1
-                    )
-                    * self.mat2,
-                    dim=2,
-                )
-                / (torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1)
-            )
+            self.alpha.exp()
+            * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
 
-    def abl(self, x):
-        return torch.exp(self.alpha) * (
-            1
-            + 0.8
-            * torch.sigmoid(self.eps)
-            * torch.sum(
-                self.activation_deriv(
-                    x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
-                    + self.bias1
-                )
-                * self.mat1
-                * self.mat2,
-                dim=2,
+    def transform_deriv(self, x):
+        internal_sum = torch.sum(
+            self.activation_deriv(
+                x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1 + self.bias1
             )
-            / (torch.sum(torch.nn.ReLU()(-self.mat1 * self.mat2), dim=2) + 1)
+            * self.mat1
+            * self.mat2,
+            dim=2,
         )
-
-    def inverse(self, y, n=10):
-        yn = y  # * torch.exp(-self.alpha) - self.bias2
-        for i in range(n):
-            yn = yn - (self.bijective_map(yn) - y) / self.abl(yn)
-        return yn
+        divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
+        return self.alpha.exp() * (
+            1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
+        )
 
 
 class CouplingGeneral(CouplingBase):
-    def __init__(self, dim=1, nr_layers=16, dim_condition=4, conditional_net=None):
-        super().__init__(dim, nr_layers, dim_condition, conditional_net)
-        self.clamp = 5
-
-    def actfunc(self, x):
+    @staticmethod
+    def activation_func(x):
         # return torch.tanh(x)
-        return torch.exp(-(x ** 2)) * torch.tensor(1.16)
+        return torch.exp(-(x ** 2)) * 1.16
 
-    def actderiv(self, x):
-        # return 1-self.actfunc(x)**2
-        return -2 * x * self.actfunc(x)
+    @staticmethod
+    def activation_deriv(x):
+        # return 1 - self.activation_func(x) ** 2
+        return -2 * x * CouplingGeneral.activation_func(x)
 
-    def bijective_map(self, x):
+    def transform(self, x: torch.Tensor):
+        internal_sum = torch.sum(
+            self.activation_func(
+                x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1 + self.bias1
+            )
+            * self.mat2,
+            dim=2,
+        )
+        divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
         return (
             torch.exp(self.alpha)
-            * (
-                x
-                + 0.8
-                * torch.sigmoid(self.eps)
-                * torch.sum(
-                    self.actfunc(
-                        x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
-                        + self.bias1
-                    )
-                    * self.mat2,
-                    dim=2,
-                )
-                / (torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1)
-            )
+            * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
 
-    def abl(self, x):
-        return torch.exp(self.alpha) * (
-            1
-            + 0.8
-            * torch.sigmoid(self.eps)
-            * torch.sum(
-                self.actderiv(
-                    x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1
-                    + self.bias1
-                )
-                * self.mat1
-                * self.mat2,
-                dim=2,
+    def transform_deriv(self, x: torch.Tensor):
+        internal_sum = torch.sum(
+            self.activation_deriv(
+                x.unsqueeze(2).expand(-1, -1, self.nr_layers) * self.mat1 + self.bias1
             )
-            / (torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1)
+            * self.mat1
+            * self.mat2,
+            dim=2,
         )
-
-    def inverse(self, y, n=5):
-        yn = y  # *torch.exp(-self.alpha)-self.bias2
-        for i in range(n):
-            yn = yn - (self.function(yn) - y) / self.abl(yn)
-        return yn
+        divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
+        return torch.exp(self.alpha) * (
+            1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
+        )
 
 
 class INN(torch.nn.Module):
@@ -313,12 +290,12 @@ class INN(torch.nn.Module):
         self.log_jacobian_cache = 0.0
         if not rev:
             for block in self.blocks:
-                x = block.forward(x=x, condition=condition)
+                x = block(x=x, condition=condition)
                 self.log_jacobian_cache += block.jacobian()
             return x
         else:
             for block in self.blocks[::-1]:
-                x = block.forward(x=x, condition=condition, rev=True)
+                x = block(x=x, condition=condition, rev=True)
                 self.log_jacobian_cache += block.jacobian()
             return x
 
