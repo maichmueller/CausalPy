@@ -39,8 +39,8 @@ optimizer = t.optim.Adam(net.parameters(), lr=0.01, weight_decay=1e-5)
 
 for i in range(1000):
     z = net(x=data, condition=con, rev=False)
-    grad = net.log_jacobian_cache
-    loss = (z ** 2 / 2 - grad).mean()
+    log_grad = net.log_jacobian_cache
+    loss = (z ** 2 / 2 - log_grad).mean()
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
