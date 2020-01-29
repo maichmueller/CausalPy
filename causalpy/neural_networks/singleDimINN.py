@@ -139,7 +139,7 @@ class CouplingBase(torch.nn.Module, ABC):
 
         Notes
         -----
-        If this method was called although the INN is unconditional, this method will raise uncaught errors.
+        If this method was called although the INN is unconditional, uncaught errors will be raised.
         """
         assert (
             self.is_conditional
