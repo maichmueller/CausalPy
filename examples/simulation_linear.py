@@ -124,7 +124,8 @@ def simulate(
         name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))
     }
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    cn.reseed(seed + 10)
+    if seed is not None:
+        cn.reseed(seed + 10)
     return cn
 
 

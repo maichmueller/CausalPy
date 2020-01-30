@@ -6,10 +6,13 @@ import torch
 from torch.nn import Parameter, Module
 from torch.utils.data import DataLoader, TensorDataset
 import math
+
+from tqdm.auto import tqdm
+
 from causalpy.neural_networks import cINN
 import pandas as pd
 import numpy as np
-from .simulation_linear import simulate
+from examples.simulation_linear import simulate
 from causalpy.neural_networks import L0InputGate
 from causalpy.causal_prediction.interventional import ICPredictor
 
@@ -197,28 +200,6 @@ class MMDStatistic:
             return (eps + inner) ** (1.0 / norm)
 
 
-class ConditionalNet(torch.nn.Module):
-    def __init__(
-        self,
-        obs: Union[np.ndarray, pd.DataFrame],
-        envs: Collection[int],
-        output_dims: int,
-    ):
-        super().__init__()
-
-        n, p = obs.shape
-        self.environments = {e: np.where(envs == e)[0] for e in np.unique(envs)}
-        self.obs = obs
-        self.masker = L0InputGate(p, monte_carlo_sample_size=100)
-        self.out_linear = torch.nn.Linear(p, output_dims)
-
-    def forward(self, tensor_in):
-        return self.out_linear(self.masker(tensor_in))
-
-    def mask_data(self, env):
-        return self(self.obs[self.environments[env]])
-
-
 if __name__ == "__main__":
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -226,68 +207,82 @@ if __name__ == "__main__":
     seed = 0
     np.random.seed(seed)
 
-    nr_genes = 100
+    nr_genes = 50
     scm = simulate(nr_genes, 2)
     target_gene = np.random.choice(
-        list(scm.get_variables())[len(list(scm.get_variables())) :]
+        list(scm.get_variables())[len(list(scm.get_variables())) // 2 :]
     )
     target_parents = list(scm.graph.predecessors(target_gene))
     scm.reseed(seed)
     environments = []
-    sample_data = [scm.sample(1000)]
-    environments += [0] * 1000
+    sample_data = [scm.sample(100)]
+    environments += [0] * 100
     for parent in target_parents:
         scm.do_intervention([parent], [0])
-        sample_data.append(scm.sample(1000))
-        environments += [environments[-1] + 1] * 1000
-    data = pd.concat(sample_data)
+        sample_data.append(scm.sample(100))
+        environments += [environments[-1] + 1] * 100
+    data = pd.concat(sample_data, sort=True)
     environments = np.array(environments)
     target_data = data[target_gene]
     data = data.drop(columns=target_gene)
-    nr_envs = np.unique(environments)
+    envs_unique = np.unique(environments)
+    env_map = {e: np.where(environments == e)[0] for e in envs_unique}
 
-    dataset = TensorDataset(torch.as_tensor(data), torch.as_tensor(target_data))
+    data, target_data = list(map(lambda x: torch.as_tensor(x.to_numpy()).float().to(dev), (data, target_data)))
 
     dim_condition = data.shape[1]
-    conditional_inns = [
+    cINN_list = [
         cINN(nr_blocks=4, dim=1, nr_layers=30, dim_condition=dim_condition).to(dev)
-        for _ in nr_envs
+        for _ in envs_unique
     ]
+    l0mask = L0InputGate(data.shape[1], monte_carlo_sample_size=100).to(dev)
 
-    z = c_inn(
-        x=data, condition=torch.zeros(len(data), dim_condition).to(dev), rev=False
-    )
-    win2 = viz.line(X=s(data), Y=s(z), opts=dict(title="Forward map"))
-    win3 = viz.line(
-        X=s(data),
-        Y=s(std(z) * torch.exp(c_inn.log_jacobian_cache)),
-        opts=dict(title="estimated density"),
-    )
     optimizer = torch.optim.Adam(
-        itertools.chain(
-            (c_inn.parameters() for c_inn in conditional_inns),
-            lr=0.01,
-            weight_decay=1e-5,
-        )
+        itertools.chain(l0mask.parameters(), *[c_inn.parameters() for c_inn in cINN_list]),
+        lr=0.01,
+        weight_decay=1e-5,
     )
+    epochs = 100
 
-    for i in range(1000):
-        z = c_inn(x=data, condition=con, rev=False)
-        log_grad = c_inn.log_jacobian_cache
-        loss = (z ** 2 / 2 - log_grad).mean()
+    vis_wins = {"map": [], "density": []}
+
+    for env, cinn in enumerate(cINN_list):
+        x = torch.arange(-3, 3, 6/data.shape[0]).unsqueeze(1).to(dev)
+        z = cinn(
+            x=x, condition=torch.zeros(data.shape[0], dim_condition).to(dev), rev=False
+        )
+        vis_wins["map"].append(viz.line(X=s(x), Y=s(z), opts=dict(title=f"Forward Map Env {env}")))
+        vis_wins["density"].append(viz.line(
+            X=s(x),
+            Y=s(std(z) * torch.exp(cinn.log_jacobian_cache)),
+            opts=dict(title=f"Estimated Density Env {env}"),
+            )
+        )
+
+    for i in tqdm(range(epochs)):
         optimizer.zero_grad()
+
+        masked_conditional_data = l0mask(data)
+        loss = torch.zeros(1).to(dev)
+        for env, env_indices in env_map.items():
+            env_masked_cond_data = masked_conditional_data[env_indices]
+            env_data_in = torch.arange(-3, 3, 6/env_masked_cond_data.shape[0]).unsqueeze(1).to(dev)
+            env_cinn = cINN_list[env]
+            z = env_cinn(x=env_data_in, condition=env_masked_cond_data, rev=False)
+
+            log_grad = env_cinn.log_jacobian_cache
+            loss += (z ** 2 / 2 - log_grad).mean()
+
+            if i % 1 == 0:
+                viz.line(X=s(env_data_in), Y=s(z), win=vis_wins["map"][env], opts=dict(title=f"Forward Map Env {env}"))
+                viz.line(
+                    X=s(env_data_in),
+                    Y=s(std(z) * torch.exp(env_cinn.log_jacobian_cache)),
+                    win=vis_wins["density"][env],
+                    opts=dict(title=f"Estimated Density Env {env}"),
+                )
+
         loss.backward()
         optimizer.step()
-        if i % 10 == 0:
-            print(loss)
-            z = c_inn(
-                x=xV, condition=torch.zeros(len(xV), dim_condition).to(dev), rev=False
-            )
 
-            viz.line(X=s(xV), Y=s(z), win=win2, opts=dict(title="flow"))
-            viz.line(
-                X=s(xV),
-                Y=s(std(z) * torch.exp(c_inn.log_jacobian_cache)),
-                win=win3,
-                opts=dict(title="estimated density"),
-            )
+

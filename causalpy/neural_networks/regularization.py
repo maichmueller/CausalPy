@@ -429,7 +429,7 @@ class L0InputGate(torch.nn.Module):
         self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
         self.gamma = gamma
         self.zeta = zeta
-        self.monte_carlo_sample_size = monte_carlo_sample_size
+        self.mcs_size = monte_carlo_sample_size
         self.gates = None
 
         self.hardTanh = torch.nn.Hardtanh(0, 1)
@@ -439,16 +439,16 @@ class L0InputGate(torch.nn.Module):
         batch_size = x.shape[0]
 
         self.gates = self.create_gates().view(
-            self.monte_carlo_sample_size, 1, self.n_dim
+            self.mcs_size, 1, self.n_dim
         )
 
-        x = x.repeat(self.monte_carlo_sample_size, 1).view(
-            self.L, batch_size, self.n_dim
+        x = x.repeat(self.mcs_size, 1).view(
+            self.mcs_size, batch_size, self.n_dim
         )
 
         x *= self.gates
 
-        x = x.view(self.monte_carlo_sample_size * batch_size, self.n_dim)
+        x = x.view(self.mcs_size * batch_size, self.n_dim)
 
         return x
 
@@ -483,8 +483,8 @@ class L0InputGate(torch.nn.Module):
             torch.tensor([0.0]), torch.tensor([1.0])
         )
         u = (
-            m.sample(sample_shape=(self.monte_carlo_sample_size, dim))
-            .view(self.monte_carlo_sample_size, dim)
+            m.sample(sample_shape=(self.mcs_size, dim))
+            .view(self.mcs_size, dim)
             .to(self.device)
         )
         s = self.reparameterize(u, self.log_alpha, self.sigmoid(self.beta))
