@@ -249,7 +249,7 @@ class CouplingGeneral(CouplingBase):
         )
 
 
-class INN(torch.nn.Module):
+class cINN(torch.nn.Module):
     def __init__(
         self,
         dim: int,
@@ -410,7 +410,7 @@ class GlowLikeCouplingBlock(torch.nn.Module):
 
 class bignet(torch.nn.Module):
     def __init__(
-        self, n_dim=3, n_dimcon=0, n_blocks=1, ls=32, net=INN, subnet_constructor=None
+        self, n_dim=3, n_dimcon=0, n_blocks=1, ls=32, net=cINN, subnet_constructor=None
     ):
         super(bignet, self).__init__()
         self.con = n_dimcon > 0

@@ -140,7 +140,7 @@ class ANMPredictor(ICPredictor):
         Parameters
         ----------
         x: Tensor,
-            the data tensor of appropriate shape for then network. Can also be supplied in batches.
+            the data tensor of appropriate shape for the network. Can also be supplied in batches.
         dim_in: int,
             the input dimension for data intended for the neural network.
             If not provided by the user, will be inferred from the network.

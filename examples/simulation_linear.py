@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
+from scipy import special
+import torch
 
 
 def chance_drop_per_level(level, max_chance):
@@ -113,8 +115,8 @@ def simulate(
             NoiseGenerator(
                 "skewnorm",
                 scale=rs.random() * (nr_dep_levels - gene_level),
-                a=0.4,
-                source="scipy"
+                a=0.2,
+                source="scipy",
             ),
         ]
 
@@ -122,7 +124,7 @@ def simulate(
         name: r"$G_{" + str(i) + "}$" for name, i in zip(gene_names, range(nr_genes))
     }
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
-    cn.reseed(seed+10)
+    cn.reseed(seed + 10)
     return cn
 
 
@@ -133,7 +135,10 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
         rs = np.random.RandomState()
         sample = scm_net.sample(10000)
         sample = pd.DataFrame(
-            rs.poisson(np.log(1 + np.exp(sample))), columns=sample.columns
+            rs.poisson(
+                torch.nn.Softplus(beta=1)(torch.as_tensor(sample.to_numpy())).numpy()
+            ),
+            columns=sample.columns,
         )
 
     sample[genes].hist(bins=bins, figsize=figsize)
@@ -142,62 +147,42 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
     def neg_binomial(mu, phi):
         return phi * np.power(mu, 2) + mu
 
+    def dropout_rate_nb(mu, phi):
+        phi_min1 = 1 / phi
+        return np.power(phi_min1 / (mu + phi_min1), phi_min1)
+
     def zinb(mu, pi, alpha):
-        return (1-pi) * mu * (mu + (pi + alpha) * mu)
+        return (1 - pi) * mu * (mu + (pi + alpha) * mu)
+
+    def dropout_rate_zinb(mu, pi, alpha):
+        return pi + (1 - pi) * np.power((1 / (1 + alpha * mu)), 1 / alpha)
 
     mean = sample.mean(axis=0)
     var = sample.var(axis=0)
-    # fig, ax = plt.subplots(2, 1, sharex=True, sharey=True, figsize=(10, 10))
-    #
-    # ax[0].scatter(mean, var, color="black", alpha=0.5)
-    # popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()
-    # mean_sorted = np.sort(mean)
-    # ax[0].plot(
-    #     mean_sorted,
-    #     neg_binomial(mean_sorted, *popt_nb),
-    #     color="red",
-    #     label=f"Var$(\mu, \phi) = \mu + \phi \mu^2$ with $\phi = {popt_nb.round(5)[0]}$",
-    # )
-    # ax[0].legend(fancybox=True, shadow=True)
-    # ax[0].loglog()
-    #
-    # ax[1].scatter(mean, var, color="black", alpha=0.5)
-    # ax[1].set_xlabel("Mean $\mu$")
-    # ax[1].set_ylabel("Variance")
-    # popt_zinb = curve_fit(zinb, mean, var)[0].flatten()
-    # mean_sorted = np.sort(mean)
-    # ax[1].plot(
-    #     mean_sorted,
-    #     zinb(mean_sorted, *popt_zinb),
-    #     color="red",
-    #     label=r"Var$(\mu, \pi, \alpha) = (1 + \pi)\mu (\mu + (\pi + \alpha) \mu)$ with $\pi = {}, \alpha = {}$".format(popt_zinb.round(5)[0], popt_zinb.round(5)[1]),
-    # )
-    # ax[1].legend(fancybox=True, shadow=True)
-    # ax[1].loglog()
-    # plt.xlabel("Mean $\mu$")
-    # plt.ylabel("Variance")
-    # fig.suptitle("Mean-Variance-Relationship")
-    # plt.show()
 
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(1, figsize=(10, 8))
 
     plt.scatter(mean, var, color="black", alpha=0.1)
     popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()
-    mean_sorted = np.sort(mean)
+    mean_sorted = mean.sort_values()
     plt.plot(
         mean_sorted,
         neg_binomial(mean_sorted, *popt_nb),
         color="red",
-        label=f"NB~~: Var$(\mu, \phi) = \mu + \phi \mu^2$ \quad [$\phi = {popt_nb.round(3)[0]}$]",
+        label=f"NB~: Var$(\mu, \phi) = \mu + \phi \mu^2$ \t [$\phi = {popt_nb.round(3)[0]}$]",
     )
 
     popt_zinb = curve_fit(zinb, mean, var)[0].flatten()
-    mean_sorted = np.sort(mean)
     plt.plot(
         mean_sorted,
         zinb(mean_sorted, *popt_zinb),
         color="green",
-        label=r"ZINB: Var$(\mu, \pi, \alpha) = (1 - \pi)\mu (\mu + (\pi + \alpha) \mu)$ \quad [$\pi = {}, \alpha = {}$]".format(popt_zinb.round(3)[0], popt_zinb.round(3)[1]),
+        label=r"ZINB: Var$(\mu, \pi, \alpha) = (1 - \pi)\mu (\mu + (\pi + \alpha) \mu)$"
+        + "\t "
+        + r"[$\pi"
+        + f" = {popt_zinb.round(3)[0]}, "
+        + r"\alpha"
+        + f" = {popt_zinb.round(3)[1]}$]",
     )
     plt.legend(fancybox=True, shadow=True)
     plt.loglog()
@@ -205,11 +190,48 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
     plt.ylabel("Variance")
     plt.title("Mean-Variance-Relationship")
     plt.show()
+
+    #########################
+    # Expected dropout rate #
+    #########################
+
+    obs_dropout_per_gene = ((sample == 0).sum(axis=0) / sample.shape[0])[
+        mean_sorted.index.values
+    ]
+
+    fig = plt.figure(2, figsize=(10, 8))
+
+    plt.scatter(mean_sorted, obs_dropout_per_gene, color="black", alpha=0.1)
+    plt.plot(
+        mean_sorted,
+        dropout_rate_nb(mean_sorted, *popt_nb),
+        color="red",
+        label=r"NB~: $\mathbb{P}(0 \mid| \mu, \phi) = \left(\frac{1}{1 + \phi \mu}\right)^{\phi^{-1}}$"
+        + "\t"
+        + f"[$\phi = {popt_nb.round(3)[0]}$]",
+    )
+    plt.plot(
+        mean_sorted,
+        dropout_rate_zinb(mean_sorted, *popt_zinb),
+        color="green",
+        label=r"ZINB: $\mathbb{P}(0 \mid| \mu, \pi, \alpha) = \pi  + (1 - \pi) * "
+        r"\left(\frac{1}{1 + \alpha \mu}\right)^{\alpha^{-1}}$"
+        + "\t"
+        + f"[$\pi = {popt_zinb.round(3)[0]}, "
+        + r"\alpha"
+        + f" = {popt_zinb.round(3)[1]}$]",
+    )
+    plt.legend(fancybox=True, shadow=True)
+    plt.xscale("log")
+    plt.xlabel("Mean $\mu$")
+    plt.ylabel("$\mathbb{P}(0 \mid \mu)$")
+    plt.title("Mean-Dropout-Relationship")
+    plt.show()
     return sample
 
 
 if __name__ == "__main__":
-    nr_genes = 10000
+    nr_genes = 50
     causal_net = simulate(nr_genes, 2, seed=1)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)
