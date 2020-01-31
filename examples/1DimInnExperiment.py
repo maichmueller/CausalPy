@@ -1,9 +1,10 @@
 import itertools
-from typing import Union, Collection
+from typing import Union, Collection, Optional
 
 import visdom
 import torch
 from torch.nn import Parameter, Module
+from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 import math
 
@@ -29,6 +30,88 @@ def subnet_fc(c_in, c_out):
     return torch.nn.Sequential(
         torch.nn.Linear(c_in, 100), torch.nn.ReLU(), torch.nn.Linear(100, c_out)
     )
+
+
+def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
+
+    # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
+    # the numpy code looks like the following:
+    #   XY = X @ Y.transpose()
+    #   XX_d = np.ones(XY.shape) * np.diag(X @ X.transpose())[:, np.newaxis]  # row wise mult of diagonal with mat
+    #   YY_d = np.ones(XY.shape) * np.diag(Y @ Y.transpose())[np.newaxis, :]  # col wise mult of diagonal with mat
+    #   pairwise_norm = XX_d + YY_d - 2 * XY
+    if Y is not None:
+        if X.dim() == 1:
+            X.unsqueeze_(1)
+        if Y.dim() == 1:
+            Y.unsqueeze_(1)
+        # adapted for torch:
+        XY = X @ Y.t()
+        XY_ones = torch.ones_like(XY)
+        XX_d = XY_ones * torch.diagonal(X @ X.t()).unsqueeze(1)
+        YY_d = XY_ones * torch.diagonal(Y @ Y.t()).unsqueeze(0)
+        pairwise_norm = XX_d + YY_d - 2 * XY
+    else:
+        if X.dim() == 1:
+            X.unsqueeze_(1)
+        # one can save some time by not recomputing the same values in some steps
+        XX = X @ X.t()
+        XX_ones = torch.ones_like(XX)
+        XX_diagonal = torch.diagonal(XX)
+        XX_row_diag = XX_ones * XX_diagonal.unsqueeze(1)
+        XX_col_diag = XX_ones * XX_diagonal.unsqueeze(0)
+        pairwise_norm = XX_row_diag + XX_col_diag - 2 * XX
+
+    if sigma is None:
+        try:
+            mdist = torch.median(pairwise_norm[pairwise_norm != 0])
+            sigma = torch.sqrt(mdist)
+        except RuntimeError:
+            sigma = 1.0
+
+    gaussian_rbf = torch.exp(pairwise_norm * (-0.5 / (sigma ** 2)))
+    return gaussian_rbf
+
+
+def centering(K: Tensor, device):
+    n = K.shape[0]
+    unit = torch.ones(n, n).to(device)
+    I = torch.eye(n, device=device)
+    Q = I - unit / n
+    return torch.mm(torch.mm(Q, K), Q)
+
+
+def mmd_multiscale(x, y, normalize_j=True):
+    """ MMD with rationale kernel"""
+    # Normalize Inputs Jointly
+    if normalize_j:
+        xy = torch.cat((x, y), 0).detach()
+        sd = torch.sqrt(xy.var(0))
+        mean = xy.mean(0)
+        x = (x - mean) / sd
+        y = (y - mean) / sd
+
+    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+
+    rx = xx.diag().unsqueeze(0).expand_as(xx)
+    ry = yy.diag().unsqueeze(0).expand_as(yy)
+
+    dxx = rx.t() + rx - 2.0 * xx
+    dyy = ry.t() + ry - 2.0 * yy
+    dxy = rx.t() + ry - 2.0 * zz
+
+    XX, YY, XY = (
+        torch.zeros_like(xx),
+        torch.zeros_like(xx),
+        torch.zeros_like(xx),
+    )
+
+    for a in [6e-2, 1e-1, 3e-1, 5e-1, 7e-1, 1, 1.2, 1.5, 1.8, 2, 2.5]:
+        XX += a ** 2 * (a ** 2 + dxx) ** -1
+        YY += a ** 2 * (a ** 2 + dyy) ** -1
+        XY += a ** 2 * (a ** 2 + dxy) ** -1
+
+    return torch.mean(XX + YY - 2.0 * XY)
 
 
 class MMDStatistic:
@@ -80,13 +163,10 @@ class MMDStatistic:
         sample_12 = torch.cat((sample_1, sample_2), 0)
         distances = self.pdist(sample_12, sample_12, norm=2)
 
-        kernels = None
+        kernels = 0
         for alpha in alphas:
             kernels_a = torch.exp(-alpha * distances ** 2)
-            if kernels is None:
-                kernels = kernels_a
-            else:
-                kernels = kernels + kernels_a
+            kernels += kernels_a
 
         k_1 = kernels[: self.n_1, : self.n_1]
         k_2 = kernels[self.n_1 :, self.n_1 :]
@@ -207,7 +287,7 @@ if __name__ == "__main__":
     seed = 0
     np.random.seed(seed)
 
-    nr_genes = 50
+    nr_genes = 10
     scm = simulate(nr_genes, 2)
     target_gene = np.random.choice(
         list(scm.get_variables())[len(list(scm.get_variables())) // 2 :]
@@ -217,10 +297,10 @@ if __name__ == "__main__":
     environments = []
     sample_data = [scm.sample(100)]
     environments += [0] * 100
-    for parent in target_parents:
-        scm.do_intervention([parent], [0])
-        sample_data.append(scm.sample(100))
-        environments += [environments[-1] + 1] * 100
+    # for parent in target_parents:
+    #     scm.do_intervention([parent], [0])
+    #     sample_data.append(scm.sample(100))
+    #     environments += [environments[-1] + 1] * 100
     data = pd.concat(sample_data, sort=True)
     environments = np.array(environments)
     target_data = data[target_gene]
@@ -228,7 +308,11 @@ if __name__ == "__main__":
     envs_unique = np.unique(environments)
     env_map = {e: np.where(environments == e)[0] for e in envs_unique}
 
-    data, target_data = list(map(lambda x: torch.as_tensor(x.to_numpy()).float().to(dev), (data, target_data)))
+    data, target_data = list(
+        map(
+            lambda x: torch.as_tensor(x.to_numpy()).float().to(dev), (data, target_data)
+        )
+    )
 
     dim_condition = data.shape[1]
     cINN_list = [
@@ -238,7 +322,8 @@ if __name__ == "__main__":
     l0mask = L0InputGate(data.shape[1], monte_carlo_sample_size=100).to(dev)
 
     optimizer = torch.optim.Adam(
-        itertools.chain(l0mask.parameters(), *[c_inn.parameters() for c_inn in cINN_list]),
+        itertools.chain(*[c_inn.parameters() for c_inn in cINN_list]
+        ),
         lr=0.01,
         weight_decay=1e-5,
     )
@@ -247,15 +332,20 @@ if __name__ == "__main__":
     vis_wins = {"map": [], "density": []}
 
     for env, cinn in enumerate(cINN_list):
-        x = torch.arange(-3, 3, 6/data.shape[0]).unsqueeze(1).to(dev)
-        z = cinn(
+        x = torch.arange(-3, 3, 6 / data.shape[0]).unsqueeze(1).to(dev)
+        gauss_sample = cinn(
             x=x, condition=torch.zeros(data.shape[0], dim_condition).to(dev), rev=False
         )
-        vis_wins["map"].append(viz.line(X=s(x), Y=s(z), opts=dict(title=f"Forward Map Env {env}")))
-        vis_wins["density"].append(viz.line(
-            X=s(x),
-            Y=s(std(z) * torch.exp(cinn.log_jacobian_cache)),
-            opts=dict(title=f"Estimated Density Env {env}"),
+        vis_wins["map"].append(
+            viz.line(
+                X=s(x), Y=s(gauss_sample), opts=dict(title=f"Forward Map Env {env}")
+            )
+        )
+        vis_wins["density"].append(
+            viz.line(
+                X=s(x),
+                Y=s(std(gauss_sample) * torch.exp(cinn.log_jacobian_cache)),
+                opts=dict(title=f"Estimated Density Env {env}"),
             )
         )
 
@@ -263,26 +353,52 @@ if __name__ == "__main__":
         optimizer.zero_grad()
 
         masked_conditional_data = l0mask(data)
+        # masked_conditional_data = data
         loss = torch.zeros(1).to(dev)
+        target_env_samples = []
         for env, env_indices in env_map.items():
             env_masked_cond_data = masked_conditional_data[env_indices]
-            env_data_in = torch.arange(-3, 3, 6/env_masked_cond_data.shape[0]).unsqueeze(1).to(dev)
+            env_data_in = (
+                torch.arange(-3, 3, 6 / env_masked_cond_data.shape[0])
+                .unsqueeze(1)
+                .to(dev)
+            )
             env_cinn = cINN_list[env]
-            z = env_cinn(x=env_data_in, condition=env_masked_cond_data, rev=False)
+            gauss_sample = env_cinn(
+                x=env_data_in, condition=env_masked_cond_data, rev=False
+            )
+            target_sample = env_cinn(
+                x=env_data_in, condition=env_masked_cond_data, rev=True
+            )
 
             log_grad = env_cinn.log_jacobian_cache
-            loss += (z ** 2 / 2 - log_grad).mean()
+            loss += (gauss_sample ** 2 / 2 - log_grad).mean()
+
+            # if target_env_samples:
+            #     # if this is not the first environment
+            #     for other_env_sample in target_env_samples:
+            #         mmd = MMDStatistic(
+            #             other_env_sample.shape[0], target_sample.shape[0]
+            #         )
+            #         loss += mmd(
+            #             other_env_sample, target_sample, torch.arange(-10, 10, 0.1)
+            #         )
 
             if i % 1 == 0:
-                viz.line(X=s(env_data_in), Y=s(z), win=vis_wins["map"][env], opts=dict(title=f"Forward Map Env {env}"))
                 viz.line(
                     X=s(env_data_in),
-                    Y=s(std(z) * torch.exp(env_cinn.log_jacobian_cache)),
+                    Y=s(gauss_sample),
+                    win=vis_wins["map"][env],
+                    opts=dict(title=f"Forward Map Env {env}"),
+                )
+                viz.line(
+                    X=s(env_data_in),
+                    Y=s(std(gauss_sample) * torch.exp(env_cinn.log_jacobian_cache)),
                     win=vis_wins["density"][env],
                     opts=dict(title=f"Estimated Density Env {env}"),
                 )
-
+        loss += l0mask.complexity_loss()
         loss.backward()
         optimizer.step()
 
-
+    print(l0mask.final_layer())
