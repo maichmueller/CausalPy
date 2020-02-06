@@ -164,6 +164,14 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
     fig = plt.figure(1, figsize=(10, 8))
 
     plt.scatter(mean, var, color="black", alpha=0.1)
+    mean_sorted = mean.sort_values()
+    plt.plot(
+        mean_sorted,
+        mean_sorted,
+        color="blue",
+        label=r"Poi: Var$(\mu) = \mu$",
+    )
+
     popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()
     mean_sorted = mean.sort_values()
     plt.plot(
@@ -232,7 +240,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
 
 
 if __name__ == "__main__":
-    nr_genes = 50
+    nr_genes = 20000
     causal_net = simulate(nr_genes, 2, seed=1)
     print(causal_net)
     # causal_net.plot(False, node_size=50, alpha=0.5)

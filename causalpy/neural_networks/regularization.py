@@ -424,7 +424,7 @@ class L0InputGate(torch.nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.log_alpha = torch.nn.Parameter(
-            0.3 + 1e-2 * torch.randn(1, dim_input), requires_grad=True
+            0.5 + 1e-2 * torch.randn(1, dim_input), requires_grad=True
         )
         self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
         self.gamma = gamma
