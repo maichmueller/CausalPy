@@ -8,3 +8,6 @@
 
 .eggs
 **/*.egg-info
+plots/
+
+.DS_Store
