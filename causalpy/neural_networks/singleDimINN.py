@@ -24,7 +24,7 @@ class CouplingBase(torch.nn.Module, ABC):
         self.dim = dim
         self.dim_condition = dim_condition
         self.nr_layers = nr_layers
-        self.nr_inverse_iters = 10
+        self.nr_inverse_iters = 100
 
         self.mat_like_params = [
             torch.randn(1, dim, nr_layers, requires_grad=False),
