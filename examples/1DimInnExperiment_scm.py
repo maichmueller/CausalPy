@@ -433,7 +433,7 @@ if __name__ == "__main__":
             )
         )
         vis_wins["ground_truth"] = viz.histogram(
-            X=t_data, opts=dict(numbins=20, title=f"Target distribution Env {env}")
+            X=t_data, opts=dict(numbins=20, title=f"Target data histogram Env {env}")
         )
 
     losses = []
@@ -475,7 +475,10 @@ if __name__ == "__main__":
             #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is the causal parents condition.
             #  So in order to get the conditional distributions to be comparable
             #  and their deviation measurable, I need to provide the same conditions
-            #  for all the samples I draw. Otherwise the theory wouldn't apply!
+            #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
+            #  I need to give all conditions to the environmental networks, even
+            #  though most of the data has never been seen in the respective environmental
+            #  networks.
 
             # target_samples = torch.cat(
             #     [
@@ -487,11 +490,12 @@ if __name__ == "__main__":
             #         for _ in range(10)
             #     ]
             # )
+            sample_size = 14
             target_samples = env_cinn(
-                x=torch.randn(masked_conditional_data.shape[0] * 100, 1),
-                condition=masked_conditional_data.detach().repeat(100, 1),
+                x=torch.randn(masked_conditional_data.shape[0] * sample_size, 1),
+                condition=masked_conditional_data.repeat(sample_size, 1),
                 rev=True,
-            ).view(100, masked_conditional_data.shape[0], 1)
+            ).view(sample_size, masked_conditional_data.shape[0], 1)
             # print(target_sample)
 
             loss += (gauss_sample ** 2 / 2 - log_grad).mean()
