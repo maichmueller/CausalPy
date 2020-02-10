@@ -152,8 +152,8 @@ class CouplingBase(torch.nn.Module, ABC):
         def reshape(param_list, new_shape):
             nonlocal begin
             for i, param in enumerate(param_list):
-                # i * nr_previous_params_elements
-                end = begin + np.prod(param.size()[1:])  # ignore batch size of last run
+                # [1:] to ignore batch size (dim 0) of last run
+                end = begin + np.prod(param.size()[1:])
                 param_list[i] = torch.reshape(new_params[:, begin:end], new_shape)
                 begin = end
 
@@ -260,9 +260,9 @@ class cINN(torch.nn.Module):
     ):
         super().__init__()
         self.nr_blocks = nr_blocks
-        mods = []
+        self.blocks = torch.nn.ModuleList([])
         for i in range(nr_blocks):
-            mods.append(
+            self.blocks.append(
                 CouplingGeneral(
                     dim=dim,
                     nr_layers=nr_layers,
@@ -270,7 +270,7 @@ class cINN(torch.nn.Module):
                     conditional_net=conditional_net,
                 )
             )
-            mods.append(
+            self.blocks.append(
                 CouplingMonotone(
                     dim=dim,
                     nr_layers=nr_layers,
@@ -278,7 +278,6 @@ class cINN(torch.nn.Module):
                     conditional_net=conditional_net,
                 )
             )
-        self.blocks = torch.nn.ModuleList(mods)
         self.log_jacobian_cache = torch.zeros(dim)
 
     def forward(
@@ -286,18 +285,17 @@ class cINN(torch.nn.Module):
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
         rev: bool = False,
+        retain_jacobian_cache=True,
     ):
         self.log_jacobian_cache = 0.0
-        if not rev:
-            for block in self.blocks:
-                x = block(x=x, condition=condition)
-                self.log_jacobian_cache += block.jacobian()
-            return x
-        else:
-            for block in self.blocks[::-1]:
-                x = block(x=x, condition=condition, rev=True)
-                self.log_jacobian_cache += block.jacobian()
-            return x
+
+        block_iter = self.blocks[::-1] if rev else self.blocks
+        for block in block_iter:
+            x = block(x=x, condition=condition, rev=rev)
+            self.log_jacobian_cache += block.jacobian()
+            if not retain_jacobian_cache:
+                block.log_jacobian_cache = 0
+        return x
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):
         if x is None:
