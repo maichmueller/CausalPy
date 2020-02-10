@@ -34,7 +34,6 @@ def subnet_fc(c_in, c_out):
 
 
 def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
-
     # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
     # the numpy code looks like the following:
     #   XY = X @ Y.transpose()
@@ -311,12 +310,12 @@ def build_scm_medium(seed=0):
             ),
             "X_4": (
                 ["Y"],
-                LinearAssignment(1, 1.2, -.7),
+                LinearAssignment(1, 1.2, -0.7),
                 NoiseGenerator("standard_normal", seed=seed + 5),
             ),
             "X_5": (
                 ["X_3", "Y"],
-                LinearAssignment(1, 0.5, -.7, 0.4),
+                LinearAssignment(1, 0.5, -0.7, 0.4),
                 NoiseGenerator("standard_normal", seed=seed + 6),
             ),
         },
@@ -412,8 +411,12 @@ if __name__ == "__main__":
     for env, cinn in enumerate(cINN_list):
         t_data = target_data[env_map[env]]
         quantiles_envs[env] = [np.quantile(t_data, 0.1)]
-        quantiles_envs[env].append(np.quantile(t_data, .99))
-        x = torch.as_tensor(np.linspace(*quantiles_envs[env], data.shape[0])).unsqueeze(1).to(dev)
+        quantiles_envs[env].append(np.quantile(t_data, 0.99))
+        x = (
+            torch.as_tensor(np.linspace(*quantiles_envs[env], data.shape[0]))
+            .unsqueeze(1)
+            .to(dev)
+        )
         gauss_sample = cinn(
             x=x, condition=torch.zeros(data.shape[0], dim_condition).to(dev), rev=False
         )
@@ -457,9 +460,8 @@ if __name__ == "__main__":
         masked_conditional_data = l0mask(data)
         # masked_conditional_data = data
         loss = torch.zeros(1).to(dev)
-        target_env_samples = []
+        target_samples_per_env = []
         for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-
             env_masked_cond_data = masked_conditional_data[env_indices]
 
             gauss_sample = env_cinn(
@@ -470,33 +472,65 @@ if __name__ == "__main__":
             log_grad = env_cinn.log_jacobian_cache
 
             # TODO: So here is the catch:
-            #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is my causal parents condition.
-            #  Thus in order to get the conditional distributions to be comparable
-            #  and their deviation measureable I need to provide the same conditions
-            #  for all the samples I draw, otherwise the theory can't work!
-            target_sample = env_cinn(
-                x=torch.randn(masked_conditional_data.shape[0]).view(-1, 1),
-                condition=masked_conditional_data,
+            #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is the causal parents condition.
+            #  So in order to get the conditional distributions to be comparable
+            #  and their deviation measurable, I need to provide the same conditions
+            #  for all the samples I draw. Otherwise the theory wouldn't apply!
+
+            # target_samples = torch.cat(
+            #     [
+            #         env_cinn(
+            #             x=torch.randn(masked_conditional_data.shape[0], 1),
+            #             condition=masked_conditional_data,
+            #             rev=True,
+            #         )
+            #         for _ in range(10)
+            #     ]
+            # )
+            target_samples = env_cinn(
+                x=torch.randn(masked_conditional_data.shape[0] * 100, 1),
+                condition=masked_conditional_data.detach().repeat(100, 1),
                 rev=True,
-            )
+            ).view(100, masked_conditional_data.shape[0], 1)
             # print(target_sample)
 
             loss += (gauss_sample ** 2 / 2 - log_grad).mean()
 
-            target_env_samples.append(target_sample)
+            target_samples_per_env.append(target_samples)
 
         # all environmental distributions of Y should become equal, thus use
         # MMD to measure the distance of their distributions.
 
-        for other_env_sample in target_env_samples[1:]:
-            mmd_loss = mmd_multiscale(target_env_samples[0], other_env_sample)
-            # print(mmd_loss)
-            loss += mmd_loss
+        # (The following is an attempt to recreate np.apply_along_axis, which torch
+        # doesn't provide!)
+        # The target Y | X_condition samples are stored in a tensor of size
+        #   (nr_samples, nr_conditions, 1)
+        # Through torch.unbind over dim 1, we can get all samples pertaining to each
+        # condition and compare them with the conditional samples of another environment.
+        if target_samples_per_env:
+            unbound_targ_samples_env_0 = torch.unbind(target_samples_per_env[0], dim=1)
+            for y_samples_oenv in target_samples_per_env[1:]:
+                for y_c_samples_env_0, y_c_samples_env_i in zip(
+                    unbound_targ_samples_env_0, torch.unbind(y_samples_oenv, dim=1),
+                ):
+                    mmd_loss = mmd_multiscale(
+                        y_c_samples_env_0.view(-1, 1), y_c_samples_env_i.view(-1, 1)
+                    )
+                    # print(mmd_loss)
+                    loss += mmd_loss
 
         if epoch % 1 == 0:
             for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
                 # plot the distribution of the environment
-                x_range = torch.as_tensor(np.linspace(*quantiles_envs[env], target_data[env_indices].shape[0])).unsqueeze(1).to(dev)
+                x_range = (
+                    torch.as_tensor(
+                        np.linspace(
+                            *quantiles_envs[env], target_data[env_indices].shape[0]
+                        )
+                    )
+                    .unsqueeze(1)
+                    .to(dev)
+                )
                 gauss_sample = env_cinn(
                     x=x_range, condition=env_masked_cond_data, rev=False
                 )
@@ -536,6 +570,10 @@ if __name__ == "__main__":
         # print(loss)
         loss.backward()
         optimizer.step()
-        epoch_pbar.set_description(str({genes[idx]: round(curr_mask[idx], 2) for idx in target_parents_indices}))
+        epoch_pbar.set_description(
+            str(
+                {genes[idx]: round(curr_mask[idx], 2) for idx in target_parents_indices}
+            )
+        )
 
     print(l0mask.final_layer())
