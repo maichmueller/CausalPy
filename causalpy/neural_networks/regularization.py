@@ -417,11 +417,16 @@ class L0InputGate(torch.nn.Module):
         monte_carlo_sample_size: int = 1,
         gamma: float = -0.1,
         zeta: float = 1.1,
+        device: Optional[torch.device] = None,
     ):
         super(L0InputGate, self).__init__()
         self.n_dim = dim_input
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = (
+            torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if device is None
+            else device
+        )
 
         self.log_alpha = torch.nn.Parameter(
             0.5 + 1e-2 * torch.randn(1, dim_input), requires_grad=True
@@ -435,16 +440,15 @@ class L0InputGate(torch.nn.Module):
         self.hardTanh = torch.nn.Hardtanh(0, 1)
         self.sigmoid = torch.nn.Sigmoid()
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None):
         batch_size = x.shape[0]
 
-        self.gates = self.create_gates().view(
-            self.mcs_size, 1, self.n_dim
-        )
+        if mask is None:
+            self.gates = self.create_gates()
+        else:
+            self.gates = mask
 
-        x = x.repeat(self.mcs_size, 1).view(
-            self.mcs_size, batch_size, self.n_dim
-        )
+        x = x.repeat(self.mcs_size, 1).view(self.mcs_size, batch_size, self.n_dim)
 
         x *= self.gates
 
@@ -468,9 +472,7 @@ class L0InputGate(torch.nn.Module):
 
     def reparameterize(self, u, log_alpha, beta):
         """ Transform uniform distribution to CONCRETE distr."""
-        return self.sigmoid(
-            (torch.log(u) - torch.log(1 - u) + log_alpha) / beta
-        )
+        return self.sigmoid((torch.log(u) - torch.log(1 - u) + log_alpha) / beta)
 
     def final_layer(self):
         """Estimates the gates at test time (i.e. after finished training)."""
@@ -489,4 +491,4 @@ class L0InputGate(torch.nn.Module):
         )
         s = self.reparameterize(u, self.log_alpha, self.sigmoid(self.beta))
         s_strech = self.stretch(s, self.gamma, self.zeta)
-        return self.hard_sigmoid(s_strech)
+        return self.hard_sigmoid(s_strech).view(self.mcs_size, 1, self.n_dim)

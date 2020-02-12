@@ -74,8 +74,8 @@ def subnet_fc(c_in, c_out):
 
 
 def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
-    # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
-    # the numpy code looks like the following:
+    # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each
+    # row i and j of the matrices X and Y the numpy code looks like the following:
     #   XY = X @ Y.transpose()
     #   XX_d = np.ones(XY.shape) * np.diag(X @ X.transpose())[:, np.newaxis]  # row wise mult of diagonal with mat
     #   YY_d = np.ones(XY.shape) * np.diag(Y @ Y.transpose())[np.newaxis, :]  # col wise mult of diagonal with mat
@@ -154,6 +154,54 @@ def mmd_multiscale(x, y, normalize_j=True):
     return torch.mean(XX + YY - 2.0 * XY)
 
 
+def build_scm_minimal(seed=0):
+    cn = SCM(
+        assignment_map={
+            "X_0": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("binomial", n=1, p=0.5, seed=seed),
+            ),
+            "Y": (
+                ["X_0"],
+                LinearAssignment(1, 0, 1),
+                NoiseGenerator("standard_normal", seed=seed + 4),
+            )
+        },
+        variable_tex_names={
+            "X_0": "$X_0$"
+        },
+    )
+    return cn
+
+
+def build_scm_basic(seed=0):
+    cn = SCM(
+        assignment_map={
+            "X_0": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("standard_normal", seed=seed),
+            ),
+            "X_1": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("standard_normal", seed=seed + 1),
+            ),
+            "Y": (
+                ["X_0", "X_1"],
+                LinearAssignment(1, 0.67, 1, -1),
+                NoiseGenerator("standard_normal", seed=seed + 4),
+            )
+        },
+        variable_tex_names={
+            "X_0": "$X_0$",
+            "X_1": "$X_1$",
+        },
+    )
+    return cn
+
+
 def build_scm_medium(seed=0):
     cn = SCM(
         assignment_map={
@@ -207,10 +255,14 @@ def build_scm_medium(seed=0):
 
 def generate_data_from_scm(seed=None, target_var=None, countify=False):
     # scm = simulate(nr_genes, 2, seed=seed)
-    scm = build_scm_medium(seed)
+    rng = np.random.default_rng(seed)
+    scm = build_scm_basic(seed)
+    # scm = build_scm_minimal(seed)
     variables = sorted(scm.get_variables())
     if target_var is None:
-        target_var = np.random.choice(variables[len(variables) // 2 :])
+        target_var = rng.choice(variables[len(variables) // 2 :])
+    other_variables = sorted(scm.get_variables())
+    other_variables.remove(target_var)
     target_parents = list(scm.graph.predecessors(target_var))
     scm.reseed(seed)
     environments = []
@@ -218,8 +270,10 @@ def generate_data_from_scm(seed=None, target_var=None, countify=False):
     sample = scm.sample(sample_size_per_env)
     sample_data = [sample[variables]]
     environments += [0] * sample_size_per_env
-    for parent in target_parents:
-        scm.do_intervention([parent], [0])
+    for parent in other_variables:
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
+        scm.do_intervention([parent], [interv_value])
+        print(f"Intervention on variable {parent} for value {interv_value}.")
         sample_data.append(scm.sample(sample_size_per_env))
         environments += [environments[-1] + 1] * sample_size_per_env
         scm.undo_intervention()
@@ -231,7 +285,7 @@ def generate_data_from_scm(seed=None, target_var=None, countify=False):
             ),
             columns=data.columns,
         )
-        data += np.random.normal(0, .1, size=data.shape)
+        data += np.random.normal(0, 0.1, size=data.shape)
 
     environments = np.array(environments)
     target_data = data[target_var]
@@ -254,6 +308,57 @@ def generate_data_from_scm(seed=None, target_var=None, countify=False):
     return data, target_data, environments, envs_unique, env_map, scm, target_var
 
 
+def visdom_plot_mask(curr_mask, possible_parents, window=None):
+    if len(curr_mask) == len(possible_parents) == 1:
+        curr_mask = np.append(curr_mask, 0)
+        possible_parents = possible_parents + ["Dummy"]
+    return viz.bar(
+        X=curr_mask.reshape(1, -1),
+        Y=np.array([n.replace("_", "") for n in possible_parents]).reshape(1, -1),
+        win=window,
+        opts=dict(title=f"Final Mask for variables"),
+    )
+
+
+def env_distributions_dist_loss(target_samples_env):
+    # (The following recreates np.apply_along_axis - torch doesn't provide!)
+    # The target Y | X_condition samples are stored in a tensor of size
+    #   (nr_samples, nr_conditions, 1)
+    # Through torch.unbind over dim 1, we can get only those samples pertaining to the
+    # condition and compare them with the same conditional samples of another environment.
+    mmd_loss = torch.zeros(1, device=dev, requires_grad=True)
+    if target_samples_env:
+        y_samples_reference_env = torch.unbind(target_samples_env[0], dim=1)
+        for y_samples_other_env in target_samples_env[1:]:
+            for y_c_samples_env_0, y_c_samples_env_i in zip(
+                y_samples_reference_env, torch.unbind(y_samples_other_env, dim=1),
+            ):
+                y_c_samples_env_0 = y_c_samples_env_0.view(-1, 1)
+                y_c_samples_env_i = y_c_samples_env_i.view(-1, 1)
+                mmd_loss = mmd_loss + mmd_multiscale(
+                    y_c_samples_env_0, y_c_samples_env_i
+                )
+                # print(mmd_loss)
+    return mmd_loss
+
+
+def visdom_plot_loss(losses, loss_win):
+    viz.line(
+        X=np.arange(epoch + 1),
+        Y=np.array(losses),
+        win=loss_win,
+        opts=dict(
+            title=f"Loss Behaviour",
+            ytickmin=-1,
+            ytickmax=np.average(np.array(losses)[np.array(losses) < 1000]) * 2,
+        ),
+    )
+
+
+def inn_max_likelihood_loss(gauss_sample, log_grad):
+    return (gauss_sample ** 2 / 2 - log_grad).mean()
+
+
 if __name__ == "__main__":
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -265,11 +370,21 @@ if __name__ == "__main__":
     # Data Generation #
     ###################
 
-    complete_data, target_data, environments, envs_unique, env_map, scm, target_var = generate_data_from_scm(seed, target_var="Y")
+    (
+        complete_data,
+        target_data,
+        environments,
+        envs_unique,
+        env_map,
+        scm,
+        target_var,
+    ) = generate_data_from_scm(seed, target_var="Y")
     target_parents = list(scm.graph.predecessors(target_var))
     possible_parents = list(scm.get_variables())
     possible_parents.remove(target_var)
-    target_parents_indices = np.array([list(scm.get_variables()).index(par) for par in target_parents])
+    target_parents_indices = np.array(
+        [possible_parents.index(par) for par in target_parents]
+    )
 
     ####################
     # Model Generation #
@@ -280,17 +395,34 @@ if __name__ == "__main__":
         cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition).to(dev)
         for _ in envs_unique
     ]
-    l0mask = L0InputGate(complete_data.shape[1], monte_carlo_sample_size=10).to(dev)
+
+    l0_masker_net = L0InputGate(
+        complete_data.shape[1], monte_carlo_sample_size=10, device=dev
+    ).to(dev)
+    mask_rep_size = l0_masker_net.mcs_size
 
     optimizer = torch.optim.Adam(
         itertools.chain(
-            l0mask.parameters(), *[c_inn.parameters() for c_inn in cINN_list]
+            l0_masker_net.parameters(), *[c_inn.parameters() for c_inn in cINN_list]
         ),
-        lr=0.1,
+        lr=0.005,
         # weight_decay=1e-5,
     )
 
+    ####################
+    #  Visdom Windows  #
+    ####################
+
     vis_wins = {"map": [], "density": []}
+    loss_win = viz.line(
+        X=np.arange(1).reshape(-1, 1),
+        Y=np.array([1]).reshape(-1, 1),
+        opts=dict(title=f"Loss"),
+    )
+    mask_win = visdom_plot_mask(
+        l0_masker_net.final_layer().cpu().detach().numpy().reshape(1, -1),
+        possible_parents,
+    )
     quantiles_envs = dict()
     for env, cinn in enumerate(cINN_list):
         t_data = target_data[env_map[env]]
@@ -302,7 +434,9 @@ if __name__ == "__main__":
             .to(dev)
         )
         gauss_sample = cinn(
-            x=x, condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev), rev=False
+            x=x,
+            condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev),
+            rev=False,
         )
         vis_wins["map"].append(
             viz.line(
@@ -320,160 +454,148 @@ if __name__ == "__main__":
             X=t_data, opts=dict(numbins=20, title=f"Target data histogram Env {env}")
         )
 
-    losses = []
-    loss_win = viz.line(
-        X=np.arange(1).reshape(-1, 1),
-        Y=np.array([1]).reshape(-1, 1),
-        opts=dict(title=f"Loss"),
-    )
-    mask_win = viz.line(
-        X=np.arange(l0mask.final_layer().nelement()).reshape(1, -1),
-        Y=l0mask.final_layer().cpu().detach().numpy().reshape(1, -1),
-        opts=dict(title=f"Final Mask for variables"),
-    )
-
     ##################
     # Model Training #
     ##################
-    l0_hyperparam = .1
+    losses = []
+
+    nr_total_samples = complete_data.shape[0]
+    l0_hyperparam = 0.05
     epochs = 200
     epoch_pbar = tqdm(range(epochs))
-    dataset = TensorDataset(complete_data, target_data)
-    sampler = StratifiedSampler(data_source=dataset, class_vector=torch.as_tensor(environments), batch_size=500)
-    dataloader = DataLoader(dataset, sampler=sampler)
+    batch_size = 100
+
+    sampler = StratifiedSampler(
+        data_source=np.arange(nr_total_samples),
+        class_vector=torch.as_tensor(environments),
+        batch_size=batch_size,
+    )
+    dataloader = DataLoader(
+        dataset=TensorDataset(
+            torch.arange(nr_total_samples), torch.zeros(nr_total_samples)
+        ),
+        batch_size=batch_size,
+        sampler=sampler,
+    )
     for epoch in epoch_pbar:
-        for batch, target in dataloader:
+        batch_losses = []
+
+        l0_mask = l0_masker_net.create_gates()
+
+        for batch_indices, _ in dataloader:
             optimizer.zero_grad()
 
-            masked_conditional_data = l0mask(batch)
-            nr_total_samples = masked_conditional_data.shape[0]
-            # masked_conditional_data = data
-            loss = torch.zeros(1).to(dev)
-            target_samples_per_env = []
-            for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                env_masked_cond_data = masked_conditional_data[env_indices]
+            batch_indices = batch_indices.numpy()
 
+            batch_loss = torch.zeros(1).to(dev)
+            target_samples_env = []
+            for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
+                env_batch_indices = np.intersect1d(batch_indices, env_indices)
+                env_batch_size = len(env_batch_indices)
+
+                env_masked_cond_data = l0_masker_net(
+                    complete_data[env_batch_indices], l0_mask
+                )
+
+                # we need to repeat the input by the number of monte carlo samples we generate in the
+                # l0 masker network, as this is the number of repeated, different maskings of the data.
+                xdata = (
+                    target_data[env_batch_indices].unsqueeze(1).repeat(mask_rep_size, 1)
+                )
                 gauss_sample = env_cinn(
-                    x=target_data[env_indices].unsqueeze(1),
-                    condition=env_masked_cond_data,
-                    rev=False,
+                    x=xdata, condition=env_masked_cond_data, rev=False,
                 )
                 log_grad = env_cinn.log_jacobian_cache
-                loss += (gauss_sample ** 2 / 2 - log_grad).mean()
-                log_grad = env_cinn.log_jacobian_cache = 0
+                batch_loss += inn_max_likelihood_loss(gauss_sample, log_grad)
 
                 # So here is the catch:
                 #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is the causal parents condition.
                 #  So in order to get the conditional distributions to be comparable
-                #  and their deviation measurable, I need to provide the same conditions
+                #  and their deviations measurable, I need to provide the same conditions
                 #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
                 #  I need to give all conditions to the environmental networks, even
-                #  though most of the data has never been seen in the respective environmental
-                #  networks.
+                #  if most of the data has never been seen in the respective environments.
 
-                # target_samples = torch.cat(
-                #     [
-                #         env_cinn(
-                #             x=torch.randn(masked_conditional_data.shape[0], 1),
-                #             condition=masked_conditional_data,
-                #             rev=True,
-                #         )
-                #         for _ in range(10)
-                #     ]
-                # )
-                sample_size = 100
+                # TODO: control whether the conditional INNs should be truly cut off from
+                #  the gradient graph when sampling for the conditional distribution test.
+                # cut off cinn from gradients
+                for p in env_cinn.parameters():
+                    p.requires_grad = False
+                distrib_sampling_size = 100
                 target_samples = env_cinn(
-                    x=torch.randn(nr_total_samples * sample_size, 1).to(dev),
-                    condition=masked_conditional_data.repeat(sample_size, 1),
+                    x=torch.randn(
+                        env_batch_size * mask_rep_size * distrib_sampling_size,
+                        1,
+                        device=dev,
+                    ),
+                    condition=env_masked_cond_data.repeat(distrib_sampling_size, 1),
                     rev=True,
-                    retain_jacobian_cache=False
-                ).view(sample_size, nr_total_samples, 1)
-                # print(target_sample)
-
-                target_samples_per_env.append(target_samples)
+                    retain_jacobian_cache=False,
+                ).view(distrib_sampling_size, mask_rep_size * env_batch_size, 1)
+                # reinstall cinn to need gradients
+                for p in env_cinn.parameters():
+                    p.requires_grad = True
+                target_samples_env.append(target_samples)
 
             # all environmental distributions of Y should become equal, thus use
             # MMD to measure the distance of their distributions.
+            batch_loss += env_distributions_dist_loss(target_samples_env)
 
-            # (The following is an attempt to recreate np.apply_along_axis, which torch
-            # doesn't provide!)
-            # The target Y | X_condition samples are stored in a tensor of size
-            #   (nr_samples, nr_conditions, 1)
-            # Through torch.unbind over dim 1, we can get only those samples pertaining to the
-            # condition and compare them with the same conditional samples of another environment.
-            if target_samples_per_env:
-                unbound_targ_samples_env_0 = torch.unbind(target_samples_per_env[0], dim=1)
-                for y_samples_oenv in target_samples_per_env[1:]:
-                    for y_c_samples_env_0, y_c_samples_env_i in zip(
-                        unbound_targ_samples_env_0, torch.unbind(y_samples_oenv, dim=1),
-                    ):
-                        mmd_loss = mmd_multiscale(
-                            y_c_samples_env_0.view(-1, 1), y_c_samples_env_i.view(-1, 1)
-                        )
-                        # print(mmd_loss)
-                        loss += mmd_loss
-
-
-            # Add the L0 regularization
-            loss += l0_hyperparam * l0mask.complexity_loss()
-            losses.append(loss.item())
-            viz.line(
-                X=np.arange(epoch + 1),
-                Y=np.array(losses),
-                win=loss_win,
-                opts=dict(
-                    title=f"Loss Behaviour",
-                    ytickmin=-1,
-                    ytickmax=np.average(np.array(losses)[np.array(losses) < 1000]) * 2,
-                ),
-            )
-
-            curr_mask = l0mask.final_layer().cpu().detach().numpy().flatten()
-            viz.bar(
-                X=curr_mask.reshape(1, -1),
-                Y=np.array([n.replace("_", "") for n in possible_parents]).reshape(1, -1),
-                win=mask_win,
-                opts=dict(title=f"Final Mask for variables", xlabel=[0, 1, 2]),
+            visdom_plot_mask(
+                l0_masker_net.final_layer().cpu().detach().numpy(),
+                possible_parents,
+                mask_win,
             )
             # print(loss)
-            loss.backward()
+            batch_losses.append(batch_loss.item())
+            batch_loss.backward(retain_graph=True)
             optimizer.step()
-        # epoch_pbar.set_description(
-        #     str(
-        #         {genes[idx]: round(curr_mask[idx], 2) for idx in target_parents_indices}
-        #     )
-        # )
-        epoch_pbar.set_description(
-                str(
-                    {possible_parents[idx]: round(curr_mask[idx], 2) for idx in range(len(possible_parents))}
-                )
-            )
-        if epoch % 1 == 0:
-            for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                # plot the distribution of the environment
-                x_range = (
-                    torch.as_tensor(
-                        np.linspace(
-                            *quantiles_envs[env], target_data[env_indices].shape[0]
-                        )
-                    )
-                    .unsqueeze(1)
-                    .to(dev)
-                )
-                gauss_sample = env_cinn(
-                    x=x_range, condition=env_masked_cond_data, rev=False
-                )
-                viz.line(
-                    X=s(x_range),
-                    Y=s(gauss_sample),
-                    win=vis_wins["map"][env],
-                    opts=dict(title=f"Forward Map Env {env}"),
-                )
-                viz.line(
-                    X=s(x_range),
-                    Y=s(std(gauss_sample) * torch.exp(env_cinn.log_jacobian_cache)),
-                    win=vis_wins["density"][env],
-                    opts=dict(title=f"Estimated Density Env {env}"),
-                )
 
-    print(l0mask.final_layer())
+        # Add the L0 regularization
+        l0_loss = l0_hyperparam * l0_masker_net.complexity_loss()
+        losses.append(np.mean(batch_losses) + l0_loss.item())
+        l0_loss.backward()
+
+        visdom_plot_loss(losses, loss_win)
+        mask = l0_masker_net.final_layer().detach().flatten()
+
+        if epoch % 1 == 0:
+            with torch.no_grad():
+                for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
+                    # plot the distribution of the environment
+                    x_range = (
+                        torch.as_tensor(
+                            np.linspace(
+                                *quantiles_envs[env], target_data[env_indices].shape[0]
+                            )
+                        )
+                        .unsqueeze(1)
+                        .to(dev)
+                    )
+                    gauss_sample = env_cinn(
+                        x=x_range,
+                        condition=complete_data[env_indices] * mask,
+                        rev=False,
+                    )
+                    viz.line(
+                        X=s(x_range),
+                        Y=s(gauss_sample),
+                        win=vis_wins["map"][env],
+                        opts=dict(title=f"Forward Map Env {env}"),
+                    )
+                    viz.line(
+                        X=s(x_range),
+                        Y=s(std(gauss_sample) * torch.exp(env_cinn.log_jacobian_cache)),
+                        win=vis_wins["density"][env],
+                        opts=dict(title=f"Estimated Density Env {env}"),
+                    )
+        epoch_pbar.set_description(
+            str(
+                {
+                    possible_parents[idx]: round(mask.cpu().numpy()[idx], 2)
+                    for idx in range(len(possible_parents))
+                }
+            )
+        )
+
+    print(l0_masker_net.final_layer())

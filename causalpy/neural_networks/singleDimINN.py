@@ -129,9 +129,10 @@ class CouplingBase(torch.nn.Module, ABC):
         Newton method for iterative approximation of the inverse g of the transformation f at point y: g(y).
         """
         yn = y  # * torch.exp(-self.alpha) - self.bias2
-        for i in range(nr_iters):
-            yn = yn - (self.transform(yn) - y) / self.transform_deriv(yn)
-        return yn
+        with torch.no_grad():
+            for i in range(nr_iters-1):
+                yn = yn - (self.transform(yn) - y) / self.transform_deriv(yn)
+        return yn - (self.transform(yn) - y) / self.transform_deriv(yn)
 
     def set_conditional_params(self, condition: torch.Tensor):
         """
