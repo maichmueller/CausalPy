@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from typing import Optional, Union, Collection
+
 
 
 class Noise(ABC):
@@ -9,6 +11,7 @@ class Noise(ABC):
     It currently demands only a ``__call__`` method to be implemented which can produce a vector output for the number of
     samples demanded, and a ``set_seed`` method for reseeding the noise for later reproducibility of results.
     """
+
     @abstractmethod
     def set_seed(self, seed):
         """
@@ -35,3 +38,16 @@ class Noise(ABC):
         -------
         Collection of samples (preferably a numpy array).
         """
+
+
+class DiscreteNoise(Noise):
+    def __init__(
+        self,
+        values: Collection[Union[float, int]],
+        probabilities: Collection[float],
+        seed: Optional[int] = None,
+    ):
+        self.values = values
+        self.probabilities = probabilities
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)

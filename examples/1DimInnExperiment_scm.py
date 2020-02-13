@@ -10,12 +10,11 @@ import math
 
 from tqdm.auto import tqdm
 
-from causalpy import SCM, LinearAssignment, NoiseGenerator
-from causalpy.neural_networks import cINN
+from causalpy import SCM, LinearAssignment, NoiseGenerator, DiscreteNoise
+from causalpy.neural_networks import cINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.neural_networks import L0InputGate
 from causalpy.causal_prediction.interventional import ICPredictor
 from sklearn.model_selection import StratifiedShuffleSplit
 
@@ -131,7 +130,7 @@ def mmd_multiscale(x, y, normalize_j=True):
         x = (x - mean) / sd
         y = (y - mean) / sd
 
-    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+    xx, yy, zz = x @ x.t(), y @ y.t(), x @ y.t()
 
     rx = xx.diag().unsqueeze(0).expand_as(xx)
     ry = yy.diag().unsqueeze(0).expand_as(yy)
@@ -166,11 +165,26 @@ def build_scm_minimal(seed=0):
                 ["X_0"],
                 LinearAssignment(1, 0, 1),
                 NoiseGenerator("standard_normal", seed=seed + 4),
-            )
+            ),
         },
-        variable_tex_names={
-            "X_0": "$X_0$"
+        variable_tex_names={"X_0": "$X_0$"},
+    )
+    return cn
+
+
+def build_scm_basic_discrete(seed=0):
+    cn = SCM(
+        assignment_map={
+            "X_0": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed),),
+            "X_1": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed + 1),),
+            "X_2": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed + 1),),
+            "Y": (
+                ["X_0", "X_1"],
+                LinearAssignment(1, 0.67, 1, -1),
+                NoiseGenerator("standard_normal", seed=seed + 4),
+            ),
         },
+        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$", "X_2": "$X_2$"},
     )
     return cn
 
@@ -192,12 +206,9 @@ def build_scm_basic(seed=0):
                 ["X_0", "X_1"],
                 LinearAssignment(1, 0.67, 1, -1),
                 NoiseGenerator("standard_normal", seed=seed + 4),
-            )
+            ),
         },
-        variable_tex_names={
-            "X_0": "$X_0$",
-            "X_1": "$X_1$",
-        },
+        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$",},
     )
     return cn
 
@@ -256,7 +267,7 @@ def build_scm_medium(seed=0):
 def generate_data_from_scm(seed=None, target_var=None, countify=False):
     # scm = simulate(nr_genes, 2, seed=seed)
     rng = np.random.default_rng(seed)
-    scm = build_scm_basic(seed)
+    scm = build_scm_basic_discrete(seed)
     # scm = build_scm_minimal(seed)
     variables = sorted(scm.get_variables())
     if target_var is None:
@@ -273,7 +284,9 @@ def generate_data_from_scm(seed=None, target_var=None, countify=False):
     for parent in other_variables:
         interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
         scm.do_intervention([parent], [interv_value])
-        print(f"Intervention on variable {parent} for value {interv_value}.")
+        print(
+            f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."
+        )
         sample_data.append(scm.sample(sample_size_per_env))
         environments += [environments[-1] + 1] * sample_size_per_env
         scm.undo_intervention()
@@ -308,6 +321,21 @@ def generate_data_from_scm(seed=None, target_var=None, countify=False):
     return data, target_data, environments, envs_unique, env_map, scm, target_var
 
 
+class prohibit_model_grad(object):
+    def __init__(self, model: torch.nn.Module):
+        self.model = model
+
+    def __enter__(self):
+        for p in self.model.parameters():
+            p.requires_grad = False
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        for p in self.model.parameters():
+            p.requires_grad = True
+        return self
+
+
 def visdom_plot_mask(curr_mask, possible_parents, window=None):
     if len(curr_mask) == len(possible_parents) == 1:
         curr_mask = np.append(curr_mask, 0)
@@ -321,11 +349,16 @@ def visdom_plot_mask(curr_mask, possible_parents, window=None):
 
 
 def env_distributions_dist_loss(target_samples_env):
-    # (The following recreates np.apply_along_axis - torch doesn't provide!)
-    # The target Y | X_condition samples are stored in a tensor of size
-    #   (nr_samples, nr_conditions, 1)
-    # Through torch.unbind over dim 1, we can get only those samples pertaining to the
-    # condition and compare them with the same conditional samples of another environment.
+    """
+    The following recreates np.apply_along_axis - torch doesn't provide it!
+
+    The target Y | X_condition samples are stored in a tensor of size
+
+      (nr_samples, nr_conditions, 1)
+
+    Through torch.unbind over dim 1, we can get exactly those samples pertaining to the
+    condition and compare them with the same conditional samples of another environment.
+    """
     mmd_loss = torch.zeros(1, device=dev, requires_grad=True)
     if target_samples_env:
         y_samples_reference_env = torch.unbind(target_samples_env[0], dim=1)
@@ -343,15 +376,17 @@ def env_distributions_dist_loss(target_samples_env):
 
 
 def visdom_plot_loss(losses, loss_win):
+    losses = np.array(losses)
+    ytickmax = (
+        np.mean(losses[losses < np.quantile(losses, 0.95)]) * 2
+        if len(losses) > 1
+        else None
+    )
     viz.line(
         X=np.arange(epoch + 1),
-        Y=np.array(losses),
+        Y=losses,
         win=loss_win,
-        opts=dict(
-            title=f"Loss Behaviour",
-            ytickmin=-1,
-            ytickmax=np.average(np.array(losses)[np.array(losses) < 1000]) * 2,
-        ),
+        opts=dict(title=f"Loss Behaviour", ytickmin=-1, ytickmax=ytickmax,),
     )
 
 
@@ -402,10 +437,11 @@ if __name__ == "__main__":
     mask_rep_size = l0_masker_net.mcs_size
 
     optimizer = torch.optim.Adam(
-        itertools.chain(
-            l0_masker_net.parameters(), *[c_inn.parameters() for c_inn in cINN_list]
-        ),
-        lr=0.005,
+        [
+            {"params": l0_masker_net.parameters(), "lr": 1e-3},
+            {"params": itertools.chain(*[c_inn.parameters() for c_inn in cINN_list])},
+        ],
+        lr=0.01,
         # weight_decay=1e-5,
     )
 
@@ -426,7 +462,7 @@ if __name__ == "__main__":
     quantiles_envs = dict()
     for env, cinn in enumerate(cINN_list):
         t_data = target_data[env_map[env]]
-        quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.1)]
+        quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
         quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
         x = (
             torch.as_tensor(np.linspace(*quantiles_envs[env], complete_data.shape[0]))
@@ -463,7 +499,7 @@ if __name__ == "__main__":
     l0_hyperparam = 0.05
     epochs = 200
     epoch_pbar = tqdm(range(epochs))
-    batch_size = 100
+    batch_size = 300
 
     sampler = StratifiedSampler(
         data_source=np.arange(nr_total_samples),
@@ -482,7 +518,7 @@ if __name__ == "__main__":
 
         l0_mask = l0_masker_net.create_gates()
 
-        for batch_indices, _ in dataloader:
+        for batch_indices, _ in tqdm(dataloader):
             optimizer.zero_grad()
 
             batch_indices = batch_indices.numpy()
@@ -518,24 +554,21 @@ if __name__ == "__main__":
 
                 # TODO: control whether the conditional INNs should be truly cut off from
                 #  the gradient graph when sampling for the conditional distribution test.
-                # cut off cinn from gradients
-                for p in env_cinn.parameters():
-                    p.requires_grad = False
-                distrib_sampling_size = 100
-                target_samples = env_cinn(
-                    x=torch.randn(
-                        env_batch_size * mask_rep_size * distrib_sampling_size,
-                        1,
-                        device=dev,
-                    ),
-                    condition=env_masked_cond_data.repeat(distrib_sampling_size, 1),
-                    rev=True,
-                    retain_jacobian_cache=False,
-                ).view(distrib_sampling_size, mask_rep_size * env_batch_size, 1)
-                # reinstall cinn to need gradients
-                for p in env_cinn.parameters():
-                    p.requires_grad = True
-                target_samples_env.append(target_samples)
+
+                with prohibit_model_grad(env_cinn):
+                    distrib_sampling_size = 50
+                    target_samples = env_cinn(
+                        x=torch.randn(
+                            env_batch_size * mask_rep_size * distrib_sampling_size,
+                            1,
+                            device=dev,
+                        ),
+                        condition=env_masked_cond_data.repeat(distrib_sampling_size, 1),
+                        rev=True,
+                        retain_jacobian_cache=False,
+                    ).view(distrib_sampling_size, mask_rep_size * env_batch_size, 1)
+
+                    target_samples_env.append(target_samples)
 
             # all environmental distributions of Y should become equal, thus use
             # MMD to measure the distance of their distributions.
@@ -550,7 +583,6 @@ if __name__ == "__main__":
             batch_losses.append(batch_loss.item())
             batch_loss.backward(retain_graph=True)
             optimizer.step()
-
         # Add the L0 regularization
         l0_loss = l0_hyperparam * l0_masker_net.complexity_loss()
         losses.append(np.mean(batch_losses) + l0_loss.item())
