@@ -286,7 +286,6 @@ class cINN(torch.nn.Module):
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
         rev: bool = False,
-        retain_jacobian_cache=True,
     ):
         self.log_jacobian_cache = 0.0
 
@@ -294,8 +293,7 @@ class cINN(torch.nn.Module):
         for block in block_iter:
             x = block(x=x, condition=condition, rev=rev)
             self.log_jacobian_cache += block.jacobian()
-            if not retain_jacobian_cache:
-                block.log_jacobian_cache = 0
+
         return x
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):

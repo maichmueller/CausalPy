@@ -12,7 +12,7 @@ import math
 from tqdm.auto import tqdm
 
 from causalpy import SCM, LinearAssignment, NoiseGenerator, DiscreteNoise
-from causalpy.neural_networks import cINN, L0InputGate
+from causalpy.neural_networks import cINN, L0InputGate, CVAE
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
@@ -192,11 +192,11 @@ def build_scm_basic_discrete(seed=0):
     cn = SCM(
         assignment_map={
             "X_0": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed),),
-            "X_1": ([], LinearAssignment(1), DiscreteNoise([2, 3], seed=seed + 1),),
+            "X_1": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed + 1),),
             "X_2": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed + 1),),
             "Y": (
                 ["X_0", "X_1"],
-                LinearAssignment(1, 0.0, 1, -1),
+                LinearAssignment(1, 0.67, 1, -1),
                 NoiseGenerator("standard_normal", seed=seed + 4),
             ),
         },
@@ -220,7 +220,7 @@ def build_scm_basic(seed=0):
             ),
             "Y": (
                 ["X_0", "X_1"],
-                LinearAssignment(1, 0.0, 1, -1),
+                LinearAssignment(1, 0.67, 1, -1),
                 NoiseGenerator("standard_normal", seed=seed + 4),
             ),
         },
@@ -282,8 +282,8 @@ def build_scm_medium(seed=0):
 
 def generate_data_from_scm(target_var=None, countify=False, sample_size=100, seed=None):
     # scm = simulate(nr_genes, 2, seed=seed)
-    rng = np.random.default_rng(seed + 10)
-    scm = build_scm_basic(seed)
+    rng = np.random.default_rng(seed)
+    scm = build_scm_basic_discrete(seed)
     # scm = build_scm_minimal(seed)
     variables = sorted(scm.get_variables())
     if target_var is None:
@@ -538,34 +538,35 @@ if __name__ == "__main__":
         possible_parents,
     )
     quantiles_envs = dict()
-    with torch.no_grad():
-        for env, cinn in enumerate(cINN_list):
-            t_data = target_data[env_map[env]]
-            quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
-            quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
-            x = (
-                torch.as_tensor(np.linspace(*quantiles_envs[env], complete_data.shape[0]))
-                .unsqueeze(1)
-                .to(dev)
+    for env, cinn in enumerate(cINN_list):
+        t_data = target_data[env_map[env]]
+        quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
+        quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
+        x = (
+            torch.as_tensor(np.linspace(*quantiles_envs[env], complete_data.shape[0]))
+            .unsqueeze(1)
+            .to(dev)
+        )
+        y_sample = cinn(
+            x=x,
+            condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev),
+            rev=False,
+        )
+        vis_wins["map"].append(
+            viz.line(
+                X=s(x), Y=s(y_sample), opts=dict(title=f"Forward Map Env {env}")
             )
-            y_sample = cinn(
-                x=x,
-                condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev),
-                rev=False,
+        )
+        vis_wins["density"].append(
+            viz.line(
+                X=s(x),
+                Y=s(std(y_sample) * torch.exp(cinn.log_jacobian_cache)),
+                opts=dict(title=f"Estimated Density Env {env}"),
             )
-            vis_wins["map"].append(
-                viz.line(X=s(x), Y=s(y_sample), opts=dict(title=f"Forward Map Env {env}"))
-            )
-            vis_wins["density"].append(
-                viz.line(
-                    X=s(x),
-                    Y=s(std(y_sample) * torch.exp(cinn.log_jacobian_cache)),
-                    opts=dict(title=f"Estimated Density Env {env}"),
-                )
-            )
-            vis_wins["ground_truth"] = viz.histogram(
-                X=t_data, opts=dict(numbins=20, title=f"Target data histogram Env {env}")
-            )
+        )
+        vis_wins["ground_truth"] = viz.histogram(
+            X=t_data, opts=dict(numbins=20, title=f"Target data histogram Env {env}")
+        )
 
     ##################
     # Model Training #
@@ -579,7 +580,7 @@ if __name__ == "__main__":
     l0_hyperparam = 0.0005
     epochs = 200
     epoch_pbar = tqdm(range(epochs))
-    batch_size = min(1000, complete_data.shape[0])
+    batch_size = 1000
 
     sampler = StratifiedSampler(
         data_source=np.arange(nr_total_samples),
@@ -603,7 +604,7 @@ if __name__ == "__main__":
             l0_mask = torch.cat(
                 [
                     torch.ones(mask_rep_size, 1, 2, device=dev),
-                    # torch.zeros(mask_rep_size, 1, 1, device=dev),
+                    torch.zeros(mask_rep_size, 1, 1, device=dev),
                 ],
                 dim=2,
             )
@@ -652,6 +653,7 @@ if __name__ == "__main__":
                         ),
                         condition=masked_batch_data.repeat(distrib_sampling_size, 1),
                         rev=True,
+                        retain_jacobian_cache=False,
                     ).view(distrib_sampling_size, mask_rep_size, batch_size, 1)
 
                     target_samples_env.append(target_samples)
@@ -710,22 +712,16 @@ if __name__ == "__main__":
                     )
                     y_sample = env_cinn(
                         x=torch.randn(env_indices.size * mask_rep_size, 1, device=dev),
-                        condition=(complete_data[env_indices] * mask).view(
-                            -1, mask.shape[-1]
-                        ),
+                        condition=(complete_data[env_indices] * mask).view(-1, mask.shape[-1]),
                         rev=True,
                     )
                     viz.line(
                         X=s(x_range),
-                        Y=s(
-                            env_cinn(
-                                x=x_range,
-                                condition=(complete_data[env_indices] * mask).view(
-                                    -1, mask.shape[-1]
-                                ),
-                                rev=True,
-                            )
-                        ),
+                        Y=s(env_cinn(
+                            x=x_range,
+                            condition=(complete_data[env_indices] * mask).view(-1, mask.shape[-1]),
+                            rev=True,
+                        )),
                         win=vis_wins["map"][env],
                         opts=dict(title=f"Forward Map Env {env}"),
                     )
@@ -736,15 +732,10 @@ if __name__ == "__main__":
                     )
         epoch_pbar.set_description(
             str(
-                sorted(
-                    {
-                        possible_parents[idx]: round(
-                            mask.cpu().numpy().flatten()[idx], 2
-                        )
-                        for idx in range(len(possible_parents))
-                    }.items(),
-                    key=lambda x: x[0],
-                )
+                sorted({
+                    possible_parents[idx]: round(mask.cpu().numpy().flatten()[idx], 2)
+                    for idx in range(len(possible_parents))
+                }.items(), key=lambda x: x[0])
             )
         )
 

@@ -490,6 +490,7 @@ if __name__ == "__main__":
         scm,
         target_var,
     ) = generate_data_from_scm(target_var="Y", sample_size=250, seed=seed)
+    complete_data = torch.cat((torch.as_tensor(environments, dtype=torch.float32, device=dev).view(-1, 1), complete_data), dim=1)
     target_parents = sorted(scm.graph.predecessors(target_var))
     possible_parents = sorted(scm.get_variables())
     possible_parents.remove(target_var)
@@ -502,10 +503,7 @@ if __name__ == "__main__":
     ####################
 
     dim_condition = complete_data.shape[1]
-    cINN_list = [
-        cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition).to(dev)
-        for _ in envs_unique
-    ]
+    cinn = cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition+1).to(dev)
 
     l0_masker_net = L0InputGate(
         complete_data.shape[1], monte_carlo_sample_size=1, device=dev
@@ -515,7 +513,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(
         [
             {"params": l0_masker_net.parameters(), "lr": 1e-2},
-            {"params": itertools.chain(*[c_inn.parameters() for c_inn in cINN_list])},
+            {"params": cinn.parameters()},
         ],
         lr=0.001,
         # weight_decay=1e-5,
@@ -539,7 +537,7 @@ if __name__ == "__main__":
     )
     quantiles_envs = dict()
     with torch.no_grad():
-        for env, cinn in enumerate(cINN_list):
+        for env in envs_unique:
             t_data = target_data[env_map[env]]
             quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
             quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
@@ -607,54 +605,52 @@ if __name__ == "__main__":
                 ],
                 dim=2,
             )
+        l0_mask = torch.cat((torch.ones(mask_rep_size, 1, 1, device=dev), l0_mask), dim=2)
         for batch_indices, _ in dataloader:
             optimizer.zero_grad()
 
-            batch_indices = np.sort(batch_indices.numpy())
+            batch_indices = torch.sort(batch_indices)
 
             masked_batch_data = l0_masker_net(complete_data[batch_indices], l0_mask)
             batch_loss = torch.zeros(1).to(dev)
             target_samples_env = []
-            for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                env_batch_indices = np.intersect1d(batch_indices, env_indices)
-                env_batch_size = len(env_batch_indices)
 
-                # we need to repeat the input by the number of monte carlo samples we generate in the
-                # l0 masker network, as this is the number of repeated, different maskings of the data.
-                xdata = (
-                    target_data[env_batch_indices].unsqueeze(1).repeat(mask_rep_size, 1)
-                )
-                y_sample = env_cinn(
-                    x=xdata,
-                    condition=l0_masker_net(complete_data[env_batch_indices], l0_mask),
-                    rev=False,
-                )
-                log_grad = env_cinn.log_jacobian_cache
-                batch_loss += inn_max_likelihood_loss(y_sample, log_grad)
+            # we need to repeat the input by the number of monte carlo samples we generate in the
+            # l0 masker network, as this is the number of repeated, different maskings of the data.
+            xdata = (
+                target_data[batch_indices].unsqueeze(1).repeat(mask_rep_size, 1)
+            )
+            y_sample = cinn(
+                x=xdata,
+                condition=l0_masker_net(complete_data[batch_indices], l0_mask),
+                rev=False,
+            )
+            log_grad = cinn.log_jacobian_cache
+            batch_loss += inn_max_likelihood_loss(y_sample, log_grad)
 
-                # we need to repeat the input by the number of monte carlo samples we generate in the
-                # l0 masker network, as this is the number of repeated, different maskings of the data.
+            # we need to repeat the input by the number of monte carlo samples we generate in the
+            # l0 masker network, as this is the number of repeated, different maskings of the data.
 
-                # So here is the catch:
-                #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is the causal parents condition.
-                #  So in order to get the conditional distributions to be comparable
-                #  and their deviations measurable, I need to provide the same conditions
-                #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
-                #  I need to give all conditions to the environmental networks, even
-                #  if most of the data has never been seen in the respective environments.
-                with prohibit_model_grad(env_cinn):
-                    distrib_sampling_size = 400
-                    target_samples = env_cinn(
-                        x=torch.randn(
-                            distrib_sampling_size * mask_rep_size * batch_size,
-                            1,
-                            device=dev,
-                        ),
-                        condition=masked_batch_data.repeat(distrib_sampling_size, 1),
-                        rev=True,
-                    ).view(distrib_sampling_size, mask_rep_size, batch_size, 1)
+            # So here is the catch:
+            #  P(Y^i | X_PA = a) = P(Y^j | X_PA = a) is the causal parents condition.
+            #  So in order to get the conditional distributions to be comparable
+            #  and their deviations measurable, I need to provide the same conditions
+            #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
+            #  I need to give all conditions to the environmental networks, even
+            #  if most of the data has never been seen in the respective environments.
+            with prohibit_model_grad(cinn):
+                distrib_sampling_size = 400
+                target_samples = cinn(
+                    x=torch.randn(
+                        distrib_sampling_size * mask_rep_size * batch_size,
+                        1,
+                        device=dev,
+                    ),
+                    condition=masked_batch_data.repeat(distrib_sampling_size, 1),
+                    rev=True,
+                ).view(distrib_sampling_size, mask_rep_size, batch_size, 1)
 
-                    target_samples_env.append(target_samples)
+                target_samples_env.append(target_samples)
 
             # all environmental distributions of Y should become equal, thus use
             # MMD to measure the distance of their distributions.
