@@ -1,4 +1,5 @@
 import itertools
+import os
 from functools import partial
 from typing import Union, Collection, Optional
 
@@ -11,21 +12,19 @@ import math
 
 from tqdm.auto import tqdm
 
-from causalpy import SCM, LinearAssignment, NoiseGenerator, DiscreteNoise
 from causalpy.neural_networks import cINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.causal_prediction.interventional import ICPredictor
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
-
+from build_scm_funcs import *
+from simulation_linear import simulate
 
 import torch as th
 import math
 from torch.utils.data import Sampler
-from geomloss import SamplesLoss
 
 
 class StratifiedSampler(Sampler):
@@ -169,136 +168,42 @@ def wasserstein(x, y):
     return torch.mean(sort_sq_diff) / std_prod
 
 
-def build_scm_minimal(seed=0):
-    cn = SCM(
-        assignment_map={
-            "X_0": (
-                [],
-                LinearAssignment(1),
-                NoiseGenerator("binomial", n=1, p=0.5, seed=seed),
-            ),
-            "Y": (
-                ["X_0"],
-                LinearAssignment(1, 0, 1),
-                NoiseGenerator("standard_normal", seed=seed + 4),
-            ),
-        },
-        variable_tex_names={"X_0": "$X_0$"},
-    )
-    return cn
-
-
-def build_scm_basic_discrete(seed=0):
-    cn = SCM(
-        assignment_map={
-            "X_0": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed),),
-            "X_1": ([], LinearAssignment(1), DiscreteNoise([2, 3], seed=seed + 1),),
-            "X_2": ([], LinearAssignment(1), DiscreteNoise([0, 1, 2], seed=seed + 1),),
-            "Y": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 0.0, 1, -1),
-                NoiseGenerator("standard_normal", seed=seed + 4),
-            ),
-        },
-        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$", "X_2": "$X_2$"},
-    )
-    return cn
-
-
-def build_scm_basic(seed=0):
-    cn = SCM(
-        assignment_map={
-            "X_0": (
-                [],
-                LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=seed),
-            ),
-            "X_1": (
-                [],
-                LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=seed + 1),
-            ),
-            "Y": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 0.0, 1, -1),
-                NoiseGenerator("standard_normal", seed=seed + 4),
-            ),
-        },
-        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$",},
-    )
-    return cn
-
-
-def build_scm_medium(seed=0):
-    cn = SCM(
-        assignment_map={
-            "X_0": (
-                [],
-                LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=seed),
-            ),
-            "X_1": (
-                ["X_0"],
-                LinearAssignment(1, 1, 1),
-                NoiseGenerator("standard_normal", seed=seed + 1),
-            ),
-            "X_2": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 1, 0.8, -1.2),
-                NoiseGenerator("standard_normal", seed=seed + 2),
-            ),
-            "X_3": (
-                ["X_1", "X_2"],
-                LinearAssignment(1, 0, 0.3, 0.4),
-                NoiseGenerator("standard_normal", seed=seed + 3),
-            ),
-            "Y": (
-                ["X_3", "X_0"],
-                LinearAssignment(1, 0.67, 1, -1),
-                NoiseGenerator("standard_normal", seed=seed + 4),
-            ),
-            "X_4": (
-                ["Y"],
-                LinearAssignment(1, 1.2, -0.7),
-                NoiseGenerator("standard_normal", seed=seed + 5),
-            ),
-            "X_5": (
-                ["X_3", "Y"],
-                LinearAssignment(1, 0.5, -0.7, 0.4),
-                NoiseGenerator("standard_normal", seed=seed + 6),
-            ),
-        },
-        variable_tex_names={
-            "X_0": "$X_0$",
-            "X_1": "$X_1$",
-            "X_2": "$X_2$",
-            "X_3": "$X_3$",
-            "X_4": "$X_4$",
-            "X_5": "$X_5$",
-        },
-    )
-    return cn
-
-
-def generate_data_from_scm(target_var=None, countify=False, sample_size=100, seed=None):
+def generate_data_from_scm(
+    scm,
+    target_var=None,
+    markovblanket_interv_only=True,
+    countify=False,
+    sample_size=100,
+    seed=None,
+):
     # scm = simulate(nr_genes, 2, seed=seed)
     rng = np.random.default_rng(seed + 10)
-    scm = build_scm_basic(seed)
     # scm = build_scm_minimal(seed)
     variables = sorted(scm.get_variables())
     if target_var is None:
         target_var = rng.choice(variables[len(variables) // 2 :])
     other_variables = sorted(scm.get_variables())
     other_variables.remove(target_var)
-    target_parents = list(scm.graph.predecessors(target_var))
+    target_parents = sorted(scm.graph.predecessors(target_var))
     scm.reseed(seed)
     environments = []
     sample_size_per_env = sample_size
     sample = scm.sample(sample_size_per_env)
     sample_data = [sample[variables]]
     environments += [0] * sample_size_per_env
-    for parent in other_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
+    if markovblanket_interv_only:
+        interv_variables = set(target_parents)
+        for child in scm.graph.successors(target_var):
+            child_pars = set(scm.graph.predecessors(child))
+            child_pars.remove(target_var)
+            interv_variables = interv_variables.union(child_pars)
+    else:
+        interv_variables = other_variables
+
+    # perform interventions on selected variables
+    for parent in interv_variables:
+        # interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
+        interv_value = 0
         scm.do_intervention([parent], [interv_value])
         print(
             f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."
@@ -334,7 +239,16 @@ def generate_data_from_scm(target_var=None, countify=False, sample_size=100, see
     print("Actual Parents:", ", ".join(target_parents))
     print("Candidate Parents:", ", ".join(possible_parents))
 
-    return data, target_data, environments, envs_unique, env_map, scm, target_var
+    return (
+        data,
+        target_data,
+        environments,
+        envs_unique,
+        env_map,
+        scm,
+        target_var,
+        target_parents,
+    )
 
 
 class prohibit_model_grad(object):
@@ -360,7 +274,7 @@ def visdom_plot_mask(curr_mask, possible_parents, window=None):
         X=curr_mask.reshape(1, -1),
         Y=np.array([n.replace("_", "") for n in possible_parents]).reshape(1, -1),
         win=window,
-        opts=dict(title=f"Final Mask for variables"),
+        opts=dict(ytickmax=1, ytickmin=0, title=f"Final Mask for variables"),
     )
 
 
@@ -394,6 +308,7 @@ def env_distributions_dist_loss(target_samples_env, nr_cond_dist_plots=0):
     for samples in target_samples_env:
         unwrapped_target_samples.append(torch.unbind(samples, dim=2))
 
+    # with torch.no_grad():
     # now first plot the conditional distributions
     for condition, env_conditionals in zip(
         select_conds_plot,
@@ -453,13 +368,10 @@ def env_distributions_dist_loss(target_samples_env, nr_cond_dist_plots=0):
 
 def visdom_plot_loss(losses, loss_win, title="Loss Behaviour"):
     losses = np.array(losses)
-    ytickmax = (
-        np.mean(losses[losses < np.quantile(losses, 0.95)]) * 2
-        if len(losses) > 1
-        else None
-    )
+    losses = np.nan_to_num(losses)
+    ytickmax = np.quantile(losses, 0.95) * 2 if len(losses) > 1 else None
     viz.line(
-        X=np.arange(epoch + 1),
+        X=np.arange(len(losses)),
         Y=losses,
         win=loss_win,
         opts=dict(title=title, ytickmin=-1, ytickmax=ytickmax,),
@@ -470,40 +382,26 @@ def inn_max_likelihood_loss(gauss_sample, log_grad):
     return (gauss_sample ** 2 / 2 - log_grad).mean()
 
 
-if __name__ == "__main__":
-
-    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    viz = visdom.Visdom()
-    seed = 0
-    np.random.seed(seed)
-
-    ###################
-    # Data Generation #
-    ###################
-
-    (
-        complete_data,
-        target_data,
-        environments,
-        envs_unique,
-        env_map,
-        scm,
-        target_var,
-    ) = generate_data_from_scm(target_var="Y", sample_size=250, seed=seed)
-    target_parents = sorted(scm.graph.predecessors(target_var))
-    possible_parents = sorted(scm.get_variables())
-    possible_parents.remove(target_var)
-    target_parents_indices = np.array(
-        [possible_parents.index(par) for par in target_parents]
-    )
-
+def train(epochs=300, use_visdom=True):
     ####################
     # Model Generation #
     ####################
 
     dim_condition = complete_data.shape[1]
+    nr_layers = 30
+    conditioner = torch.nn.Sequential(
+        torch.nn.Linear(dim_condition, 50),
+        torch.nn.ReLU(),
+        torch.nn.Linear(50, 3 * 1 * (nr_layers + 1)),
+    ).to(dev)
     cINN_list = [
-        cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition).to(dev)
+        cINN(
+            nr_blocks=2,
+            dim=1,
+            nr_layers=nr_layers,
+            dim_condition=dim_condition,
+            conditional_net=conditioner,
+        ).to(dev)
         for _ in envs_unique
     ]
 
@@ -520,66 +418,75 @@ if __name__ == "__main__":
         lr=0.001,
         # weight_decay=1e-5,
     )
-
     ####################
     #  Visdom Windows  #
     ####################
 
-    vis_wins = {"map": [], "density": []}
-    loss_windows = dict()
-    for _, win_name in zip(range(3), ("total", "dist", "cinn")):
-        loss_windows[win_name] = viz.line(
-            X=np.arange(1).reshape(-1, 1),
-            Y=np.array([1]).reshape(-1, 1),
-            opts=dict(title=f"Loss"),
+    if use_visdom:
+        vis_wins = {"map": [], "density": []}
+        loss_windows = dict()
+        for _, win_name in zip(range(3), ("total", "dist", "cinn")):
+            loss_windows[win_name] = viz.line(
+                X=np.arange(1).reshape(-1, 1),
+                Y=np.array([1]).reshape(-1, 1),
+                opts=dict(title=f"Loss"),
+            )
+        mask_win = visdom_plot_mask(
+            l0_masker_net.final_layer().cpu().detach().numpy().reshape(1, -1),
+            possible_parents,
         )
-    mask_win = visdom_plot_mask(
-        l0_masker_net.final_layer().cpu().detach().numpy().reshape(1, -1),
-        possible_parents,
-    )
-    quantiles_envs = dict()
-    with torch.no_grad():
-        for env, cinn in enumerate(cINN_list):
-            t_data = target_data[env_map[env]]
-            quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
-            quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
-            x = (
-                torch.as_tensor(np.linspace(*quantiles_envs[env], complete_data.shape[0]))
-                .unsqueeze(1)
-                .to(dev)
-            )
-            y_sample = cinn(
-                x=x,
-                condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev),
-                rev=False,
-            )
-            vis_wins["map"].append(
-                viz.line(X=s(x), Y=s(y_sample), opts=dict(title=f"Forward Map Env {env}"))
-            )
-            vis_wins["density"].append(
-                viz.line(
-                    X=s(x),
-                    Y=s(std(y_sample) * torch.exp(cinn.log_jacobian_cache)),
-                    opts=dict(title=f"Estimated Density Env {env}"),
+        quantiles_envs = dict()
+        with torch.no_grad():
+            for env, cinn in enumerate(cINN_list):
+                t_data = target_data[env_map[env]]
+                quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
+                quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
+                x = (
+                    torch.as_tensor(
+                        np.linspace(*quantiles_envs[env], complete_data.shape[0])
+                    )
+                    .unsqueeze(1)
+                    .to(dev)
                 )
-            )
-            vis_wins["ground_truth"] = viz.histogram(
-                X=t_data, opts=dict(numbins=20, title=f"Target data histogram Env {env}")
-            )
+                gauss_sample = cinn(
+                    x=x,
+                    condition=torch.zeros(complete_data.shape[0], dim_condition).to(
+                        dev
+                    ),
+                    rev=False,
+                )
+                vis_wins["map"].append(
+                    viz.line(
+                        X=s(x),
+                        Y=s(gauss_sample),
+                        opts=dict(title=f"Forward Map Env {env}"),
+                    )
+                )
+                vis_wins["density"].append(
+                    viz.line(
+                        X=s(x),
+                        Y=s(std(gauss_sample) * torch.exp(cinn.log_jacobian_cache)),
+                        opts=dict(title=f"Estimated Density Env {env}"),
+                    )
+                )
+                vis_wins["ground_truth"] = viz.histogram(
+                    X=t_data,
+                    opts=dict(numbins=20, title=f"Target data histogram Env {env}"),
+                )
 
     ##################
     # Model Training #
     ##################
-    use_ground_truth_mask = True
+    use_ground_truth_mask = False
+    assume_invertibility_in_noise = True
     total_losses = []
     env_distance_losses = []
     cinn_losses = []
 
     nr_total_samples = complete_data.shape[0]
-    l0_hyperparam = 0.0005
-    epochs = 200
+    hyperparams = {"l0": 0.0, "env": 1, "inn": 8}
     epoch_pbar = tqdm(range(epochs))
-    batch_size = min(1000, complete_data.shape[0])
+    batch_size = min(2500, complete_data.shape[0])
 
     sampler = StratifiedSampler(
         data_source=np.arange(nr_total_samples),
@@ -603,7 +510,7 @@ if __name__ == "__main__":
             l0_mask = torch.cat(
                 [
                     torch.ones(mask_rep_size, 1, 2, device=dev),
-                    # torch.zeros(mask_rep_size, 1, 1, device=dev),
+                    torch.zeros(mask_rep_size, 1, 1, device=dev),
                 ],
                 dim=2,
             )
@@ -611,10 +518,11 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             batch_indices = np.sort(batch_indices.numpy())
+            this_batch_size = len(batch_indices)
 
             masked_batch_data = l0_masker_net(complete_data[batch_indices], l0_mask)
             batch_loss = torch.zeros(1).to(dev)
-            target_samples_env = []
+            samples_env = []
             for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
                 env_batch_indices = np.intersect1d(batch_indices, env_indices)
                 env_batch_size = len(env_batch_indices)
@@ -624,13 +532,13 @@ if __name__ == "__main__":
                 xdata = (
                     target_data[env_batch_indices].unsqueeze(1).repeat(mask_rep_size, 1)
                 )
-                y_sample = env_cinn(
+                gauss_sample = env_cinn(
                     x=xdata,
                     condition=l0_masker_net(complete_data[env_batch_indices], l0_mask),
                     rev=False,
                 )
                 log_grad = env_cinn.log_jacobian_cache
-                batch_loss += inn_max_likelihood_loss(y_sample, log_grad)
+                batch_loss += inn_max_likelihood_loss(gauss_sample, log_grad)
 
                 # we need to repeat the input by the number of monte carlo samples we generate in the
                 # l0 masker network, as this is the number of repeated, different maskings of the data.
@@ -642,110 +550,253 @@ if __name__ == "__main__":
                 #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
                 #  I need to give all conditions to the environmental networks, even
                 #  if most of the data has never been seen in the respective environments.
-                with prohibit_model_grad(env_cinn):
+                # with prohibit_model_grad(env_cinn):
+                if not assume_invertibility_in_noise:
                     distrib_sampling_size = 400
-                    target_samples = env_cinn(
+                    samples = env_cinn(
                         x=torch.randn(
-                            distrib_sampling_size * mask_rep_size * batch_size,
+                            distrib_sampling_size * mask_rep_size * this_batch_size,
                             1,
                             device=dev,
                         ),
                         condition=masked_batch_data.repeat(distrib_sampling_size, 1),
                         rev=True,
-                    ).view(distrib_sampling_size, mask_rep_size, batch_size, 1)
+                    ).view(distrib_sampling_size, mask_rep_size, this_batch_size, 1)
+                else:
+                    samples = env_cinn(
+                        x=target_data[batch_indices].view(-1, 1),
+                        condition=masked_batch_data,
+                        rev=False,
+                    ).view(mask_rep_size, this_batch_size, 1)
 
-                    target_samples_env.append(target_samples)
+                samples_env.append(samples)
 
             # all environmental distributions of Y should become equal, thus use
             # MMD to measure the distance of their distributions.
-            env_distribution_distance = env_distributions_dist_loss(
-                target_samples_env, 2
-            )
+            if not assume_invertibility_in_noise:
+                env_distribution_distance = env_distributions_dist_loss(samples_env, 0)
+            else:
+                env_distribution_distance = 0
+                gauss_sample = torch.randn(this_batch_size, 1, device=dev)
+                for mask in range(mask_rep_size):
+                    loss_per_mask = 0
+                    for i in range(nr_envs):
+                        loss_per_mask += wasserstein(gauss_sample, samples_env[i][mask])
+                    env_distribution_distance += loss_per_mask / nr_envs
+                env_distribution_distance = env_distribution_distance / mask_rep_size
 
             batch_distr_losses.append(env_distribution_distance.item())
             batch_inn_losses.append(batch_loss.item())
 
-            batch_loss += env_distribution_distance
+            batch_loss = hyperparams["inn"] * batch_loss
+            batch_loss = batch_loss + hyperparams["env"] * env_distribution_distance
 
-            visdom_plot_mask(
-                l0_masker_net.final_layer().cpu().detach().numpy(),
-                possible_parents,
-                mask_win,
-            )
+            if use_visdom:
+                visdom_plot_mask(
+                    l0_masker_net.final_layer().cpu().detach().numpy(),
+                    possible_parents,
+                    mask_win,
+                )
             # print(loss)
             batch_losses.append(batch_loss.item())
             batch_loss.backward(retain_graph=True)
             optimizer.step()
         # Add the L0 regularization
-        l0_loss = l0_hyperparam * l0_masker_net.complexity_loss()
+        l0_loss = hyperparams["l0"] * l0_masker_net.complexity_loss()
         env_distance_losses.append(np.mean(batch_distr_losses))
         cinn_losses.append(np.mean(batch_inn_losses))
         total_losses.append(np.mean(batch_losses) + l0_loss.item())
         l0_loss.backward()
 
-        visdom_plot_loss(total_losses, loss_windows["total"], "Total Loss Behaviour")
-        visdom_plot_loss(
-            env_distance_losses,
-            loss_windows["dist"],
-            "Distributional Distance Loss Behaviour",
-        )
-        visdom_plot_loss(cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
         if not use_ground_truth_mask:
             mask = l0_masker_net.final_layer().detach().flatten()
         else:
             mask = l0_mask
 
-        if epoch % 1 == 0:
-            with torch.no_grad():
-                for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                    # plot the distribution of the environment
-                    x_range = (
-                        torch.as_tensor(
-                            np.linspace(
-                                *quantiles_envs[env], target_data[env_indices].shape[0]
-                            )
-                        )
-                        .unsqueeze(1)
-                        .to(dev)
-                    )
-                    y_sample = env_cinn(
-                        x=torch.randn(env_indices.size * mask_rep_size, 1, device=dev),
-                        condition=(complete_data[env_indices] * mask).view(
-                            -1, mask.shape[-1]
-                        ),
-                        rev=True,
-                    )
-                    viz.line(
-                        X=s(x_range),
-                        Y=s(
-                            env_cinn(
-                                x=x_range,
-                                condition=(complete_data[env_indices] * mask).view(
-                                    -1, mask.shape[-1]
-                                ),
-                                rev=True,
-                            )
-                        ),
-                        win=vis_wins["map"][env],
-                        opts=dict(title=f"Forward Map Env {env}"),
-                    )
-                    viz.histogram(
-                        X=y_sample,
-                        win=vis_wins["density"][env],
-                        opts=dict(title=f"Estimated Density Env {env}"),
-                    )
-        epoch_pbar.set_description(
-            str(
-                sorted(
-                    {
-                        possible_parents[idx]: round(
-                            mask.cpu().numpy().flatten()[idx], 2
-                        )
-                        for idx in range(len(possible_parents))
-                    }.items(),
-                    key=lambda x: x[0],
-                )
+        if use_visdom:
+            visdom_plot_loss(
+                total_losses, loss_windows["total"], "Total Loss Behaviour"
             )
-        )
+            visdom_plot_loss(
+                env_distance_losses,
+                loss_windows["dist"],
+                "Distributional Distance Loss Behaviour",
+            )
+            visdom_plot_loss(cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
 
-    print(l0_masker_net.final_layer())
+            if epoch % 1 == 0:
+                with torch.no_grad():
+                    for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
+                        # plot the distribution of the environment
+                        x_range = (
+                            torch.as_tensor(
+                                np.linspace(
+                                    *quantiles_envs[env],
+                                    target_data[env_indices].shape[0],
+                                )
+                            )
+                            .unsqueeze(1)
+                            .to(dev)
+                        )
+                        gauss_sample = env_cinn(
+                            x=torch.randn(
+                                env_indices.size * mask_rep_size, 1, device=dev
+                            ),
+                            condition=(complete_data[env_indices] * mask).view(
+                                -1, mask.shape[-1]
+                            ),
+                            rev=True,
+                        )
+                        viz.line(
+                            X=s(x_range),
+                            Y=s(
+                                env_cinn(
+                                    x=x_range,
+                                    condition=(complete_data[env_indices] * mask).view(
+                                        -1, mask.shape[-1]
+                                    ),
+                                    rev=True,
+                                )
+                            ),
+                            win=vis_wins["map"][env],
+                            opts=dict(title=f"Forward Map Env {env}"),
+                        )
+                        viz.histogram(
+                            X=gauss_sample,
+                            win=vis_wins["density"][env],
+                            opts=dict(title=f"Estimated Density Env {env}"),
+                        )
+            # epoch_pbar.set_description(
+            #     str(
+            #         sorted(
+            #             {
+            #                 possible_parents[idx]: round(
+            #                     mask.cpu().numpy().flatten()[idx], 2
+            #                 )
+            #                 for idx in range(len(possible_parents))
+            #             }.items(),
+            #             key=lambda x: x[0],
+            #         )
+            #     )
+            # )
+        # print(
+        #     "\n"
+        #     + str(
+        #         sorted(
+        #             {
+        #                 possible_parents[idx]: round(
+        #                     mask.cpu().numpy().flatten()[idx], 2
+        #                 )
+        #                 for idx in range(len(possible_parents))
+        #             }.items(),
+        #             key=lambda x: x[0],
+        #         )
+        #     )
+        # )
+
+    # print(l0_masker_net.final_layer())
+    return {
+        var: mask
+        for (var, mask) in sorted(
+            {
+                possible_parents[idx]: round(mask.cpu().numpy().flatten()[idx], 2)
+                for idx in range(len(possible_parents))
+            }.items(),
+            key=lambda x: x[0],
+        )
+    }
+
+
+if __name__ == "__main__":
+
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    viz = visdom.Visdom()
+    seed = 0
+    np.random.seed(seed)
+
+    ###################
+    # Data Generation #
+    ###################
+
+    for i, (scm_generator, target_var) in enumerate(
+        [
+            (build_scm_minimal, "Y"),
+            (build_scm_basic, "Y"),
+            (build_scm_basic_discrete, "Y"),
+            (build_scm_medium, "Y"),
+            (build_scm_large, "Y"),
+            (partial(simulate, nr_genes=15), "G_12"),
+            (partial(simulate, nr_genes=20), "G_16"),
+            (partial(simulate, nr_genes=25), "G_21"),
+            (partial(simulate, nr_genes=30), "G_29"),
+        ]
+    ):
+        (
+            complete_data,
+            target_data,
+            environments,
+            envs_unique,
+            env_map,
+            scm,
+            target_var,
+            target_parents,
+        ) = generate_data_from_scm(
+            scm=scm_generator(seed=seed),
+            target_var=target_var,
+            sample_size=500,
+            seed=seed,
+        )
+        possible_parents = sorted(scm.get_variables())
+        possible_parents.remove(target_var)
+        target_parents_indices = np.array(
+            [possible_parents.index(par) for par in target_parents]
+        )
+        nr_envs = envs_unique.max() + 1
+        nr_repetitions = 20
+        results = []
+        epochs = 300
+        for _ in range(nr_repetitions):
+            results.append(train(epochs=epochs, use_visdom=False))
+
+        full_results = {var: [] for var in results[0].keys()}
+        for res in results:
+            for var, mask in res.items():
+                full_results[var].append(mask)
+
+        full_results = {
+            var: val
+            for var, val in sorted(
+                full_results.items(),
+                key=lambda x: int(x[0].split("_")[-1]) if "_" in x[0] else x[0],
+            )
+        }
+        statistics = {
+            var: {
+                f'{func}{", " + ", ".join([f"{k}={v}" for k, v in kwargs.items()]) if kwargs else ""}': eval(
+                    f"np.{func}(args, {', '.join([f'{kwarg}={val}' for kwarg, val in kwargs.items()])}).round(3)"
+                )
+                for func, args, kwargs in zip(
+                    ("mean", "min", "max", "var", "quantile", "quantile", "quantile"),
+                    [values] * 7,
+                    ({}, {}, {}, {}, {"q": 0.25}, {"q": 0.5}, {"q": 0.75}),
+                )
+            }
+            for var, values in full_results.items()
+        }
+        print("\nLearning outcomes:")
+        for var, stat_dict in statistics.items():
+            print(var)
+            for func_str, value in stat_dict.items():
+                print(
+                    f"\t{func_str}:", value,
+                )
+            print(f"\tfull results:", full_results[var])
+        print("")
+        res_folder = "./results"
+        if not os.path.isdir(res_folder):
+            os.mkdir(res_folder)
+        results_df = pd.DataFrame.from_dict(statistics, orient="columns")
+        results_df.loc["results_array"] = {var: str(values) for (var, values) in full_results.items()}
+        results_df.to_csv(
+            os.path.join(res_folder, f"./results_iter_{i}.csv")
+        )

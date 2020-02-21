@@ -52,7 +52,7 @@ class CouplingBase(torch.nn.Module, ABC):
                 # conditional net needs to fulfill:
                 # ( dimension in = dim_condition, dimension out = 3 * dim * (nr_layers + 1) )
                 with torch.no_grad():
-                    out = conditional_net(torch.ones(1, dim_condition))
+                    out = conditional_net(torch.ones(1, dim_condition, device=device))
                     assert out.size() == (1, 3 * dim * (nr_layers + 1),), (
                         f"Size mismatch: Conditional network needs to output size "
                         f"[batch_size, 3*dim*(nr_layers+1) = {3 * dim * (nr_layers + 1)}]. "

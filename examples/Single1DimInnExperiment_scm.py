@@ -638,7 +638,6 @@ if __name__ == "__main__":
             #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
             #  I need to give all conditions to the environmental networks, even
             #  if most of the data has never been seen in the respective environments.
-            with prohibit_model_grad(cinn):
                 distrib_sampling_size = 400
                 target_samples = cinn(
                     x=torch.randn(
