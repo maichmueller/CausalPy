@@ -152,7 +152,7 @@ class L0Mask(torch.nn.Module):
         seed: Optional[int] = None,
     ):
         super().__init__()
-        if 0 < initial_sparsity_rate < 1:
+        if 0 <= initial_sparsity_rate <= 1:
             self.initial_sparsity_rate = initial_sparsity_rate
         else:
             self.initial_sparsity_rate = 0.5
@@ -415,6 +415,7 @@ class L0InputGate(torch.nn.Module):
         self,
         dim_input: int = 10,
         monte_carlo_sample_size: int = 1,
+        initial_sparsity_rate=0.5,
         gamma: float = -0.1,
         zeta: float = 1.1,
         device: Optional[torch.device] = None,
@@ -429,7 +430,7 @@ class L0InputGate(torch.nn.Module):
         )
 
         self.log_alpha = torch.nn.Parameter(
-            0.5 + 1e-2 * torch.randn(1, dim_input), requires_grad=True
+            initial_sparsity_rate + 1e-2 * torch.randn(1, dim_input), requires_grad=True
         )
         self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
         self.gamma = gamma

@@ -2,7 +2,7 @@ import visdom
 import torch as t
 import math
 from causalpy.neural_networks import singleDimINN
-
+from torch.distributions import Exponential
 
 def s(x):
     return x.squeeze().cpu()
@@ -20,16 +20,16 @@ dev = t.device("cuda" if t.cuda.is_available() else "cpu")
 viz = visdom.Visdom()
 size = 10**3
 n_conDim = 10
-data = t.randn((size, 1)) / 4
+data = t.data = Exponential(.1).rsample((size, 1)).to(dev)
 con = t.zeros((size, n_conDim))
-for i in range(1, 6):
-    data = t.cat((data, t.randn((size, 1)) / 4 + i), dim=0)
-    con = t.cat((con, t.zeros(size, n_conDim)), dim=0)
-data = (data-t.mean(data)).to(dev)
+# for i in range(1, 6):
+#     data = t.cat((data, t.randn((size, 1)) / 4 + i), dim=0)
+#     con = t.cat((con, t.zeros(size, n_conDim)), dim=0)
+# data = (data-t.mean(data)).to(dev)
 con = con.to(dev)
 
-xV = t.arange(-3, 3, 0.1).unsqueeze(1).to(dev)
-net = singleDimINN.cINN(nr_blocks=4, dim=1, nr_layers=30, dim_condition=n_conDim).to(dev)
+xV = t.arange(-3, 30, 0.1).unsqueeze(1).to(dev)
+net = singleDimINN.cINN(nr_blocks=2, dim=1, nr_layers=30, dim_condition=n_conDim).to(dev)
 
 win1 = viz.histogram(X=data.squeeze(), opts=dict(numbins=50, title='ground truth'))
 z = net(x=xV, condition=t.zeros(len(xV), n_conDim).to(dev), rev=False)

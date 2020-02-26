@@ -51,6 +51,11 @@ def build_scm_basic(seed=0):
                 LinearAssignment(1),
                 NoiseGenerator("standard_normal", seed=seed + 1),
             ),
+            "X_2": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("standard_normal", seed=seed + 1),
+            ),
             "Y": (
                 ["X_0", "X_1"],
                 LinearAssignment(1, 0.0, 1, -1),
@@ -77,18 +82,57 @@ def build_scm_linandpoly(seed=0):
             ),
             "X_2": (
                 ["X_0", "X_1"],
-                LinearAssignment(1, 1, 3, 2),
+                LinearAssignment(1, 1, .5, 2),
                 NoiseGenerator("standard_normal", seed=seed+2),
             ),
             "X_3": (
                 ["X_1", "X_2"],
-                PolynomialAssignment([0, 1], [0, 1, 0.5], [0, 0, 4]),
+                PolynomialAssignment([0, 1], [0, 1, 0.5], [0, 0, 2]),
                 NoiseGenerator("standard_normal", seed=seed+3),
             ),
             "Y": (
                 ["X_0", "X_2"],
                 PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 2]),
                 NoiseGenerator("standard_normal", seed=seed+4),
+            ),
+        },
+        variable_tex_names={
+            "X_0": "$X_0$",
+            "X_1": "$X_1$",
+            "X_2": "$X_2$",
+            "X_3": "$X_3$",
+        },
+    )
+    return cn
+
+
+def build_scm_exponential(seed=0):
+    cn = SCM(
+        assignment_map={
+            "X_0": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("exponential", seed=seed),
+            ),
+            "X_1": (
+                ["X_0"],
+                LinearAssignment(1, 1, 2),
+                NoiseGenerator("exponential", scale=.4, seed=seed+1),
+            ),
+            "X_2": (
+                ["X_0", "X_1"],
+                LinearAssignment(1, 1, .5, 2),
+                NoiseGenerator("exponential", scale=.4, seed=seed+2),
+            ),
+            "X_3": (
+                ["X_1", "X_2"],
+                PolynomialAssignment([0, 1], [0, 1, 0.5], [0, 0, 2]),
+                NoiseGenerator("standard_normal", seed=seed+3),
+            ),
+            "Y": (
+                ["X_0", "X_2"],
+                PolynomialAssignment([0, 1], [0, 0, 1.5], [0, 2]),
+                NoiseGenerator("exponential", scale=.1, seed=seed+4),
             ),
         },
         variable_tex_names={

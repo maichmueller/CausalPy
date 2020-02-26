@@ -86,6 +86,9 @@ class NoiseGenerator(Noise):
     For Scipy distributions please refer to:
     https://docs.scipy.org/doc/scipy/reference/stats.html
     """
+    standard_distr_names = {
+        "standard_cauchy": "Cauchy"
+    }
 
     def __init__(self, distribution_str: Optional[str] = None, source="numpy", seed=None, **distribution_params):
         self.params = distribution_params
@@ -143,3 +146,13 @@ class NoiseGenerator(Noise):
         return self.distribution(size=size, **kwargs)
 
     _apply_dist_params = staticmethod(_apply_dist_params)
+
+    def __str__(self):
+        s = f"{' '.join(map(str.capitalize, self.distribution_str.split('_')))}"
+        if self.params:
+            s += "("
+            for param, value in self.params.items():
+                s += f"{param}={round(value, 2)}, "
+
+            s = s[0:-2] + ")"  # remove last comma and whitespace if there were params
+        return s

@@ -1,6 +1,24 @@
 import torch
 
 
+class prohibit_model_grad(object):
+    """
+    Context manager cutting of the passed model from the graph generation of the contained pytorch computations.
+    """
+    def __init__(self, model: torch.nn.Module):
+        self.model = model
+
+    def __enter__(self):
+        for p in self.model.parameters():
+            p.requires_grad = False
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        for p in self.model.parameters():
+            p.requires_grad = True
+        return self
+
+
 def get_jacobian(
         network: torch.nn.Module,
         x: torch.Tensor,

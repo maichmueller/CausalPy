@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Optional, Union, Collection
 
 
-
 class Noise(ABC):
     """
     Abstract Base Class for the noise functions that can be provided to the SCM for noise generation
@@ -38,16 +37,3 @@ class Noise(ABC):
         -------
         Collection of samples (preferably a numpy array).
         """
-
-
-class DiscreteNoise(Noise):
-    def __init__(
-        self,
-        values: Collection[Union[float, int]],
-        probabilities: Collection[float],
-        seed: Optional[int] = None,
-    ):
-        self.values = values
-        self.probabilities = probabilities
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)

@@ -448,8 +448,15 @@ class SCM:
 
     def str(self):
         """
-        Computes a string representation of the assignment functions for each variable and also mentions on which
-        variables an intervention has been applied.
+        Computes a string representation of the SCM. Specifically, returns a string of the form:
+
+        'Structural Causal Model of `nr_variables` variables: X_0, X_1, ...
+         Following variables are actively intervened on: [`list(intervened variables)`]
+         Current Assignment Functions are:
+         X_0 := f(N) = `X_0 assignment_string_representation`
+         X_1 := f(N, X_0) = `X_1 assignment_string_representation`
+         ...'
+
         Returns
         -------
         str, the representation.
@@ -464,6 +471,8 @@ class SCM:
         for node in self.graph.nodes:
             parents_vars = [pred for pred in self.graph.predecessors(node)]
             line = f"{str(node).rjust(max_var_space)} := {self.graph.nodes[node][self.function_key].str(parents_vars)}"
+            # add explanation to the noise term
+            line += f'\t [ N := {str(self.graph.nodes[node][self.noise_key])} ]'
             lines.append(line)
         return "\n".join(lines)
 

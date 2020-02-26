@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Union, TypeVar
+from typing import Union, TypeVar, Optional, List, Collection
 
 
 class Assignment(ABC):
@@ -53,7 +53,7 @@ class Assignment(ABC):
         )
 
     @abstractmethod
-    def function_str(self, variable_names=None):
+    def function_str(self, variable_names: Optional[Collection[str]] = None):
         """
         Method to convert the assignment functor to console printable output of the form:
             f(N, x_0,...) = math_rep_of_func_as_string_here...
@@ -81,7 +81,7 @@ class Assignment(ABC):
     def __str__(self):
         return self.str()
 
-    def str(self, variable_names=None):
+    def str(self, variable_names: Optional[Collection[str]] = None):
         if variable_names is None:
             variable_names = [f"x_{i}" for i in range(len(self))]
         variable_names = ["N"] + variable_names

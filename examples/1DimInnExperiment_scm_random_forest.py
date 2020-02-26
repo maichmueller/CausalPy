@@ -21,7 +21,6 @@ from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
 from simulation_linear import simulate
-import plotly.figure_factory as ff
 
 import torch as th
 import math
@@ -163,7 +162,7 @@ def mmd_multiscale(x, y, normalize_j=True):
 
 
 def wasserstein(x, y):
-    # x, y = normalize_jointly(x, y)
+    x, y = normalize_jointly(x, y)
     sort_sq_diff = (torch.sort(x, dim=0)[0] - torch.sort(y, dim=0)[0]).pow(2)
     std_prod = torch.std(x) * torch.std(y)
     return torch.mean(sort_sq_diff) / std_prod
@@ -214,7 +213,6 @@ def generate_data_from_scm(
         environments += [environments[-1] + 1] * sample_size_per_env
         scm.undo_intervention()
     data = pd.concat(sample_data, sort=True)[variables]
-
     if countify:
         data = pd.DataFrame(
             np.random.poisson(
@@ -222,10 +220,7 @@ def generate_data_from_scm(
             ),
             columns=data.columns,
         )
-        # data += np.random.normal(0, 0.1, size=data.shape)
-
-    # normalize
-    # data = (data) / data.std()
+        data += np.random.normal(0, 0.1, size=data.shape)
 
     environments = np.array(environments)
     target_data = data[target_var]
@@ -257,7 +252,7 @@ def generate_data_from_scm(
     )
 
 
-def visdom_plot_mask(curr_mask, possible_parents, window=None):
+def visdom_plot_mask(viz, curr_mask, possible_parents, env, window=None):
     if len(curr_mask) == len(possible_parents) == 1:
         curr_mask = np.append(curr_mask, 0)
         possible_parents = possible_parents + ["Dummy"]
@@ -265,7 +260,7 @@ def visdom_plot_mask(curr_mask, possible_parents, window=None):
         X=curr_mask.reshape(1, -1),
         Y=np.array([n.replace("_", "") for n in possible_parents]).reshape(1, -1),
         win=window,
-        opts=dict(ytickmax=1, ytickmin=0, title=f"Final Mask for variables"),
+        opts=dict(ytickmax=1, ytickmin=0, title=f"Final Mask for variables env {env}"),
     )
 
 
@@ -359,16 +354,15 @@ def env_distributions_dist_loss(
     return loss
 
 
-def visdom_plot_loss(losses, loss_win, title="Loss Behaviour"):
+def visdom_plot_loss(viz, losses, loss_win, title="Loss Behaviour"):
     losses = np.array(losses)
     losses = np.nan_to_num(losses)
     ytickmax = np.quantile(losses, 0.95) * 2 if len(losses) > 1 else None
-    ytickmin = losses.min()
     viz.line(
         X=np.arange(len(losses)),
         Y=losses,
         win=loss_win,
-        opts=dict(title=title, ytickmin=min(-1, ytickmin), ytickmax=ytickmax,),
+        opts=dict(title=title, ytickmin=-1, ytickmax=ytickmax,),
     )
 
 
@@ -399,17 +393,25 @@ def train(epochs=300, use_visdom=True):
         for _ in envs_unique
     ]
 
-    l0_masker_net = L0InputGate(
-        complete_data.shape[1],
-        monte_carlo_sample_size=1,
-        initial_sparsity_rate=1,
-        device=dev,
-    ).to(dev)
-    mask_rep_size = l0_masker_net.mcs_size
+    l0_masker_list = [
+        L0InputGate(
+            complete_data.shape[1],
+            monte_carlo_sample_size=1,
+            initial_sparsity_rate=1,
+            device=dev,
+        ).to(dev)
+        for _ in envs_unique
+    ]
+    mask_rep_size = l0_masker_list[0].mcs_size
 
     optimizer = torch.optim.Adam(
         [
-            {"params": l0_masker_net.parameters(), "lr": 1e-2},
+            {
+                "params": itertools.chain(
+                    *[l0_masker.parameters() for l0_masker in l0_masker_list]
+                ),
+                "lr": 1e-2,
+            },
             {"params": itertools.chain(*[c_inn.parameters() for c_inn in cINN_list])},
         ],
         lr=0.001,
@@ -418,58 +420,13 @@ def train(epochs=300, use_visdom=True):
     ####################
     #  Visdom Windows  #
     ####################
-
     if use_visdom:
-        vis_wins = {"map": [], "density": []}
-        loss_windows = dict()
-        for win_name in ("total", "dist", "cinn", "l0"):
-            loss_windows[win_name] = viz.line(
-                X=np.arange(1).reshape(-1, 1),
-                Y=np.array([1]).reshape(-1, 1),
-                opts=dict(title=f"Loss"),
-            )
-        mask_win = visdom_plot_mask(
-            l0_masker_net.final_layer().cpu().detach().numpy().reshape(1, -1),
-            possible_parents,
+        viz = visdom.Visdom(env="pretrain")
+        loss_windows, mask_windows, quantiles_envs, vis_wins = setup_pretrain_visdom(
+            viz, cINN_list, dim_condition, l0_masker_list
         )
-        quantiles_envs = dict()
-        with torch.no_grad():
-            for env, cinn in enumerate(cINN_list):
-                t_data = target_data[env_map[env]]
-                quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
-                quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
-                x = (
-                    torch.as_tensor(
-                        np.linspace(*quantiles_envs[env], complete_data.shape[0])
-                    )
-                    .unsqueeze(1)
-                    .to(dev)
-                )
-                gauss_sample = cinn(
-                    x=x,
-                    condition=torch.zeros(complete_data.shape[0], dim_condition).to(
-                        dev
-                    ),
-                    rev=False,
-                )
-                vis_wins["map"].append(
-                    viz.line(
-                        X=s(x),
-                        Y=s(gauss_sample),
-                        opts=dict(title=f"Forward Map Env {env}"),
-                    )
-                )
-                vis_wins["density"].append(
-                    viz.line(
-                        X=s(x),
-                        Y=s(std(gauss_sample) * torch.exp(cinn.log_jacobian_cache)),
-                        opts=dict(title=f"Estimated Density Env {env}"),
-                    )
-                )
-                vis_wins["ground_truth"] = viz.histogram(
-                    X=t_data,
-                    opts=dict(numbins=20, title=f"Target data histogram Env {env}"),
-                )
+    else:
+        viz = None
 
     ##################
     # Model Training #
@@ -482,9 +439,8 @@ def train(epochs=300, use_visdom=True):
     l0_losses = []
 
     nr_total_samples = complete_data.shape[0]
-    hyperparams = {"l0": 1.5, "env": 5, "inn": 2}
-    epoch_pbar = tqdm(range(epochs))
-    batch_size = min(90000000, complete_data.shape[0])
+    hyperparams = {"l0": 0.4, "env": 5, "inn": 5}
+    batch_size = min(5000, complete_data.shape[0])
 
     sampler = StratifiedSampler(
         data_source=np.arange(nr_total_samples),
@@ -498,13 +454,114 @@ def train(epochs=300, use_visdom=True):
         batch_size=batch_size,
         sampler=sampler,
     )
+    mask = pretrain_environment(
+        viz,
+        cINN_list,
+        cinn_losses,
+        dataloader,
+        epochs,
+        hyperparams,
+        l0_masker_list,
+        loss_windows,
+        mask_rep_size,
+        mask_windows,
+        optimizer,
+        quantiles_envs,
+        total_losses,
+        use_ground_truth_mask,
+        use_visdom,
+        vis_wins,
+    )
+
+    del l0_masker_list
+    l0_masker = L0InputGate(
+        complete_data.shape[1],
+        monte_carlo_sample_size=10,
+        initial_sparsity_rate=1.,
+        device=dev,
+    ).to(dev)
+    mask_rep_size = l0_masker.mcs_size
+    optimizer = torch.optim.Adam(
+        [
+            {"params": l0_masker.parameters(), "lr": 1e-2},
+            {"params": itertools.chain(*[c_inn.parameters() for c_inn in cINN_list])},
+        ],
+        lr=0.001,
+        # weight_decay=1e-5,
+    )
+    hyperparams["inn"] *= 1 / 5
+    # viz.delete_env("pretrain")
+    if use_visdom:
+        viz = visdom.Visdom(env="commontrain")
+        loss_windows, mask_window, quantiles_envs, vis_wins = setup_train_visdom(
+            viz, l0_masker, cINN_list
+        )
+    else:
+        viz = None
+    mask = train_together(
+        viz,
+        epochs,
+        l0_losses,
+        l0_masker,
+        mask_window,
+        assume_invertibility_in_noise,
+        cINN_list,
+        cinn_losses,
+        dataloader,
+        env_distance_losses,
+        hyperparams,
+        loss_windows,
+        mask,
+        optimizer,
+        quantiles_envs,
+        total_losses,
+        use_ground_truth_mask,
+        use_visdom,
+        vis_wins,
+    )
+
+    results = {
+        var: mask
+        for (var, mask) in sorted(
+            {
+                possible_parents[idx]: round(mask.cpu().numpy().flatten()[idx], 2)
+                for idx in range(len(possible_parents))
+            }.items(),
+            key=lambda x: x[0],
+        )
+    }
+    return results, cINN_list
+
+
+def train_together(
+    viz,
+    epochs,
+    l0_losses,
+    l0_masker_net,
+    mask_win,
+    assume_invertibility_in_noise,
+    cINN_list,
+    cinn_losses,
+    dataloader,
+    env_distance_losses,
+    hyperparams,
+    loss_windows,
+    mask,
+    optimizer,
+    quantiles_envs,
+    total_losses,
+    use_ground_truth_mask,
+    use_visdom,
+    vis_wins,
+):
+    mask_rep_size = l0_masker_net.mcs_size
+    epoch_pbar = tqdm(range(epochs))
     for epoch in epoch_pbar:
         batch_losses = []
         batch_distr_losses = []
         batch_inn_losses = []
         l0_batch_losses = []
         for batch_indices, _ in dataloader:
-            optimizer.zero_grad()
 
             batch_indices = np.sort(batch_indices.numpy())
             this_batch_size = len(batch_indices)
@@ -522,35 +579,36 @@ def train(epochs=300, use_visdom=True):
 
             masked_batch_data = l0_masker_net(complete_data[batch_indices], l0_mask)
             inn_loss = torch.zeros(1).to(dev)
-
-            batch_indices_env = []
-            masked_batch_data_env = []
+            samples_list = []
+            env_batch_indices_list = []
             for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                indices = np.intersect1d(batch_indices, env_indices)
-                batch_indices_env.append(indices)
-                masked_batch_data_env.append(
-                    l0_masker_net(complete_data[indices], l0_mask)
-                )
-
-            cross_environmental_gaussians = []
-            for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
-                # we need to repeat the input by the number of monte carlo samples we generate in the
-                # l0 masker network, as this is the number of repeated, different maskings of the data.
-                env_batch_indices = batch_indices_env[env]
+                env_batch_indices = np.intersect1d(batch_indices, env_indices)
+                env_batch_indices_list.append(env_batch_indices)
                 env_batch_size = len(env_batch_indices)
 
+                # we need to repeat the input by the number of monte carlo samples we generate in the
+                # l0 masker network, as this is the number of repeated, different maskings of the data.
                 target_env_data = target_data[env_batch_indices].view(-1, 1)
-
-                # compute the INN loss per mask, then average over the loss outcome with respect to the number of masks.
-                for masked_condition_data in masked_batch_data_env[env].view(
-                    mask_rep_size, env_batch_size, -1
-                ):
+                masked_env_batch_data = l0_masker_net(
+                    complete_data[env_batch_indices], l0_mask
+                ).view(mask_rep_size, env_batch_size, -1)
+                for masked_condition_data in masked_env_batch_data:
                     gauss_sample = env_cinn(
-                        x=target_env_data, condition=masked_condition_data, rev=False,
+                        x=target_env_data,
+                        condition=masked_condition_data,
+                        rev=False,
                     )
                     log_grad = env_cinn.log_jacobian_cache
-                    inn_loss += inn_max_likelihood_loss(gauss_sample, log_grad)
+                    inn_loss += inn_max_likelihood_loss(
+                        gauss_sample, log_grad
+                    )
                 inn_loss /= mask_rep_size
+
+                # gauss_sample = env_cinn(
+                #     x=xdata, condition=masked_env_batch_data, rev=False,
+                # )
+                # log_grad = env_cinn.log_jacobian_cache
+                # inn_loss = inn_loss + inn_max_likelihood_loss(gauss_sample, log_grad)
 
                 # we need to repeat the input by the number of monte carlo samples we generate in the
                 # l0 masker network, as this is the number of repeated, different maskings of the data.
@@ -562,67 +620,52 @@ def train(epochs=300, use_visdom=True):
                 #  for all the samples I draw. Otherwise the theory wouldn't apply! Thus
                 #  I need to give all conditions to the environmental networks, even
                 #  if most of the data has never been seen in the respective environments.
-                #
-                # if not assume_invertibility_in_noise:
-                #     distrib_sampling_size = 30
-                #     samples = env_cinn(
-                #         x=torch.randn(
-                #             distrib_sampling_size * mask_rep_size * this_batch_size,
-                #             1,
-                #             device=dev,
-                #         ),
-                #         condition=masked_batch_data.repeat(distrib_sampling_size, 1),
-                #         rev=True,
-                #     ).view(distrib_sampling_size, mask_rep_size, this_batch_size, 1)
-                # else:
-                other_env_gaussians = dict()
-                for other_env in range(nr_envs):
-                    if other_env != env:
-                        td = target_data[env_indices]
-                        sd = masked_batch_data_env[other_env]
-                        env_indices = batch_indices_env[other_env]
-                        oenv_batch_size = len(env_indices)
-                        # only map the environmental data of other environments on
-                        samples = env_cinn(
-                            x=td.view(-1, 1).repeat(mask_rep_size, 1),
-                            condition=sd.view(mask_rep_size * oenv_batch_size, -1),
-                            rev=False,
-                        ).view(mask_rep_size, oenv_batch_size, 1)
-                        other_env_gaussians[other_env] = samples
-                cross_environmental_gaussians.append(other_env_gaussians)
+
+                if not assume_invertibility_in_noise:
+                    distrib_sampling_size = 30
+                    samples = env_cinn(
+                        x=torch.randn(
+                            distrib_sampling_size * mask_rep_size * this_batch_size,
+                            1,
+                            device=dev,
+                        ),
+                        condition=masked_batch_data.repeat(distrib_sampling_size, 1),
+                        rev=True,
+                    ).view(distrib_sampling_size, mask_rep_size, this_batch_size, 1)
+                else:
+                    samples = env_cinn(
+                        x=target_data[batch_indices]
+                        .view(-1, 1)
+                        .repeat(l0_masker_net.mcs_size, 1),
+                        condition=masked_batch_data,
+                        rev=False,
+                    ).view(mask_rep_size, this_batch_size, 1)
+
+                samples_list.append(samples)
+                # samples.append(gauss_sample.view(mask_rep_size, env_batch_size, 1))
+
             # all environmental distributions of Y should become equal, thus use
             # MMD to measure the distance of their distributions.
             if not assume_invertibility_in_noise:
-                env_distribution_distance = env_distributions_dist_loss(samples_env, 0)
+                env_distribution_distance = env_distributions_dist_loss(samples_list, 0)
             else:
                 env_distribution_distance = 0
-                # cross_environmental_gaussians is of the form ...
-                # List (Environments) [List (OtherEnvironments) [Tensor (masks, samples)]]
-                # or short: [env][other_env]Tensor(mask, samples)
-                for env in range(nr_envs):
-                    generated_samples = [
-                        torch.cat(
-                            [
-                                cross_environmental_gaussians[env][oenv][mask]
-                                for oenv in range(nr_envs)
-                                if oenv != env
-                            ]
-                        )
-                        for mask in range(mask_rep_size)
-                    ]
-                    for gen_samples_mask_i in generated_samples:
-                        loss_per_mask = 0
-                        gauss_sample = torch.randn(
-                            gen_samples_mask_i.size(0), 1, device=dev
-                        )
-                        loss_per_mask += wasserstein(gauss_sample, gen_samples_mask_i)
+                generated_samples = [
+                    torch.cat([samples_list[i][mask] for i in range(nr_envs)])
+                    for mask in range(mask_rep_size)
+                ]
+                for gen_samples_mask_i in generated_samples:
+                    loss_per_mask = 0
+                    gauss_sample = torch.randn(
+                        gen_samples_mask_i.size(0), 1, device=dev
+                    )
+                    loss_per_mask += wasserstein(gauss_sample, gen_samples_mask_i)
 
-                        env_distribution_distance += loss_per_mask
+                    env_distribution_distance += loss_per_mask / nr_envs
                 env_distribution_distance = env_distribution_distance / mask_rep_size
 
             batch_distr_losses.append(env_distribution_distance.item())
             batch_inn_losses.append(inn_loss.item())
-
             l0_loss = l0_masker_net.complexity_loss()
             l0_batch_losses.append(l0_loss.item())
 
@@ -632,27 +675,27 @@ def train(epochs=300, use_visdom=True):
                 + hyperparams["l0"] * l0_loss
             )
 
+            # print(loss)
+            batch_losses.append(batch_loss.item())
+            batch_loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
             if use_visdom:
                 visdom_plot_mask(
+                    viz,
                     l0_masker_net.final_layer().cpu().detach().numpy(),
                     possible_parents,
+                    "common",
                     mask_win,
                 )
-                # hist_data = [
-                #     gen_samples_mask_i.detach().cpu().numpy() for gen_samples_mask_i in generated_samples
-                # ]
-                # group_labels = ["Mask " + str(i) for i in range(mask_rep_size)]
-                #
-                # fig = ff.create_distplot(
-                #     hist_data, group_labels, bin_size=0.5, curve_type="normal"
-                # )  # override default 'kde')
                 fig = go.Figure()
                 for i, gen_samples_mask_i in enumerate(generated_samples):
                     fig.add_trace(
                         go.Histogram(
                             x=gen_samples_mask_i.view(-1).cpu().detach().numpy(),
                             name=f"Mask {i}",
-                            histnorm="probability density",
+                            histnorm="probability density"
                         )
                     )
 
@@ -674,16 +717,11 @@ def train(epochs=300, use_visdom=True):
                     title=f"Gaussian shape approximation by the environments.",
                 )
                 viz.plotlyplot(fig, win="gaussian")
-            # print(loss)
-            batch_losses.append(batch_loss.item())
-            batch_loss.backward()
-            optimizer.step()
-        # Add the L0 regularization
+            # Add the L0 regularization
         env_distance_losses.append(np.mean(batch_distr_losses))
         cinn_losses.append(np.mean(batch_inn_losses))
-        l0_losses.append(np.mean(l0_batch_losses))
         total_losses.append(np.mean(batch_losses))
-
+        l0_losses.append(np.mean(l0_batch_losses))
         # l0_loss.backward()
 
         if not use_ground_truth_mask:
@@ -693,78 +731,337 @@ def train(epochs=300, use_visdom=True):
 
         if use_visdom:
             visdom_plot_loss(
-                total_losses, loss_windows["total"], "Total Loss Behaviour"
+                viz, total_losses, loss_windows["total"], "Total Loss Behaviour"
             )
             visdom_plot_loss(
+                viz,
                 env_distance_losses,
                 loss_windows["dist"],
                 "Distributional Distance Loss Behaviour",
             )
-            visdom_plot_loss(cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
-            visdom_plot_loss(l0_losses, loss_windows["l0"], "L0 Loss Behaviour")
+            visdom_plot_loss(
+                viz, cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour"
+            )
+
+            visdom_plot_loss(viz, l0_losses, loss_windows["l0"], "L0 Loss Behaviour")
 
             if epoch % 1 == 0:
                 with torch.no_grad():
                     for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
                         # plot the distribution of the environment
-                        try:
-                            x_range = (
-                                torch.as_tensor(
-                                    np.linspace(
-                                        *quantiles_envs[env],
-                                        target_data[env_indices].shape[0],
-                                    )
+                        x_range = (
+                            torch.as_tensor(
+                                np.linspace(
+                                    *quantiles_envs[env],
+                                    target_data[env_indices].shape[0],
                                 )
-                                .unsqueeze(1)
-                                .to(dev)
                             )
-                            gauss_sample = env_cinn(
-                                x=torch.randn(env_indices.size, 1, device=dev),
-                                condition=(complete_data[env_indices] * mask).view(
-                                    -1, mask.shape[-1]
-                                ),
-                                rev=True,
-                            )
-                            viz.line(
-                                X=s(x_range),
-                                Y=s(
-                                    env_cinn(
-                                        x=x_range,
-                                        condition=(
-                                            complete_data[env_indices] * mask
-                                        ).view(-1, mask.shape[-1]),
-                                        rev=True,
-                                    )
-                                ),
-                                win=vis_wins["map"][env],
-                                opts=dict(title=f"Forward Map Env {env}"),
-                            )
-                            viz.histogram(
-                                X=gauss_sample,
-                                win=vis_wins["density"][env],
-                                opts=dict(title=f"Estimated Density Env {env}"),
-                            )
-                        except:
-                            pass
+                            .unsqueeze(1)
+                            .to(dev)
+                        )
+                        gauss_sample = env_cinn(
+                            x=torch.randn(env_indices.size, 1, device=dev),
+                            condition=(complete_data[env_indices] * mask).view(
+                                -1, mask.shape[-1]
+                            ),
+                            rev=True,
+                        )
+                        viz.line(
+                            X=s(x_range),
+                            Y=s(
+                                env_cinn(
+                                    x=x_range,
+                                    condition=(complete_data[env_indices] * mask).view(
+                                        -1, mask.shape[-1]
+                                    ),
+                                    rev=True,
+                                )
+                            ),
+                            win=vis_wins["map"][env],
+                            opts=dict(title=f"Forward Map Env {env}"),
+                        )
+                        viz.histogram(
+                            X=gauss_sample,
+                            win=vis_wins["density"][env],
+                            opts=dict(title=f"Estimated Density Env {env}"),
+                        )
 
-    # print(l0_masker_net.final_layer())
-    results = {
-        var: mask
-        for (var, mask) in sorted(
-            {
-                possible_parents[idx]: round(mask.cpu().numpy().flatten()[idx], 2)
-                for idx in range(len(possible_parents))
-            }.items(),
-            key=lambda x: x[0],
+    return mask
+
+
+def setup_train_visdom(viz, l0_masker, cINN_list):
+    vis_wins = {"map": [], "density": []}
+    loss_windows = dict()
+    losses = ("total", "dist", "cinn", "l0")
+    for _, win_name in zip(range(len(losses)), losses):
+        loss_windows[win_name] = viz.line(
+            X=np.arange(1).reshape(-1, 1),
+            Y=np.array([1]).reshape(-1, 1),
+            opts=dict(title=f"Loss"),
         )
-    }
-    return results, cINN_list
+    mask_win = visdom_plot_mask(
+        viz,
+        l0_masker.final_layer().cpu().detach().numpy().reshape(1, -1),
+        possible_parents,
+        "common",
+    )
+    quantiles_envs = dict()
+    with torch.no_grad():
+        for env, cinn in enumerate(cINN_list):
+            t_data = target_data[env_map[env]]
+            quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
+            quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
+            x = (
+                torch.as_tensor(
+                    np.linspace(*quantiles_envs[env], complete_data.shape[0])
+                )
+                .unsqueeze(1)
+                .to(dev)
+            )
+            gauss_sample = cinn(
+                x=x, condition=torch.zeros(complete_data.shape).to(dev), rev=False,
+            )
+            vis_wins["map"].append(
+                viz.line(
+                    X=s(x),
+                    Y=s(gauss_sample),
+                    opts=dict(title=f"Forward Map Env {env}"),
+                )
+            )
+            vis_wins["density"].append(
+                viz.line(
+                    X=s(x),
+                    Y=s(std(gauss_sample) * torch.exp(cinn.log_jacobian_cache)),
+                    opts=dict(title=f"Estimated Density Env {env}"),
+                )
+            )
+            vis_wins["ground_truth"] = viz.histogram(
+                X=t_data,
+                opts=dict(numbins=20, title=f"Target data histogram Env {env}"),
+            )
+    return loss_windows, mask_win, quantiles_envs, vis_wins
+
+
+def setup_pretrain_visdom(viz, cINN_list, dim_condition, l0_masker_list):
+    vis_wins = {"map": [], "density": []}
+    loss_windows = dict()
+    for win_name in ("total", "dist", "cinn"):
+        loss_windows[win_name] = viz.line(
+            X=np.arange(1).reshape(-1, 1),
+            Y=np.array([1]).reshape(-1, 1),
+            opts=dict(title=f"Loss"),
+        )
+    mask_windows = []
+    for env, l0_masker in enumerate(l0_masker_list):
+        mask_windows.append(
+            visdom_plot_mask(
+                viz,
+                l0_masker.final_layer().cpu().detach().numpy().reshape(1, -1),
+                possible_parents,
+                env=env,
+            )
+        )
+    quantiles_envs = dict()
+    with torch.no_grad():
+        for env, cinn in enumerate(cINN_list):
+            t_data = target_data[env_map[env]]
+            quantiles_envs[env] = [np.quantile(t_data.cpu(), 0.01)]
+            quantiles_envs[env].append(np.quantile(t_data.cpu(), 0.99))
+            x = (
+                torch.as_tensor(
+                    np.linspace(*quantiles_envs[env], complete_data.shape[0])
+                )
+                .unsqueeze(1)
+                .to(dev)
+            )
+            gauss_sample = cinn(
+                x=x,
+                condition=torch.zeros(complete_data.shape[0], dim_condition).to(dev),
+                rev=False,
+            )
+            vis_wins["map"].append(
+                viz.line(
+                    X=s(x),
+                    Y=s(gauss_sample),
+                    opts=dict(title=f"Forward Map Env {env}"),
+                )
+            )
+            vis_wins["density"].append(
+                viz.line(
+                    X=s(x),
+                    Y=s(std(gauss_sample) * torch.exp(cinn.log_jacobian_cache)),
+                    opts=dict(title=f"Estimated Density Env {env}"),
+                )
+            )
+            vis_wins["ground_truth"] = viz.histogram(
+                X=t_data,
+                opts=dict(numbins=20, title=f"Target data histogram Env {env}"),
+            )
+    return loss_windows, mask_windows, quantiles_envs, vis_wins
+
+
+def pretrain_environment(
+    viz,
+    cINN_list,
+    cinn_losses,
+    dataloader,
+    epochs,
+    hyperparams,
+    l0_masker_list,
+    loss_windows,
+    mask_rep_size,
+    mask_windows,
+    optimizer,
+    quantiles_envs,
+    total_losses,
+    use_ground_truth_mask,
+    use_visdom,
+    vis_wins,
+):
+    epoch_pbar = tqdm(range(int(epochs / 3)))
+    for epoch in epoch_pbar:
+        batch_losses = []
+        batch_distr_losses = []
+        batch_inn_losses = []
+
+        for batch_indices, _ in dataloader:
+            optimizer.zero_grad()
+
+            batch_indices = np.sort(batch_indices.numpy())
+            this_batch_size = len(batch_indices)
+
+            batch_loss = torch.zeros(1).to(dev)
+            samples_env = []
+            for l0_masker_net, env_cinn, (env, env_indices) in zip(
+                l0_masker_list, cINN_list, env_map.items()
+            ):
+                if not use_ground_truth_mask:
+                    l0_mask = l0_masker_net.create_gates()
+                else:
+                    l0_mask = torch.cat(
+                        [
+                            torch.ones(mask_rep_size, 1, 2, device=dev),
+                            torch.zeros(mask_rep_size, 1, 1, device=dev),
+                        ],
+                        dim=2,
+                    )
+                env_batch_indices = np.intersect1d(batch_indices, env_indices)
+                env_batch_size = len(env_batch_indices)
+
+                # we need to repeat the input by the number of monte carlo samples we generate in the
+                # l0 masker network, as this is the number of repeated, different maskings of the data.
+                xdata = (
+                    target_data[env_batch_indices].unsqueeze(1).repeat(mask_rep_size, 1)
+                )
+                gauss_sample = env_cinn(
+                    x=xdata,
+                    condition=l0_masker_net(complete_data[env_batch_indices], l0_mask),
+                    rev=False,
+                )
+                log_grad = env_cinn.log_jacobian_cache
+                inn_loss = hyperparams["inn"] * inn_max_likelihood_loss(
+                    gauss_sample, log_grad
+                )
+                l0_loss = hyperparams["l0"] * l0_masker_net.complexity_loss()
+                batch_loss = batch_loss + l0_loss + inn_loss
+
+            batch_inn_losses.append(batch_loss.item())
+
+            if use_visdom:
+                for env, (l0_masker, window) in enumerate(
+                    zip(l0_masker_list, mask_windows)
+                ):
+                    visdom_plot_mask(
+                        viz,
+                        l0_masker.final_layer().cpu().detach().numpy(),
+                        possible_parents,
+                        env,
+                        window,
+                    )
+            # print(loss)
+            batch_losses.append(batch_loss.item())
+            batch_loss.backward()
+            optimizer.step()
+        # Add the L0 regularization
+        cinn_losses.append(np.mean(batch_inn_losses))
+        total_losses.append(np.mean(batch_losses))
+        # l0_loss.backward()
+
+        if use_visdom:
+            visdom_plot_loss(
+                viz,total_losses, loss_windows["total"], "Total Loss Behaviour"
+            )
+            visdom_plot_loss(viz,cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
+
+            if epoch % 1 == 0:
+                with torch.no_grad():
+                    for l0_masker, env_cinn, (env, env_indices) in zip(
+                        l0_masker_list, cINN_list, env_map.items()
+                    ):
+                        # plot the distribution of the environment
+                        if not use_ground_truth_mask:
+                            mask = l0_masker_net.final_layer().detach().flatten()
+                        else:
+                            mask = l0_mask
+                        x_range = (
+                            torch.as_tensor(
+                                np.linspace(
+                                    *quantiles_envs[env],
+                                    target_data[env_indices].shape[0],
+                                )
+                            )
+                            .unsqueeze(1)
+                            .to(dev)
+                        )
+                        gauss_sample = env_cinn(
+                            x=torch.randn(
+                                env_indices.size, 1, device=dev
+                            ),
+                            condition=(complete_data[env_indices] * mask).view(
+                                -1, mask.shape[-1]
+                            ),
+                            rev=True,
+                        )
+                        viz.line(
+                            X=s(x_range),
+                            Y=s(
+                                env_cinn(
+                                    x=x_range,
+                                    condition=(complete_data[env_indices] * mask).view(
+                                        -1, mask.shape[-1]
+                                    ),
+                                    rev=True,
+                                )
+                            ),
+                            win=vis_wins["map"][env],
+                            opts=dict(title=f"Forward Map Env {env}"),
+                        )
+                        viz.histogram(
+                            X=gauss_sample,
+                            win=vis_wins["density"][env],
+                            opts=dict(title=f"Estimated Density Env {env}"),
+                        )
+    for env, l0_masker in enumerate(l0_masker_list):
+        print(
+            "Environment",
+            env,
+            ":",
+            {
+                possible_parents[idx]: l0_masker.final_layer()
+                .detach()
+                .cpu()
+                .numpy()
+                .flatten()[idx]
+                for idx in range(len(possible_parents))
+            },
+        )
+
+    return mask
 
 
 if __name__ == "__main__":
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    viz = visdom.Visdom()
     seed = 0
     np.random.seed(seed)
 
@@ -774,9 +1071,9 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            (build_scm_minimal, "Y"),
-            (build_scm_basic, "Y"),
-            (build_scm_basic_discrete, "Y"),
+            # (build_scm_minimal, "Y"),
+            # (build_scm_basic, "Y"),
+            # (build_scm_basic_discrete, "Y"),
             # (build_scm_exponential, "Y"),
             (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
@@ -798,8 +1095,9 @@ if __name__ == "__main__":
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
             target_var=target_var,
-            sample_size=3000,
+            sample_size=600,
             seed=seed,
+            markovblanket_interv_only=False,
         )
         possible_parents = sorted(scm.get_variables())
         possible_parents.remove(target_var)
@@ -809,9 +1107,9 @@ if __name__ == "__main__":
         nr_envs = envs_unique.max() + 1
         nr_repetitions = 5
         results = []
-        epochs = 100
+        epochs = 300
         for _ in range(nr_repetitions):
-            results.append(train(epochs=epochs, use_visdom=False))
+            results.append(train(epochs=epochs, use_visdom=True))
 
         full_results = {var: [] for var in results[0][0].keys()}
         for res in results:
@@ -855,3 +1153,45 @@ if __name__ == "__main__":
             var: str(values) for (var, values) in full_results.items()
         }
         results_df.to_csv(os.path.join(res_folder, f"./results_iter_{i}.csv"))
+        # with torch.no_grad():
+        #     for res in results:
+        #         cINN_list = res[1]
+        #         for env_cinn, (env, env_indices) in zip(cINN_list, env_map.items()):
+        #             # plot the distribution of the environment
+        #             x_range = (
+        #                 torch.as_tensor(
+        #                     np.linspace(
+        #                         *quantiles_envs[env],
+        #                         target_data[env_indices].shape[0],
+        #                     )
+        #                 )
+        #                     .unsqueeze(1)
+        #                     .to(dev)
+        #             )
+        #             gauss_sample = env_cinn(
+        #                 x=torch.randn(
+        #                     env_indices.size * mask_rep_size, 1, device=dev
+        #                 ),
+        #                 condition=(complete_data[env_indices] * mask).view(
+        #                     -1, mask.shape[-1]
+        #                 ),
+        #                 rev=True,
+        #             )
+        #             viz.line(
+        #                 X=s(x_range),
+        #                 Y=s(
+        #                     env_cinn(
+        #                         x=x_range,
+        #                         condition=(complete_data[env_indices] * mask).view(
+        #                             -1, mask.shape[-1]
+        #                         ),
+        #                         rev=True,
+        #                     )
+        #                 ),
+        #                 win=vis_wins["map"][env],
+        #                 opts=dict(title=f"Forward Map Env {env}"),
+        #             )
+        #             viz.histogram(
+        #                 X=gauss_sample,
+        #                 win=vis_wins["density"][env],
+        #                 opts=dict(title=f"Estimated Density Env {env}"),

@@ -2,7 +2,7 @@ from .assignments import Assignment
 
 import numpy as np
 from numpy.polynomial import polynomial
-from typing import List, Collection, Union
+from typing import List, Collection, Union, Optional
 
 
 class PolynomialAssignment(Assignment):
@@ -17,7 +17,7 @@ class PolynomialAssignment(Assignment):
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:
                 polynomials.append(polynomial.Polynomial(coefficients))
-        self.polynomials: np.ndarray = np.asarray(polynomials)
+        self.polynomials = polynomials
 
     def __call__(self, *args):
         assert len(args) == len(self.polynomials)
@@ -27,7 +27,7 @@ class PolynomialAssignment(Assignment):
     def __len__(self):
         return len(self.polynomials)
 
-    def function_str(self, variable_names=None):
+    def function_str(self, variable_names: Optional[Collection[str]] = None):
         assignment = []
         for poly, var in zip(self.polynomials, variable_names):
             coeffs = poly.coef
