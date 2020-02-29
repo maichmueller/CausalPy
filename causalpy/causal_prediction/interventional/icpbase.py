@@ -28,7 +28,6 @@ class ICPredictor(ABC):
         obs: Union[pd.DataFrame, np.ndarray],
         envs: np.ndarray,
         target_variable: Union[int, str],
-        alpha: float = 0.05,
         *args,
         **kwargs,
     ):
@@ -39,7 +38,7 @@ class ICPredictor(ABC):
             obs: Union[pd.DataFrame, np.ndarray],
             target_variable: Hashable,
             envs: Union[List, Tuple, np.ndarray]
-    ):
+    ) -> Tuple[np.ndarray, np.ndarray, Dict]:
         self.n, self.p = obs.shape[0], obs.shape[1] - 1
         assert (
             len(envs) == self.n
@@ -70,7 +69,10 @@ class ICPredictor(ABC):
                 "Observations have to be either a pandas DataFrame or numpy ndarray."
             )
 
-        environments: Dict = {env: envs == env for env in np.unique(envs)}
+        environments: Dict = {env: np.where(envs == env)[0] for env in np.unique(envs)}
 
         return obs, target, environments
+
+    def get_parent_candidates(self):
+        return self.index_to_varname.values
 

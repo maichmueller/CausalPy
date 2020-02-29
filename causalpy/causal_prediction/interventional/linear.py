@@ -203,10 +203,11 @@ class LinPredictor(ICPredictor):
         # the residuals of the data not in e.
         # TODO: find out, whether this isn't equivalent to the slightly faster method of testing the residuals of
         # TODO: each environment e against environment e + 1.
+        all_indices = np.arange(self.n)
         for env, env_indices in envs.items():
             p_value_update = self.residuals_test(
                 residuals[env_indices],
-                residuals[np.logical_not(env_indices)],
+                residuals[np.delete(all_indices, env_indices)],
                 test=self.residual_test,
             )
             p_value = min(p_value, p_value_update)

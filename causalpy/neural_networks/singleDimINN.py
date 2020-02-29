@@ -2,6 +2,7 @@ import itertools
 from typing import Optional, Callable, Type, Tuple, List, Union
 
 import torch
+from torch.nn.functional import softplus
 from .utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
@@ -189,7 +190,7 @@ class CouplingMonotone(CouplingBase):
         )
         divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
         return (
-            self.alpha.exp()
+            softplus(self.alpha)
             * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
@@ -204,7 +205,7 @@ class CouplingMonotone(CouplingBase):
             dim=2,
         )
         divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
-        return self.alpha.exp() * (
+        return softplus(self.alpha) * (
             1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
         )
 
@@ -230,7 +231,7 @@ class CouplingGeneral(CouplingBase):
         )
         divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
         return (
-            torch.exp(self.alpha)
+            softplus(self.alpha)
             * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
@@ -245,7 +246,7 @@ class CouplingGeneral(CouplingBase):
             dim=2,
         )
         divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
-        return torch.exp(self.alpha) * (
+        return softplus(self.alpha) * (
             1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
         )
 

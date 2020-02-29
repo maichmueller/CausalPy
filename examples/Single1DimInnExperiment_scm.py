@@ -219,7 +219,7 @@ def generate_data_from_scm(
     if countify:
         data = pd.DataFrame(
             np.random.poisson(
-                torch.nn.Softplus(beta=1)(torch.as_tensor(data.to_numpy())).numpy()
+                torch.nn.functional.softplus(torch.as_tensor(data.to_numpy())).numpy()
             ),
             columns=data.columns,
         )
@@ -632,16 +632,16 @@ if __name__ == "__main__":
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
     np.random.seed(seed)
-
+    viz = visdom.Visdom()
     ###################
     # Data Generation #
     ###################
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            (build_scm_minimal, "Y"),
-            (build_scm_basic, "Y"),
-            (build_scm_basic_discrete, "Y"),
+            # (build_scm_minimal, "Y"),
+            # (build_scm_basic, "Y"),
+            # (build_scm_basic_discrete, "Y"),
             (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
@@ -674,7 +674,7 @@ if __name__ == "__main__":
         nr_repetitions = 20
         results = []
         epochs = 100
-        use_visdom = False
+        use_visdom = True
 
         for _ in range(nr_repetitions):
             results.append(train(epochs=epochs, use_visdom=use_visdom))

@@ -476,11 +476,13 @@ class L0InputGate(torch.nn.Module):
         return self.sigmoid((torch.log(u) - torch.log(1 - u) + log_alpha) / beta)
 
     def final_layer(self):
-        """Estimates the gates at test time (i.e. after finished training)."""
+        """Estimates the gates deterministically (e.g. after finished training)."""
         return self.hard_sigmoid(self.log_alpha * (self.zeta - self.gamma) + self.gamma)
 
-    def create_gates(self):
+    def create_gates(self, deterministic=False):
         """Creates input gates using parameters log_alpha, beta"""
+        if deterministic:
+            return self.final_layer()
         dim = self.log_alpha.shape[0]
         m = torch.distributions.uniform.Uniform(
             torch.tensor([0.0]), torch.tensor([1.0])
