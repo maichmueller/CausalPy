@@ -1,6 +1,6 @@
 import os
 from collections import namedtuple
-from typing import Union, Optional, Callable, List, Dict, Type
+from typing import Union, Optional, Callable, List, Dict, Type, Collection
 import importlib
 
 import numpy as np
@@ -14,7 +14,6 @@ from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions import Normal
 from tqdm import tqdm
-
 
 from .icpbase import ICPredictor
 import warnings
@@ -33,21 +32,21 @@ Hyperparams = namedtuple("Hyperparams", "inn env l0")
 
 class AgnosticPredictor(ICPredictor):
     def __init__(
-        self,
-        cinn: Optional[Module] = None,
-        cinn_params: Optional[Dict] = None,
-        masker_network: Optional[Module] = None,
-        masker_network_params: Optional[Dict] = None,
-        epochs: int = 100,
-        batch_size: int = 1024,
-        mask_monte_carlo_size=1,
-        optimizer_type: Type[Optimizer] = torch.optim.Adam,
-        optimizer_params: Optional[Dict] = None,
-        scheduler_type: Type[_LRScheduler] = torch.optim.lr_scheduler.StepLR,
-        scheduler_params: Optional[Dict] = None,
-        hyperparams: Optional[Hyperparams] = None,
-        visualize_with_visdom: bool = False,
-        log_level: bool = True,
+            self,
+            cinn: Optional[Module] = None,
+            cinn_params: Optional[Dict] = None,
+            masker_network: Optional[Module] = None,
+            masker_network_params: Optional[Dict] = None,
+            epochs: int = 100,
+            batch_size: int = 1024,
+            mask_monte_carlo_size=1,
+            optimizer_type: Type[Optimizer] = torch.optim.Adam,
+            optimizer_params: Optional[Dict] = None,
+            scheduler_type: Type[_LRScheduler] = torch.optim.lr_scheduler.StepLR,
+            scheduler_params: Optional[Dict] = None,
+            hyperparams: Optional[Hyperparams] = None,
+            visualize_with_visdom: bool = False,
+            log_level: bool = True,
     ):
         super().__init__(log_level=log_level)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -76,7 +75,7 @@ class AgnosticPredictor(ICPredictor):
         self.optimizer_params = (
             optimizer_params
             if optimizer_params is not None
-            else dict(lr=1e-3, masker_lr=1e-2)
+            else dict(lr=1e-3, mask_lr=1e-2)
         )
 
         self.scheduler = None
@@ -92,7 +91,7 @@ class AgnosticPredictor(ICPredictor):
             try:
                 import visdom
 
-                # load plotly module dynamically
+                # load plotly submodule dynamically
                 globals()["go"] = importlib.import_module("plotly").__dict__[
                     "graph_objs"
                 ]
@@ -119,7 +118,7 @@ class AgnosticPredictor(ICPredictor):
                 [
                     {
                         "params": self.masker_net.parameters(),
-                        "lr": self.optimizer_params.pop("masker_lr", 1e-2),
+                        "lr": self.optimizer_params.pop("mask_lr", 1e-2),
                     },
                     {"params": self.cinn.parameters()},
                 ],
@@ -129,13 +128,17 @@ class AgnosticPredictor(ICPredictor):
         return self.optimizer
 
     def infer(
-        self,
-        obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
-        target_variable: Union[int, str],
-        show_epoch_progressbar=True,
-        ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
+            self,
+            obs: Union[pd.DataFrame, np.ndarray],
+            envs: np.ndarray,
+            target_variable: Union[int, str],
+            show_epoch_progressbar=True,
+            ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
     ):
+        #########
+        # Setup #
+        #########
+
         obs, target, environments = self.preprocess_input(obs, target_variable, envs)
 
         obs, target = tuple(
@@ -181,8 +184,11 @@ class AgnosticPredictor(ICPredictor):
         if ground_truth_mask is not None:
             ground_truth_mask = torch.as_tensor(ground_truth_mask).view(1, 1, self.p)
 
-        epoch_losses = dict(total=[], invariance=[], cinn=[], l0=[])
+        ############
+        # Training #
+        ############
 
+        epoch_losses = dict(total=[], invariance=[], cinn=[], l0=[])
         for epoch in epoch_pbar:
             batch_losses = dict(total=[], invariance=[], cinn=[], l0=[])
             for batch_indices, _ in data_loader:
@@ -212,9 +218,9 @@ class AgnosticPredictor(ICPredictor):
                 l0_loss = self.masker_net.complexity_loss()
 
                 batch_loss = (
-                    self.hyperparams.inn * inn_loss
-                    + self.hyperparams.env * env_loss
-                    + self.hyperparams.l0 * l0_loss
+                        self.hyperparams.inn * inn_loss
+                        + self.hyperparams.env * env_loss
+                        + self.hyperparams.l0 * l0_loss
                 )
 
                 batch_losses["invariance"].append(env_loss.item())
@@ -228,6 +234,10 @@ class AgnosticPredictor(ICPredictor):
             # store the various losses per batch into the epoch by averaging over batches
             for loss_acc, loss_list in epoch_losses.items():
                 loss_list.append(np.mean(batch_losses[loss_acc]))
+
+            ##################
+            # Visualizations #
+            ##################
 
             if self.use_visdom:
                 self._plot_mask(
@@ -260,13 +270,24 @@ class AgnosticPredictor(ICPredictor):
         }
         return results
 
+    def predict(self, obs: Union[pd.DataFrame]):
+        obs = torch.as_tensor(obs[self.index_to_varname.values].to_numpy(), dtype=torch.float32, device=self.device)
+        mask = self.masker_net.create_gates(deterministic=True)
+        obs *= mask
+        predictions = self.cinn(
+            x=torch.randn(obs.size(0), 1, device=self.device),
+            condition=obs,
+            rev=True
+        )
+        return predictions
+
     def get_mask(self, ground_truth_mask: Optional[Tensor] = None, final=False):
         if ground_truth_mask is not None:
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
     def _compute_environmental_loss(
-        self, obs, target, batch_indices, environments, mask, save_samples
+            self, obs, target, batch_indices, environments, mask, save_samples
     ):
         """
         Compute the environmental similarity loss of the gauss mapping for each individual environment data only.
@@ -363,7 +384,7 @@ class AgnosticPredictor(ICPredictor):
         return x, y
 
     def _plot_data_approximation(
-        self, obs: Tensor, target: Tensor, environments: Dict,
+            self, obs: Tensor, target: Tensor, environments: Dict,
     ):
         with torch.no_grad():
             for env, env_indices in environments.items():
@@ -400,7 +421,7 @@ class AgnosticPredictor(ICPredictor):
                 )
                 self.viz.plotlyplot(targ_hist_fig, win=f"target_env_{env}")
 
-    def _plot_gaussian_histograms(self, env_samples):
+    def _plot_gaussian_histograms(self, env_samples: Collection):
         fig = go.Figure()
         xr = torch.linspace(-5, 5, 100)
         for env, samples in enumerate(env_samples):
@@ -424,7 +445,7 @@ class AgnosticPredictor(ICPredictor):
         fig.update_layout(barmode="overlay")
         # Reduce opacity to see all histograms
         fig.update_traces(opacity=0.5)
-        fig.update_layout(title=f"Gaussian approximation per environment.",)
+        fig.update_layout(title=f"Gaussian approximation per environment.", )
         self.viz.plotlyplot(fig, win="gaussian")
 
     def _plot_mask(self, curr_mask, possible_parents, window="mask_0"):
