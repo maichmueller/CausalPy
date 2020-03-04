@@ -8,6 +8,7 @@ import numpy as np
 
 class LinkerAssignment(Assignment):
     def __init__(self, linker_func: Callable, assignment_func: Assignment):
+        super().__init__()
         self.linker = linker_func
         self.assign_func = assignment_func
 

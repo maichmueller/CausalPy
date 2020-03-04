@@ -12,10 +12,12 @@ class CompositionAssignment(Assignment):
     """
 
     def __init__(self, *assignment_funcs: Assignment):
+        super().__init__()
         self.assignment_root_node = CompositionNode(assignment_funcs)
         self.nr_assignments = len(assignment_funcs)
 
-    def __call__(self, noise: Union[float, np.ndarray], *args):
+    def __call__(self, noise: Union[float, np.ndarray], *args, **kwargs):
+        args = self.parse_call_input(*args, **kwargs)
         self.assignment_root_node(noise, *args)
         return
 

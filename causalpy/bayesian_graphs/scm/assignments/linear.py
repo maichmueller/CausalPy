@@ -9,13 +9,15 @@ class LinearAssignment(Assignment):
         f(X_S, N) = offset + \sum_{i \in S} a_i * X_i + noise_coeff * N
     """
     def __init__(self, noise_factor, offset=0, *coefficients):
+        super().__init__()
         self.noise_factor = noise_factor
         self.offset = offset
         self.coefficients = (
             np.asarray(coefficients) if len(coefficients) > 0 else np.array([])
         )
 
-    def __call__(self, noise, *args):
+    def __call__(self, noise, *args, **kwargs):
+        args = self.parse_call_input(*args, **kwargs)
         return self.offset + self.noise_factor * noise + self.coefficients @ args
 
     def __len__(self):

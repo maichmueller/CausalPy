@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Union, TypeVar, Optional, List, Collection
+from typing import Union, TypeVar, Optional, List, Collection, Dict, Hashable
 
 
 class Assignment(ABC):
@@ -17,6 +17,10 @@ class Assignment(ABC):
 
     See details of these functions for further explanation.
     """
+
+    def __init__(self):
+        self.has_named_args = False
+        self._named_arg_position: Dict[Hashable, int] = {}
 
     @abstractmethod
     def __call__(self, noise: Union[float, np.ndarray], *args, **kwargs):
@@ -83,9 +87,59 @@ class Assignment(ABC):
 
     def str(self, variable_names: Optional[Collection[str]] = None):
         if variable_names is None:
-            variable_names = [f"x_{i}" for i in range(len(self))]
+            if self.has_named_args:
+                variable_names = list(
+                    name
+                    for name, position in sorted(
+                        self._named_arg_position.items(),
+                        key=lambda x: x[1],
+                    )
+                )
+            else:
+                variable_names = [f"x_{i}" for i in range(len(self))]
         variable_names = ["N"] + variable_names
         assignment = self.function_str(variable_names)
         prefix = f"f({', '.join(variable_names)}) = "
         return prefix + assignment
 
+    def set_names_for_args(self, names_collection: Collection[Hashable]):
+        """
+        Set the positional relation of input arguments with names.
+
+        This method will help assignment function calls later on to provide kwargs with the names of
+        causal parents in the graph, without having specifically named these parents in the function
+        definition of the assignment already.
+        In short: enables dynamic kwarg dispatch on assignments if desired.
+        """
+        for position, name in enumerate(names_collection):
+            self._named_arg_position[name] = position
+        self.has_named_args = True
+
+    def parse_call_input(self, *args, **kwargs):
+        """
+        This method will parse the provided args and kwargs to return only args, that have been
+        rearranged according to the order previously set for named args.
+
+        Combined passing of args and kwargs is forbidden and raises a `ValueError`.
+        """
+        if kwargs:
+            if args:
+                raise ValueError(
+                    "Either only args or only kwargs can be provided to assignment call."
+                )
+
+            elif not self.has_named_args:
+                raise ValueError(
+                    "Kwargs provided, but assignment doesn't have named arguments."
+                )
+
+            else:
+                args = tuple(
+                    val
+                    for key, val in sorted(
+                        kwargs.items(),
+                        key=lambda key_val_pair: self._named_arg_position[key_val_pair[0]],
+                    )
+                )
+
+        return args

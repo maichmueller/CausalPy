@@ -172,7 +172,7 @@ class SCM:
             node_attr = self.graph.nodes[node]
             data = node_attr[self.function_key](
                 node_attr[self.noise_key](n),
-                *(sample[pred] for pred in self.graph.predecessors(node)),
+                **{pred: sample[pred] for pred in self.graph.predecessors(node)},
             )
             sample[node] = data
         np.random.seed(None)  # reset random seed
@@ -282,6 +282,7 @@ class SCM:
                     self.graph.remove_edge(parent, var)
                 self.interventions_backup_parent[var] = parent_backup
 
+            attr_dict[self.function_key].set_names_for_args(parent_list)
             self.graph.add_node(var, **attr_dict)
             for parent in parent_list:
                 self.graph.add_edge(parent, var)
@@ -484,6 +485,7 @@ class SCM:
 
     def _build_graph(self, assignment_map):
         for node_name, (parents_list, function, noise_model) in assignment_map.items():
+            function.set_names_for_args(parents_list)
             self.graph.add_node(
                 node_name, **{self.function_key: function, self.noise_key: noise_model}
             )

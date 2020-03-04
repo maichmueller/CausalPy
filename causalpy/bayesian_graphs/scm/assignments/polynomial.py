@@ -13,13 +13,15 @@ class PolynomialAssignment(Assignment):
 
     """
     def __init__(self, *coefficients_list: Collection[Union[int, float]]):
+        super().__init__()
         polynomials = []
         if len(coefficients_list) > 0:
             for coefficients in coefficients_list:
                 polynomials.append(polynomial.Polynomial(coefficients))
         self.polynomials = polynomials
 
-    def __call__(self, *args):
+    def __call__(self, noise, *args, **kwargs):
+        args = tuple([noise, *self.parse_call_input(*args, **kwargs)])
         assert len(args) == len(self.polynomials)
         # args[0] is assumed to be the noise
         return sum((poly(arg) for poly, arg in zip(self.polynomials, args)))
