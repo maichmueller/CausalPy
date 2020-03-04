@@ -61,7 +61,7 @@ class AgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=0.5, env=5, inn=2, l2=0.01)
+            Hyperparams(l0=0.2, env=5, inn=2, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -149,7 +149,7 @@ class AgnosticPredictor(ICPredictor):
         # Setup #
         #########
 
-        obs, target, environments = self.preprocess_input(obs, target_variable, envs)
+        obs, target, environments_map = self.preprocess_input(obs, target_variable, envs)
 
         obs, target = tuple(
             map(
@@ -169,14 +169,14 @@ class AgnosticPredictor(ICPredictor):
         self._set_optimizer()
 
         if self.use_visdom:
-            self._plot_data_approximation(obs, target, environments)
+            self._plot_data_approximation(obs, target, environments_map)
             self._plot_mask(
                 self.masker_net.final_layer().detach().cpu().numpy().reshape(1, -1),
                 self.get_parent_candidates(),
             )
 
         data_loader = DataLoader(
-            dataset=TensorDataset(torch.arange(self.n), torch.zeros(self.n)),
+            dataset=TensorDataset(torch.arange(self.n), torch.as_tensor(envs)),
             batch_size=self.batch_size,
             sampler=StratifiedSampler(
                 data_source=np.arange(self.n),
@@ -205,11 +205,11 @@ class AgnosticPredictor(ICPredictor):
         epoch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
         for epoch in epoch_pbar:
             batch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
-            for batch_indices, _ in data_loader:
+            for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()
 
                 mask = self.get_mask(ground_truth_mask)
-
+                env_batch_indices = self._batch_indices_by_env(env_info)
                 batch_indices = torch.sort(batch_indices)[0]
 
                 masked_batch = self.masker_net(obs[batch_indices], mask).view(
@@ -224,7 +224,7 @@ class AgnosticPredictor(ICPredictor):
                 #     obs,
                 #     target,
                 #     batch_indices,
-                #     environments,
+                #     environments_map,
                 #     mask,
                 #     save_samples=self.use_visdom,
                 # )
@@ -263,7 +263,7 @@ class AgnosticPredictor(ICPredictor):
                     "mask_0",
                 )
 
-                # self._plot_gaussian_histograms(env_samples)
+                self._plot_gaussian_histograms(env_samples)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -272,7 +272,7 @@ class AgnosticPredictor(ICPredictor):
                         f"{loss_name.capitalize()} Loss Movement",
                     )
 
-                self._plot_data_approximation(obs, target, environments)
+                self._plot_data_approximation(obs, target, environments_map)
 
         mask = self.get_mask().detach().cpu().numpy().flatten()
         results = {
@@ -305,6 +305,30 @@ class AgnosticPredictor(ICPredictor):
         if ground_truth_mask is not None:
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
+
+    def _batch_indices_by_env(self, env_batch_info: Union[Tensor]):
+        batch_indices_by_env = dict()
+
+        # first sort the batch enviornment affiliation information by each entries env index.
+        # we do this as x[argsort(x)] tells us the indices of the environments in order.
+        sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
+        # To be done now, we only need to know where the breakpoints are in this list, i.e.
+        # at which indices we are crossing into the next environment index.
+        # To this end we compute the unique indices in the argsorted env info list, which will give us a tuple
+        # of two lists:
+        # 1st list: the unique, and sorted environments we can find in the total env list.
+        # 2nd list: the list of index breaks. This will look like
+        #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
+        # so that we can then find the full list by iterating over the environment names in the first returned list,
+        # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
+        unique_envs_in_batch, ind_unique_env_entries = np.unique(env_batch_info[argsort_env_info].numpy(), return_index=True)
+        for i, env in enumerate(unique_envs_in_batch[:-1]):
+            batch_indices_by_env[env] = argsort_env_info[ind_unique_env_entries[i]:ind_unique_env_entries[i+1]]
+
+        # the last env entry are all the indices from the last unique entry pointer to the end.
+        batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[ind_unique_env_entries[-1]:]
+        return batch_indices_by_env
+
 
     def _l2_regularization(self):
         loss = torch.zeros(1, device=self.device)
@@ -455,6 +479,7 @@ class AgnosticPredictor(ICPredictor):
                     x=samples.view(-1).cpu().detach().numpy(),
                     name=f"E = {env}",
                     histnorm="probability density",
+                    nbins=30
                 )
             )
         fig.add_trace(

@@ -69,13 +69,13 @@ if __name__ == "__main__":
             [possible_parents.index(par) for par in target_parents]
         )
         nr_envs = np.unique(environments).max() + 1
-        nr_repetitions = 20
+        nr_repetitions = 5
         results = []
         epochs = 100
         use_visdom = True
         for _ in range(nr_repetitions):
             results.append(
-                AgnosticPredictor(epochs=epochs, batch_size=1000, visualize_with_visdom=use_visdom).infer(complete_data, environments, target_var,)
+                AgnosticPredictor(epochs=epochs, batch_size=10000, visualize_with_visdom=use_visdom).infer(complete_data, environments, target_var,)
             )
 
         full_results = {var: [] for var in results[0].keys()}
