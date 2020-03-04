@@ -22,6 +22,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
+from linear_regression_eval import *
 
 
 import torch as th
@@ -46,7 +47,7 @@ if __name__ == "__main__":
             # (build_scm_basic_discrete, "Y"),
             # (build_scm_exponential, "Y"),
             (build_scm_medium, "Y"),
-            (build_scm_large, "Y"),
+            # (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
             # (partial(simulate, nr_genes=25), "G_21"),
@@ -73,52 +74,18 @@ if __name__ == "__main__":
         results = []
         epochs = 100
         use_visdom = True
-        for _ in range(nr_repetitions):
-            results.append(
-                AgnosticPredictor(epochs=epochs, batch_size=1000, visualize_with_visdom=use_visdom).infer(complete_data, environments, target_var,)
-            )
+        # for _ in range(nr_repetitions):
+        ap = AgnosticPredictor(
+            epochs=epochs, batch_size=1000, visualize_with_visdom=use_visdom
+        )
+        results.append(ap.infer(complete_data, environments, target_var,))
+        print(results[-1])
 
-        full_results = {var: [] for var in results[0].keys()}
-        for res in results:
-            for var, mask in res.items():
-                full_results[var].append(mask)
-
-        full_results = {
-            var: val
-            for var, val in sorted(
-                full_results.items(),
-                key=lambda x: int(x[0].split("_")[-1]) if "_" in x[0] else x[0],
-            )
-        }
-        statistics = {
-            var: {
-                f'{func}{", " + ", ".join([f"{k}={v}" for k, v in kwargs.items()]) if kwargs else ""}': eval(
-                    f"np.{func}(args, {', '.join([f'{kwarg}={val}' for kwarg, val in kwargs.items()])}).round(3)"
-                )
-                for func, args, kwargs in zip(
-                    ("mean", "min", "max", "var", "quantile", "quantile", "quantile"),
-                    [values] * 7,
-                    ({}, {}, {}, {}, {"q": 0.25}, {"q": 0.5}, {"q": 0.75}),
-                )
-            }
-            for var, values in full_results.items()
-        }
-        print("\nLearning outcomes:")
-        for var, stat_dict in statistics.items():
-            print(var)
-            for func_str, value in stat_dict.items():
-                print(
-                    f"\t{func_str}:", value,
-                )
-            print(f"\tresults:", full_results[var])
-        print("")
-        res_folder = "./results"
-        if not os.path.isdir(res_folder):
-            os.mkdir(res_folder)
-        results_df = pd.DataFrame.from_dict(statistics, orient="columns")
-        results_df.loc["results_array"] = {
-            var: str(values) for (var, values) in full_results.items()
-        }
-        results_df.to_csv(os.path.join(res_folder, f"./results_iter_{i}.csv"))
-
-        # print(l0_masker_net.final_layer())
+        evaluate(
+            complete_data,
+            ap,
+            environments,
+            ground_truth_assignment=scm[target_var][1][scm.function_key],
+            x_vars=target_parents,
+            targ_var=target_var,
+        )

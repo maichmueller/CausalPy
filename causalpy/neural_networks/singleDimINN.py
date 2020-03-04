@@ -2,7 +2,6 @@ import itertools
 from typing import Optional, Callable, Type, Tuple, List, Union
 
 import torch
-from torch.nn.functional import softplus
 from .utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
@@ -53,7 +52,7 @@ class CouplingBase(torch.nn.Module, ABC):
                 # conditional net needs to fulfill:
                 # ( dimension in = dim_condition, dimension out = 3 * dim * (nr_layers + 1) )
                 with torch.no_grad():
-                    out = conditional_net(torch.ones(1, dim_condition, device=device))
+                    out = conditional_net(torch.ones(1, dim_condition))
                     assert out.size() == (1, 3 * dim * (nr_layers + 1),), (
                         f"Size mismatch: Conditional network needs to output size "
                         f"[batch_size, 3*dim*(nr_layers+1) = {3 * dim * (nr_layers + 1)}]. "
@@ -190,7 +189,7 @@ class CouplingMonotone(CouplingBase):
         )
         divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
         return (
-            softplus(self.alpha)
+            self.alpha.exp()
             * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
@@ -205,7 +204,7 @@ class CouplingMonotone(CouplingBase):
             dim=2,
         )
         divisor = torch.sum(torch.relu(-self.mat1 * self.mat2), dim=2) + 1
-        return softplus(self.alpha) * (
+        return self.alpha.exp() * (
             1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
         )
 
@@ -231,7 +230,7 @@ class CouplingGeneral(CouplingBase):
         )
         divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
         return (
-            softplus(self.alpha)
+            torch.exp(self.alpha)
             * (x + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor)
             + self.bias2
         )
@@ -246,7 +245,7 @@ class CouplingGeneral(CouplingBase):
             dim=2,
         )
         divisor = torch.sum(torch.abs(self.mat1 * self.mat2), dim=2) + 1
-        return softplus(self.alpha) * (
+        return torch.exp(self.alpha) * (
             1 + 0.8 * torch.sigmoid(self.eps) * internal_sum / divisor
         )
 
@@ -259,9 +258,12 @@ class cINN(torch.nn.Module):
         nr_blocks: int = 3,
         nr_layers: int = 16,
         conditional_net: Optional[torch.nn.Module] = None,
+        device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         super().__init__()
         self.nr_blocks = nr_blocks
+        if conditional_net is not None:
+            conditional_net = conditional_net.to(device)
         self.blocks = torch.nn.ModuleList([])
         for i in range(nr_blocks):
             self.blocks.append(
@@ -270,6 +272,7 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    device=device
                 )
             )
             self.blocks.append(
@@ -278,6 +281,7 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    device=device
                 )
             )
         self.log_jacobian_cache = torch.zeros(dim)

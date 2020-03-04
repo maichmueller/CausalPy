@@ -1,3 +1,4 @@
+import itertools
 import os
 from collections import namedtuple
 from typing import Union, Optional, Callable, List, Dict, Type, Collection
@@ -30,10 +31,10 @@ from causalpy.neural_networks.utils import StratifiedSampler
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
 
-class AgnosticPredictor(ICPredictor):
+class MultiAgnosticPredictor(ICPredictor):
     def __init__(
         self,
-        cinn: Optional[Module] = None,
+        cinns: Optional[Collection[Module]] = None,
         cinn_params: Optional[Dict] = None,
         masker_network: Optional[Module] = None,
         masker_network_params: Optional[Dict] = None,
@@ -61,12 +62,12 @@ class AgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=0.5, env=5, inn=2, l2=0.01)
+            Hyperparams(l0=0.2, env=5, inn=2, l2=0.005)
             if hyperparams is None
             else hyperparams
         )
 
-        self.cinn = cinn
+        self.cinns = torch.nn.ModuleList(cinns) if cinns is not None else None
         self.cinn_params = (
             cinn_params
             if cinn_params is not None
@@ -130,7 +131,11 @@ class AgnosticPredictor(ICPredictor):
                         "params": self.masker_net.parameters(),
                         "lr": self.optimizer_params.pop("mask_lr", 1e-2),
                     },
-                    {"params": self.cinn.parameters()},
+                    {
+                        "params": itertools.chain(
+                            *(cinn.parameters() for cinn in self.cinns)
+                        )
+                    },
                 ],
                 lr=self.optimizer_params.pop("lr", 1e-3),
                 **self.optimizer_params,
@@ -150,7 +155,7 @@ class AgnosticPredictor(ICPredictor):
         #########
 
         obs, target, environments = self.preprocess_input(obs, target_variable, envs)
-
+        nr_envs = max(environments.keys())
         obs, target = tuple(
             map(
                 lambda data: torch.from_numpy(data).float().to(self.device),
@@ -160,12 +165,16 @@ class AgnosticPredictor(ICPredictor):
 
         if self.masker_net is None:
             self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
-        self.masker_net.to(
-            self.device
-        )  # needs to happen for the case of 'masket_net is None == False'.
-        if self.cinn is None:
-            self.cinn = cINN(dim_condition=self.p, **self.cinn_params)
-        self.cinn.to(self.device)
+        self.masker_net.to(self.device)
+
+        if self.cinns is None:
+            self.cinns = torch.nn.ModuleList(
+                [cINN(dim_condition=self.p, **self.cinn_params) for _ in range(nr_envs)]
+            )
+        else:
+            for cinn in self.cinns:
+                cinn.to(self.device)
+
         self._set_optimizer()
 
         if self.use_visdom:
@@ -184,10 +193,7 @@ class AgnosticPredictor(ICPredictor):
                 batch_size=min(self.batch_size, self.n),
             ),
         )
-        if show_epoch_progressbar:
-            epoch_pbar = tqdm(range(self.epochs))
-        else:
-            epoch_pbar = range(self.epochs)
+
         nr_masks = (
             self.masker_net_params["monte_carlo_sample_size"]
             if "monte_carlo_sample_size" in self.masker_net_params
@@ -202,8 +208,11 @@ class AgnosticPredictor(ICPredictor):
         # Training #
         ############
 
+        epoch_iter = (
+            tqdm(range(self.epochs)) if show_epoch_progressbar else range(self.epochs)
+        )
         epoch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
-        for epoch in epoch_pbar:
+        for epoch in epoch_iter:
             batch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
             for batch_indices, _ in data_loader:
                 self.optimizer.zero_grad()
@@ -217,18 +226,15 @@ class AgnosticPredictor(ICPredictor):
                 )
                 target_batch = target[batch_indices].view(-1, 1)
 
-                inn_loss, gauss_sample = self._compute_cinn_loss(
+                inn_loss = self._compute_cinn_loss(
+                    obs, target, batch_indices, environments, mask
+                )
+                env_loss, env_samples = self._compute_environmental_loss(
+                    obs, target, batch_indices, environments, mask,
+                )
+                env_loss += self._compute_overall_gaussian_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                # env_loss, env_samples = self._compute_environmental_loss(
-                #     obs,
-                #     target,
-                #     batch_indices,
-                #     environments,
-                #     mask,
-                #     save_samples=self.use_visdom,
-                # )
-                env_loss = self._compute_overall_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
 
@@ -263,7 +269,7 @@ class AgnosticPredictor(ICPredictor):
                     "mask_0",
                 )
 
-                # self._plot_gaussian_histograms(env_samples)
+                self._plot_gaussian_histograms(env_samples)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -287,17 +293,27 @@ class AgnosticPredictor(ICPredictor):
         }
         return results
 
-    def predict(self, obs: Union[pd.DataFrame, Tensor]):
-        if isinstance(obs, pd.DataFrame):
-            obs = torch.as_tensor(
-                obs[self.index_to_varname.values].to_numpy(),
-                dtype=torch.float32,
-                device=self.device,
-            )
+    def predict(self, obs: Union[pd.DataFrame]):
+        obs = torch.as_tensor(
+            obs[self.index_to_varname.values].to_numpy(),
+            dtype=torch.float32,
+            device=self.device,
+        )
         mask = self.masker_net.create_gates(deterministic=True)
         obs *= mask
-        predictions = self.cinn(
-            x=torch.randn(obs.size(0), 1, device=self.device), condition=obs, rev=True
+        predictions = torch.mean(
+            torch.cat(
+                [
+                    cinn(
+                        x=torch.randn(obs.size(0), 1, device=self.device),
+                        condition=obs,
+                        rev=True,
+                    )
+                    for cinn in self.cinns
+                ],
+                dim=1,
+            ),
+            dim=1,
         )
         return predictions
 
@@ -308,8 +324,9 @@ class AgnosticPredictor(ICPredictor):
 
     def _l2_regularization(self):
         loss = torch.zeros(1, device=self.device)
-        for param in self.cinn.parameters():
-            loss += (param ** 2).sum()
+        for cinn in self.cinns:
+            for param in cinn.parameters():
+                loss += (param ** 2).sum()
         return loss
 
     def _compute_environmental_loss(
@@ -319,7 +336,6 @@ class AgnosticPredictor(ICPredictor):
         batch_indices: Union[Tensor, np.ndarray],
         environments: Dict,
         mask: Tensor,
-        save_samples: bool,
     ):
         """
         Compute the environmental similarity loss of the gauss mapping for each individual environment data only.
@@ -329,72 +345,99 @@ class AgnosticPredictor(ICPredictor):
         nr_masks = mask.size(0)
         env_samples = []
         env_loss = torch.zeros(1, device=self.device)
-        for env, env_indices in environments.items():
-            env_batch_indices = np.intersect1d(
-                batch_indices.detach().cpu().numpy(), env_indices
+        for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
+            # split data by environmental affiliation
+            indices = batch_indices[np.logical_not(np.isin(batch_indices, env_indices))]
+            target_notenv_batch = target[indices].view(-1, 1)
+            masked_notenv_batch = self.masker_net(obs[indices], mask).view(
+                nr_masks, -1, self.p
             )
-            target_env_batch = target[env_batch_indices]
-            masked_env_batch = self.masker_net(obs[env_batch_indices], mask)
-
-            env_gauss_sample = self.cinn(
-                x=target_env_batch.view(-1, 1).repeat(nr_masks, 1),
-                condition=masked_env_batch,
-                rev=False,
-            ).view(nr_masks, -1, 1)
-
-            if save_samples:
-                env_samples.append(env_gauss_sample)
-
-            # all environmental samples should be gaussian,
-            # thus measure the deviation of their distributions.
-            loss_per_mask = torch.zeros(1, device=self.device)
-            true_gauss_sample = torch.randn(
-                env_gauss_sample.size(1), 1, device=self.device
-            )
+            # compute the INN loss per mask
+            per_mask_samples = []
+            true_gauss_sample = torch.randn(len(indices), 1, device=self.device)
             for mask_nr in range(nr_masks):
-                loss_per_mask += self._wasserstein(
-                    env_gauss_sample[mask_nr], true_gauss_sample
+                gauss_sample = env_cinn(
+                    x=target_notenv_batch,
+                    condition=masked_notenv_batch[mask_nr],
+                    rev=False,
                 )
-            env_loss += loss_per_mask
+                env_loss += self._wasserstein(
+                    gauss_sample, true_gauss_sample
+                )
+                per_mask_samples.append(gauss_sample)
+            env_samples.append(torch.cat(per_mask_samples).view(nr_masks, -1, 1))
         env_loss = env_loss / nr_masks
         return env_loss, env_samples
 
-    def _compute_overall_gaussian_loss(self, gauss_sample: Tensor):
+    def _compute_overall_gaussian_loss(
+        self, masked_batch: Tensor, target_batch: Tensor, nr_masks: int
+    ):
         """
         Compute the environmental similarity loss of the gauss mapping for all environment data together.
         This is done to enforce that the cinn maps all environments combined to gauss. This seems redundant
-        to the cINN maximum likelihood loss which enforces the same, yet this extra loss has proven to be
+        to the cINN maximum likelihood loss which enforces the same, yet this extra loss has proved to be
         necessary for stable training.
         """
         loss_per_mask = torch.zeros(1, device=self.device)
-        nr_masks = gauss_sample.size(0)
-        true_gauss_sample = torch.randn(gauss_sample.size(1), 1, device=self.device)
 
+        true_gauss_sample = torch.randn(target_batch.size(0), 1, device=self.device)
         for mask_nr in range(nr_masks):
-            loss_per_mask += self._wasserstein(gauss_sample[mask_nr], true_gauss_sample)
+            for cinn in self.cinns:
+                env_gauss_sample = cinn(
+                    x=target_batch, condition=masked_batch[mask_nr], rev=False,
+                ).view(nr_masks, -1, 1)
+
+                loss_per_mask += self._wasserstein(
+                    env_gauss_sample[mask_nr], true_gauss_sample
+                )
         loss_per_mask /= nr_masks
         return loss_per_mask
 
     def _compute_cinn_loss(
-        self, masked_batch: Tensor, target_batch: Tensor, nr_masks: int
+        self,
+        obs: Tensor,
+        target: Tensor,
+        batch_indices: Union[Tensor, np.ndarray],
+        environments: Dict,
+        mask: Tensor,
     ):
-        # compute the INN loss per mask, then average loss over the number of masks.
-        # This is the monte carlo approximation of the loss via multiple mask samples.
-        gauss_sample = self.cinn(
-            x=target_batch.repeat(nr_masks, 1),
-            condition=masked_batch.view(-1, self.p),
-            rev=False,
-        ).view(nr_masks, -1, 1)
-        inn_loss = torch.mean(
-            torch.mean(gauss_sample ** 2 / 2 - self.cinn.log_jacobian_cache.view(gauss_sample.shape), dim=1),
-            dim=0,
-        )
-        return inn_loss, gauss_sample
+        """
+        Compute the INN via maximum likelihood loss on the generated gauss samples of the cINN
+        per mask, then average loss over the number of masks.
+        This is the monte carlo approximation of the loss via multiple mask samples.
+        """
+        if isinstance(batch_indices, Tensor):
+            batch_indices = batch_indices.numpy()
+        nr_masks = mask.size(0)
+        inn_loss = torch.zeros(1, device=self.device)
+        for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
+            # split data by environmental affiliation
+            indices = np.intersect1d(batch_indices, env_indices)
+
+            target_env_batch = target[indices].view(-1, 1)
+            masked_env_batch = self.masker_net(obs[indices], mask).view(
+                nr_masks, -1, self.p
+            )
+            # compute the INN loss per mask
+            for mask_nr in range(nr_masks):
+                gauss_sample = env_cinn(
+                    x=target_env_batch, condition=masked_env_batch[mask_nr], rev=False,
+                )
+                # log maximum likelihood loss here
+                inn_loss += self._inn_mllhood_loss(
+                    gauss_sample, env_cinn.log_jacobian_cache
+                )
+        inn_loss /= nr_masks
+        return inn_loss
+
+    @staticmethod
+    def _inn_mllhood_loss(gauss_sample, log_jacobian):
+        return (gauss_sample ** 2 / 2 - log_jacobian).mean()
 
     @staticmethod
     def _wasserstein(x, y, normalize=False):
         if normalize:
-            x, y = AgnosticPredictor.normalize_jointly(x, y)
+            x, y = MultiAgnosticPredictor.normalize_jointly(x, y)
         sort_sq_diff = (torch.sort(x, dim=0)[0] - torch.sort(y, dim=0)[0]).pow(2)
         std_prod = torch.std(x) * torch.std(y)
         return torch.mean(sort_sq_diff) / std_prod
@@ -412,13 +455,10 @@ class AgnosticPredictor(ICPredictor):
         self, obs: Tensor, target: Tensor, environments: Dict,
     ):
         with torch.no_grad():
-            for env, env_indices in environments.items():
-                environment_size = env_indices.size
-                target_approx_sample = self.cinn(
-                    x=torch.randn(environment_size, 1, device=self.device),
-                    condition=(obs[env_indices] * self.get_mask(final=True)).view(
-                        -1, self.p
-                    ),
+            for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
+                target_approx_sample = env_cinn(
+                    x=torch.randn(self.n, 1, device=self.device),
+                    condition=(obs * self.get_mask(final=True)).view(-1, self.p),
                     rev=False,
                 )
 
@@ -442,7 +482,7 @@ class AgnosticPredictor(ICPredictor):
                 # Reduce opacity to see all histograms
                 targ_hist_fig.update_traces(opacity=0.5)
                 targ_hist_fig.update_layout(
-                    title=r"Marginal observ. Y and approx. Y_hat Env. " + str(env)
+                    title=r"Observed Y and approximated Y_hat Env. " + str(env)
                 )
                 self.viz.plotlyplot(targ_hist_fig, win=f"target_env_{env}")
 
@@ -452,7 +492,7 @@ class AgnosticPredictor(ICPredictor):
         for env, samples in enumerate(env_samples):
             fig.add_trace(
                 go.Histogram(
-                    x=samples.view(-1).cpu().detach().numpy(),
+                    x=samples[0].view(-1).cpu().detach().numpy(),
                     name=f"E = {env}",
                     histnorm="probability density",
                 )

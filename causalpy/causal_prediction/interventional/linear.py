@@ -170,7 +170,7 @@ class LinPredictor(ICPredictor):
     @staticmethod
     def _regression_sklearn(x, y):
         lr = sklearn.linear_model.LinearRegression(fit_intercept=True).fit(x, y)
-        residuals = x - lr.predict(x)
+        residuals = y - lr.predict(x)
         coeffs = lr.coef_.copy()
         coeffs[0] = lr.intercept_
         return residuals, coeffs
@@ -334,7 +334,7 @@ class LinPredictor(ICPredictor):
                 # the intersected subset has already been checked, moving on
                 continue
 
-            rejected = yield (subset, False)
+            rejected = yield subset, False
 
             if not rejected:
                 candidates = candidates.intersection(subset)
