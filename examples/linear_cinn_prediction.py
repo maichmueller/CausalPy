@@ -62,6 +62,7 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
+            markovblanket_interv_only=False,
             target_var=target_var,
             sample_size=3000,
             seed=seed,

@@ -149,7 +149,9 @@ class AgnosticPredictor(ICPredictor):
         # Setup #
         #########
 
-        obs, target, environments_map = self.preprocess_input(obs, target_variable, envs)
+        obs, target, environments_map = self.preprocess_input(
+            obs, target_variable, envs
+        )
 
         obs, target = tuple(
             map(
@@ -209,7 +211,6 @@ class AgnosticPredictor(ICPredictor):
                 self.optimizer.zero_grad()
 
                 mask = self.get_mask(ground_truth_mask)
-                env_batch_indices = self._batch_indices_by_env(env_info)
                 batch_indices = torch.sort(batch_indices)[0]
 
                 masked_batch = self.masker_net(obs[batch_indices], mask).view(
@@ -220,15 +221,11 @@ class AgnosticPredictor(ICPredictor):
                 inn_loss, gauss_sample = self._compute_cinn_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                # env_loss, env_samples = self._compute_environmental_loss(
-                #     obs,
-                #     target,
-                #     batch_indices,
-                #     environments_map,
-                #     mask,
-                #     save_samples=self.use_visdom,
-                # )
-                env_loss = self._compute_overall_gaussian_loss(gauss_sample)
+                env_batch_indices = self._batch_indices_by_env(env_info)
+                env_loss, env_samples = self._compute_environmental_loss(
+                    obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
+                )
+                # env_loss = self._compute_overall_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
 
@@ -263,7 +260,7 @@ class AgnosticPredictor(ICPredictor):
                     "mask_0",
                 )
 
-                self._plot_gaussian_histograms(env_samples)
+                # self._plot_gaussian_histograms(env_samples)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -288,6 +285,8 @@ class AgnosticPredictor(ICPredictor):
         return results
 
     def predict(self, obs: Union[pd.DataFrame, Tensor]):
+        self.masker_net.eval()
+        self.cinn.eval()
         if isinstance(obs, pd.DataFrame):
             obs = torch.as_tensor(
                 obs[self.index_to_varname.values].to_numpy(),
@@ -306,7 +305,8 @@ class AgnosticPredictor(ICPredictor):
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
-    def _batch_indices_by_env(self, env_batch_info: Union[Tensor]):
+    @staticmethod
+    def _batch_indices_by_env(env_batch_info: Union[Tensor]):
         batch_indices_by_env = dict()
 
         # first sort the batch enviornment affiliation information by each entries env index.
@@ -321,14 +321,19 @@ class AgnosticPredictor(ICPredictor):
         #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
         # so that we can then find the full list by iterating over the environment names in the first returned list,
         # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
-        unique_envs_in_batch, ind_unique_env_entries = np.unique(env_batch_info[argsort_env_info].numpy(), return_index=True)
+        unique_envs_in_batch, ind_unique_env_entries = np.unique(
+            env_batch_info[argsort_env_info].numpy(), return_index=True
+        )
         for i, env in enumerate(unique_envs_in_batch[:-1]):
-            batch_indices_by_env[env] = argsort_env_info[ind_unique_env_entries[i]:ind_unique_env_entries[i+1]]
+            batch_indices_by_env[env] = argsort_env_info[
+                ind_unique_env_entries[i] : ind_unique_env_entries[i + 1]
+            ]
 
         # the last env entry are all the indices from the last unique entry pointer to the end.
-        batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[ind_unique_env_entries[-1]:]
+        batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
+            ind_unique_env_entries[-1] :
+        ]
         return batch_indices_by_env
-
 
     def _l2_regularization(self):
         loss = torch.zeros(1, device=self.device)
@@ -340,8 +345,7 @@ class AgnosticPredictor(ICPredictor):
         self,
         obs: Tensor,
         target: Tensor,
-        batch_indices: Union[Tensor, np.ndarray],
-        environments: Dict,
+        batch_indices_by_env: Dict,
         mask: Tensor,
         save_samples: bool,
     ):
@@ -353,10 +357,7 @@ class AgnosticPredictor(ICPredictor):
         nr_masks = mask.size(0)
         env_samples = []
         env_loss = torch.zeros(1, device=self.device)
-        for env, env_indices in environments.items():
-            env_batch_indices = np.intersect1d(
-                batch_indices.detach().cpu().numpy(), env_indices
-            )
+        for env, env_batch_indices in batch_indices_by_env.items():
             target_env_batch = target[env_batch_indices]
             masked_env_batch = self.masker_net(obs[env_batch_indices], mask)
 
@@ -410,7 +411,11 @@ class AgnosticPredictor(ICPredictor):
             rev=False,
         ).view(nr_masks, -1, 1)
         inn_loss = torch.mean(
-            torch.mean(gauss_sample ** 2 / 2 - self.cinn.log_jacobian_cache.view(gauss_sample.shape), dim=1),
+            torch.mean(
+                gauss_sample ** 2 / 2
+                - self.cinn.log_jacobian_cache.view(gauss_sample.shape),
+                dim=1,
+            ),
             dim=0,
         )
         return inn_loss, gauss_sample
@@ -443,7 +448,7 @@ class AgnosticPredictor(ICPredictor):
                     condition=(obs[env_indices] * self.get_mask(final=True)).view(
                         -1, self.p
                     ),
-                    rev=False,
+                    rev=True,
                 )
 
                 targ_hist_fig = go.Figure()
@@ -479,7 +484,7 @@ class AgnosticPredictor(ICPredictor):
                     x=samples.view(-1).cpu().detach().numpy(),
                     name=f"E = {env}",
                     histnorm="probability density",
-                    nbins=30
+                    nbinsx=30,
                 )
             )
         fig.add_trace(
