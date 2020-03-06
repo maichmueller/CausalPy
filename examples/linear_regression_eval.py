@@ -34,6 +34,7 @@ def evaluate(
     x_vars,
     targ_var,
     ground_truth_assignment=None,
+    plot=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
     if len(x_vars) != 2:
@@ -85,64 +86,67 @@ def evaluate(
     y_reg = y_reg.flatten()
     y_reg_hat = y_reg_hat.flatten()
 
-    matplotlib.use("TkAgg")
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-    plotting_sampler = StratifiedSampler(
-        data_source=np.arange(len(complete_data)),
-        class_vector=torch.as_tensor(environments),
-        batch_size=1000,
-    )
-    samp_ind = plotting_sampler.gen_sample_array()
 
-    if ground_truth_assignment is not None:
-        y_nonoise = ground_truth_assignment(
-            0, **{var: complete_data[var] for var in x_vars}
-        )[samp_ind]
-    y_reg = y_reg[samp_ind]
-    y_reg_hat = y_reg_hat[samp_ind]
-    residuals = residuals[samp_ind]
-    residuals_hat = residuals_hat[samp_ind]
-    data = complete_data.loc[samp_ind]
-    if ground_truth_assignment:
-        color_normal = np.abs(y_nonoise - y_reg)
-        color_approx = np.abs(y_nonoise - y_reg_hat)
-    else:
-        color_normal = np.abs(residuals - y_reg)
-        color_approx = np.abs(residuals_hat - y_reg_hat)
-    ax.scatter(
-        data[x_vars[0]], data[x_vars[1]], y_reg, c=color_normal, s=1.5, cmap="Greens",
-    )
-    # cmap = plt.get_cmap("Greens")
-    # cs = np.abs(residuals - y_reg)
-    # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
-    # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    # cs = sm.to_rgba(cs)
-    # ax.plot_surface(
-    #     complete_data[x_vars[0]],
-    #     complete_data[x_vars[1]],
-    #     y_reg,
-    #     c="green",
-    # )
+    # plotting
+    if plot:
+        matplotlib.use("TkAgg")
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+        plotting_sampler = StratifiedSampler(
+            data_source=np.arange(len(complete_data)),
+            class_vector=torch.as_tensor(environments),
+            batch_size=1000,
+        )
+        samp_ind = plotting_sampler.gen_sample_array()
 
-    ax.scatter(
-        data[x_vars[0]], data[x_vars[1]], y_reg_hat, c=color_approx, s=1.5, cmap="Reds",
-    )
-    # cmap = plt.get_cmap("Reds")
-    # cs = np.abs(residuals_hat - y_reg_hat)
-    # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
-    # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    # cs = sm.to_rgba(cs)
-    # ax.plot_surface(
-    #     complete_data[x_vars[0]],
-    #     complete_data[x_vars[1]],
-    #     y_reg_hat,
-    #     c="red",
-    # )
+        if ground_truth_assignment is not None:
+            y_nonoise = ground_truth_assignment(
+                0, **{var: complete_data[var] for var in x_vars}
+            )[samp_ind]
+        y_reg = y_reg[samp_ind]
+        y_reg_hat = y_reg_hat[samp_ind]
+        residuals = residuals[samp_ind]
+        residuals_hat = residuals_hat[samp_ind]
+        data = complete_data.loc[samp_ind]
+        if ground_truth_assignment:
+            color_normal = np.abs(y_nonoise - y_reg)
+            color_approx = np.abs(y_nonoise - y_reg_hat)
+        else:
+            color_normal = np.abs(residuals - y_reg)
+            color_approx = np.abs(residuals_hat - y_reg_hat)
+        ax.scatter(
+            data[x_vars[0]], data[x_vars[1]], y_reg, c=color_normal, s=1.5, cmap="Greens",
+        )
+        # cmap = plt.get_cmap("Greens")
+        # cs = np.abs(residuals - y_reg)
+        # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
+        # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+        # cs = sm.to_rgba(cs)
+        # ax.plot_surface(
+        #     complete_data[x_vars[0]],
+        #     complete_data[x_vars[1]],
+        #     y_reg,
+        #     c="green",
+        # )
 
-    ax.set_xlabel(x_vars[0])
-    ax.set_ylabel(x_vars[1])
-    ax.set_zlabel("Y")
+        ax.scatter(
+            data[x_vars[0]], data[x_vars[1]], y_reg_hat, c=color_approx, s=1.5, cmap="Reds",
+        )
+        # cmap = plt.get_cmap("Reds")
+        # cs = np.abs(residuals_hat - y_reg_hat)
+        # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
+        # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+        # cs = sm.to_rgba(cs)
+        # ax.plot_surface(
+        #     complete_data[x_vars[0]],
+        #     complete_data[x_vars[1]],
+        #     y_reg_hat,
+        #     c="red",
+        # )
 
-    plt.show()
+        ax.set_xlabel(x_vars[0])
+        ax.set_ylabel(x_vars[1])
+        ax.set_zlabel("Y")
+
+        plt.show()
     return (residuals_hat, beta_hat), (residuals, beta), y_hat

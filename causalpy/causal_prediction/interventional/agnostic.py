@@ -162,12 +162,12 @@ class AgnosticPredictor(ICPredictor):
 
         if self.masker_net is None:
             self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
-        self.masker_net.to(
+        self.masker_net.train().to(
             self.device
-        )  # needs to happen for the case of 'masket_net is None == False'.
+        )  # needs to happen for the case of 'masker_net is None == False'.
         if self.cinn is None:
             self.cinn = cINN(dim_condition=self.p, **self.cinn_params)
-        self.cinn.to(self.device)
+        self.cinn.train().to(self.device)
         self._set_optimizer()
 
         if self.use_visdom:
@@ -273,8 +273,8 @@ class AgnosticPredictor(ICPredictor):
 
         mask = self.get_mask().detach().cpu().numpy().flatten()
         results = {
-            var: mask
-            for (var, mask) in sorted(
+            var: mask_val
+            for (var, mask_val) in sorted(
                 {
                     parent_candidate: round(mask[idx], 2)
                     for idx, parent_candidate in self.index_to_varname.iteritems()
@@ -284,21 +284,49 @@ class AgnosticPredictor(ICPredictor):
         }
         return results
 
-    def predict(self, obs: Union[pd.DataFrame, Tensor]):
-        self.masker_net.eval()
-        self.cinn.eval()
+    def predict(
+        self,
+        obs: Union[pd.DataFrame, Tensor],
+        mask: Optional[Union[pd.DataFrame, np.ndarray, Tensor]] = None,
+    ):
         if isinstance(obs, pd.DataFrame):
             obs = torch.as_tensor(
-                obs[self.index_to_varname.values].to_numpy(),
+                obs[self.index_to_varname].to_numpy(),
                 dtype=torch.float32,
                 device=self.device,
             )
-        mask = self.masker_net.create_gates(deterministic=True)
+        if mask is None:
+            self.masker_net.eval()
+            mask = self.masker_net.create_gates(deterministic=True)
+        else:
+            mask = self._validate_mask(mask)
+        self.cinn.eval()
+
         obs *= mask
-        predictions = self.cinn(
-            x=torch.randn(obs.size(0), 1, device=self.device), condition=obs, rev=True
-        )
+        gaussian_sample = torch.randn(obs.size(0), 1, device=self.device)
+        predictions = self.cinn(x=gaussian_sample, condition=obs, rev=True)
         return predictions
+
+    def _validate_mask(self, mask: Union[pd.DataFrame, np.ndarray, Tensor]):
+        assert mask.shape == (
+            1,
+            self.p,
+        ), f"Provided mask shape needs to be (1, {self.p})."
+        if isinstance(mask, pd.DataFrame):
+            no_real_column_names = mask.columns == range(self.p)
+            if no_real_column_names:
+                # masking values assumed to be in correct order
+                mask = mask.to_numpy()
+            else:
+                # assert the column names fit the actual names
+                assert (
+                    np.isin(mask.columns, self.index_to_varname.values).all(),
+                    "All mask column names need to be either integer indices or "
+                    "the correct variable names of the used data.",
+                )
+                mask = mask[self.index_to_varname].to_numpy()
+        mask = torch.as_tensor(mask)
+        return mask
 
     def get_mask(self, ground_truth_mask: Optional[Tensor] = None, final=False):
         if ground_truth_mask is not None:
@@ -321,17 +349,17 @@ class AgnosticPredictor(ICPredictor):
         #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
         # so that we can then find the full list by iterating over the environment names in the first returned list,
         # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
-        unique_envs_in_batch, ind_unique_env_entries = np.unique(
+        unique_envs_in_batch, indices_of_env_transitions = np.unique(
             env_batch_info[argsort_env_info].numpy(), return_index=True
         )
         for i, env in enumerate(unique_envs_in_batch[:-1]):
             batch_indices_by_env[env] = argsort_env_info[
-                ind_unique_env_entries[i] : ind_unique_env_entries[i + 1]
+                indices_of_env_transitions[i] : indices_of_env_transitions[i + 1]
             ]
 
         # the last env entry are all the indices from the last unique entry pointer to the end.
         batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
-            ind_unique_env_entries[-1] :
+            indices_of_env_transitions[-1] :
         ]
         return batch_indices_by_env
 
