@@ -13,7 +13,7 @@ from torch.nn import Parameter, Module
 from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions import Normal
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from .icpbase import ICPredictor
 import warnings
@@ -25,7 +25,7 @@ from causalpy.neural_networks import (
     L0InputGate,
     cINN,
 )
-from causalpy.neural_networks.utils import StratifiedSampler
+from causalpy.neural_networks.utils import StratifiedSampler, mmd_multiscale
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
@@ -70,7 +70,7 @@ class AgnosticPredictor(ICPredictor):
         self.cinn_params = (
             cinn_params
             if cinn_params is not None
-            else dict(nr_blocks=3, dim=1, nr_layers=30, device=self.device)
+            else dict(nr_blocks=2, dim=1, nr_layers=30, device=self.device)
         )
 
         self.masker_net = masker_network
@@ -196,9 +196,11 @@ class AgnosticPredictor(ICPredictor):
             else 1
         )
         if ground_truth_mask is not None:
-            ground_truth_mask = torch.as_tensor(
-                ground_truth_mask, device=self.device
-            ).view(1, 1, self.p)
+            ground_truth_mask = (
+                self._validate_mask(ground_truth_mask)
+                .to(self.device)
+                .view(1, 1, self.p)
+            )
 
         ############
         # Training #
@@ -221,11 +223,11 @@ class AgnosticPredictor(ICPredictor):
                 inn_loss, gauss_sample = self._compute_cinn_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                env_batch_indices = self._batch_indices_by_env(env_info)
-                env_loss, env_samples = self._compute_environmental_loss(
-                    obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
-                )
-                # env_loss = self._compute_overall_gaussian_loss(gauss_sample)
+                # env_batch_indices = self._batch_indices_by_env(env_info)
+                # env_loss, env_samples = self._compute_environmental_loss(
+                #     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
+                # )
+                env_loss = self._compute_overall_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
 
@@ -320,7 +322,7 @@ class AgnosticPredictor(ICPredictor):
             else:
                 # assert the column names fit the actual names
                 assert (
-                    np.isin(mask.columns, self.index_to_varname.values).all(),
+                    np.all(np.isin(mask.columns, self.index_to_varname.to_numpy())),
                     "All mask column names need to be either integer indices or "
                     "the correct variable names of the used data.",
                 )
@@ -405,7 +407,7 @@ class AgnosticPredictor(ICPredictor):
                 env_gauss_sample.size(1), 1, device=self.device
             )
             for mask_nr in range(nr_masks):
-                loss_per_mask += self._wasserstein(
+                loss_per_mask += mmd_multiscale(
                     env_gauss_sample[mask_nr], true_gauss_sample
                 )
             env_loss += loss_per_mask

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import numpy as np
 from torch.utils.data import Sampler
@@ -8,6 +10,7 @@ class prohibit_model_grad(object):
     """
     Context manager cutting of the passed model from the graph generation of the contained pytorch computations.
     """
+
     def __init__(self, model: torch.nn.Module):
         self.model = model
 
@@ -23,8 +26,9 @@ class prohibit_model_grad(object):
 
 
 class StratifiedSampler(Sampler):
-    """Stratified Sampling
-    Provides equal representation of target classes in each batch
+    """
+    Stratified Sampling
+    Provides equal representation of target classes in each batch.
     """
 
     def __init__(self, data_source, class_vector, batch_size):
@@ -56,14 +60,127 @@ class StratifiedSampler(Sampler):
         return len(self.class_vector)
 
 
+def rbf(
+    X: torch.Tensor, Y: Optional[torch.Tensor] = None, sigma: Optional[float] = None
+):
+    # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
+    # the numpy code looks like the following:
+    #   XY = X @ Y.transpose()
+    #   XX_d = np.ones(XY.shape) * np.diag(X @ X.transpose())[:, np.newaxis]  # row wise mult of diagonal with mat
+    #   YY_d = np.ones(XY.shape) * np.diag(Y @ Y.transpose())[np.newaxis, :]  # col wise mult of diagonal with mat
+    #   pairwise_norm = XX_d + YY_d - 2 * XY
+    if Y is not None:
+        if X.dim() == 1:
+            X.unsqueeze_(1)
+        if Y.dim() == 1:
+            Y.unsqueeze_(1)
+        # adapted for torch:
+        XY = X @ Y.t()
+        XY_ones = torch.ones_like(XY)
+        XX_d = XY_ones * torch.diagonal(X @ X.t()).unsqueeze(1)
+        YY_d = XY_ones * torch.diagonal(Y @ Y.t()).unsqueeze(0)
+        pairwise_norm = XX_d + YY_d - 2 * XY
+    else:
+        if X.dim() == 1:
+            X.unsqueeze_(1)
+        # one can save some time by not recomputing the same values in some steps
+        XX = X @ X.t()
+        XX_ones = torch.ones_like(XX)
+        XX_diagonal = torch.diagonal(XX)
+        XX_row_diag = XX_ones * XX_diagonal.unsqueeze(1)
+        XX_col_diag = XX_ones * XX_diagonal.unsqueeze(0)
+        pairwise_norm = XX_row_diag + XX_col_diag - 2 * XX
+
+    if sigma is None:
+        try:
+            mdist = torch.median(pairwise_norm[pairwise_norm != 0])
+            sigma = torch.sqrt(mdist)
+        except RuntimeError:
+            sigma = 1.0
+
+    gaussian_rbf = torch.exp(pairwise_norm * (-0.5 / (sigma ** 2)))
+    return gaussian_rbf
+
+
+def hsic(X, Y, batch_size):
+    """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
+
+    def centering(
+        K: torch.Tensor,
+        device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
+    ):
+        n = K.shape[0]
+        unit = torch.ones(n, n).to(device)
+        I = torch.eye(n, device=device)
+        Q = I - unit / n
+        return torch.mm(torch.mm(Q, K), Q)
+
+    out = (
+        torch.sum(
+            centering(rbf(X, X), device=X.device)
+            * centering(rbf(Y, Y), device=Y.device)
+        )
+        / batch_size
+    )
+    return out
+
+
+def mmd_multiscale(x, y, normalize_j=False):
+    """ MMD with rationale kernel"""
+    # Normalize Inputs Jointly
+    if normalize_j:
+        xy = torch.cat((x, y), 0).detach()
+        sd = torch.sqrt(xy.var(0))
+        mean = xy.mean(0)
+        x = (x - mean) / sd
+        y = (y - mean) / sd
+
+    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+
+    rx = xx.diag().unsqueeze(0).expand_as(xx)
+    ry = yy.diag().unsqueeze(0).expand_as(yy)
+
+    dxx = rx.t() + rx - 2.0 * xx
+    dyy = ry.t() + ry - 2.0 * yy
+    dxy = rx.t() + ry - 2.0 * zz
+
+    XX, YY, XY = (
+        torch.zeros_like(xx),
+        torch.zeros_like(xx),
+        torch.zeros_like(xx),
+    )
+
+    for a in [6e-2, 1e-1, 3e-1, 5e-1, 7e-1, 1, 1.2, 1.5, 1.8, 2, 2.5]:
+        XX += a ** 2 * (a ** 2 + dxx) ** -1
+        YY += a ** 2 * (a ** 2 + dyy) ** -1
+        XY += a ** 2 * (a ** 2 + dxy) ** -1
+
+    return torch.mean(XX + YY - 2.0 * XY)
+
+
+def moments(X, Y, order=2):
+    """ Compares Expectation and Variance between two samples """
+    if order == 2:
+        a1 = (X.mean() - Y.mean()).abs()
+        a2 = (X.var() - Y.var()).abs()
+
+        return (a1 + a2) / 2
+
+
+def alpha_moment(data: torch.Tensor, alpha: float):
+    assert alpha > 0, f"Alpha needs to be > 0. Provided: alpha={alpha}."
+    return torch.pow(torch.pow(data, alpha).mean(dim=0), 1 / alpha)
+
 
 def get_jacobian(
-        network: torch.nn.Module,
-        x: torch.Tensor,
-        dim_in: int = None,
-        dim_out: int = None,
-        device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu",),
-        **kwargs
+    network: torch.nn.Module,
+    x: torch.Tensor,
+    dim_in: int = None,
+    dim_out: int = None,
+    device: torch.device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu",
+    ),
+    **kwargs,
 ):
     r"""
     Computes the Jacobian matrix for a batch of input data x with respect to the network of the class.
@@ -129,14 +246,10 @@ def get_jacobian(
     unit_vec_matrix = torch.zeros((dim_out * batch_size, dim_out), device=device)
 
     for j in range(dim_out):
-        unit_vec_matrix[j * batch_size: (j + 1) * batch_size, j] = 1
+        unit_vec_matrix[j * batch_size : (j + 1) * batch_size, j] = 1
 
     grad_data = torch.autograd.grad(
-        z,
-        x,
-        grad_outputs=unit_vec_matrix,
-        retain_graph=True,
-        create_graph=True,
+        z, x, grad_outputs=unit_vec_matrix, retain_graph=True, create_graph=True,
     )[0]
 
     # we now have the gradient data, but all the derivation vectors D f_j are spread out over ``dim_out``
@@ -155,7 +268,6 @@ def get_jacobian(
     return jacobian
 
 
-
 if __name__ == "__main__":
 
     from causalpy.neural_networks import FCNet
@@ -172,10 +284,9 @@ if __name__ == "__main__":
     # )
     def y(x):
         return torch.stack(
-            [
-                x[:, 0] ** 2 + x[:, 1],
-                x[:, 1] - x[:, 0],
-                x[:, 1]],
-            dim=1
+            [x[:, 0] ** 2 + x[:, 1], x[:, 1] - x[:, 0], x[:, 1]], dim=1
         ).cuda()
-    print(get_jacobian(y, torch.tensor([[1, 1]], dtype=torch.float), dim_in=2, dim_out=3))
+
+    print(
+        get_jacobian(y, torch.tensor([[1, 1]], dtype=torch.float), dim_in=2, dim_out=3)
+    )

@@ -1,5 +1,6 @@
 from .icpbase import ICPredictor
 from causalpy.neural_networks import NeuralBaseNet, FCNet
+from causalpy.neural_networks.utils import *
 
 from typing import *
 
@@ -69,12 +70,12 @@ class ANMPredictor(ICPredictor):
             self.loss_reduce_par = torch.sum
         elif loss_transform_res_to_par == "max":
             self.loss_reduce_par = torch.max
-        elif loss_transform_res_to_par == "alphamoment":
+        elif loss_transform_res_to_par == "alpha_moment":
             self.loss_reduce_par = partial(
-                self._alpha_moment, alpha=kwargs.pop("alpha", 1)
+                alpha_moment, alpha=kwargs.pop("alpha", 1)
             )
         else:
-            args = ['sum', 'max', 'alphamoment']
+            args = ['sum', 'max', 'alpha_moment']
             raise ValueError(
                 f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_par}'."
             )
@@ -83,21 +84,21 @@ class ANMPredictor(ICPredictor):
             self.loss_reduce_res = torch.sum
         elif loss_transform_res_to_res == "max":
             self.loss_reduce_res = torch.max
-        elif loss_transform_res_to_res == "alphamoment":
+        elif loss_transform_res_to_res == "alpha_moment":
             self.loss_reduce_res = partial(
-                self._alpha_moment, alpha=kwargs.pop("alpha", 1)
+                alpha_moment, alpha=kwargs.pop("alpha", 1)
             )
         else:
-            args = ['sum', 'max', 'alphamoment']
+            args = ['sum', 'max', 'alpha_moment']
             raise ValueError(
                 f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_res}'."
             )
 
         self.residual_equality_measure_str = residual_equality_measure
         if residual_equality_measure == "mmd":
-            self.identical_distribution_metric = self.mmd_multiscale
+            self.identical_distribution_metric = mmd_multiscale
         elif residual_equality_measure == "moments":
-            self.identical_distribution_metric = self.moments
+            self.identical_distribution_metric = moments
         elif isinstance(residual_equality_measure, Callable):
             self.identical_distribution_metric = residual_equality_measure
         else:
@@ -107,7 +108,7 @@ class ANMPredictor(ICPredictor):
 
         self.variable_independence_metric_str = variable_independence_metric
         if variable_independence_metric == "hsic":
-            self.variable_independence_metric = self.hsic
+            self.variable_independence_metric = hsic
 
     def set_network(self, network: torch.nn.Module):
         self.network = network
@@ -227,108 +228,6 @@ class ANMPredictor(ICPredictor):
             ]
             jacobian = torch.stack(result, dim=0)
             return jacobian
-
-    @staticmethod
-    def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
-
-        # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
-        # the numpy code looks like the following:
-        #   XY = X @ Y.transpose()
-        #   XX_d = np.ones(XY.shape) * np.diag(X @ X.transpose())[:, np.newaxis]  # row wise mult of diagonal with mat
-        #   YY_d = np.ones(XY.shape) * np.diag(Y @ Y.transpose())[np.newaxis, :]  # col wise mult of diagonal with mat
-        #   pairwise_norm = XX_d + YY_d - 2 * XY
-        if Y is not None:
-            if X.dim() == 1:
-                X.unsqueeze_(1)
-            if Y.dim() == 1:
-                Y.unsqueeze_(1)
-            # adapted for torch:
-            XY = X @ Y.t()
-            XY_ones = torch.ones_like(XY)
-            XX_d = XY_ones * torch.diagonal(X @ X.t()).unsqueeze(1)
-            YY_d = XY_ones * torch.diagonal(Y @ Y.t()).unsqueeze(0)
-            pairwise_norm = XX_d + YY_d - 2 * XY
-        else:
-            if X.dim() == 1:
-                X.unsqueeze_(1)
-            # one can save some time by not recomputing the same values in some steps
-            XX = X @ X.t()
-            XX_ones = torch.ones_like(XX)
-            XX_diagonal = torch.diagonal(XX)
-            XX_row_diag = XX_ones * XX_diagonal.unsqueeze(1)
-            XX_col_diag = XX_ones * XX_diagonal.unsqueeze(0)
-            pairwise_norm = XX_row_diag + XX_col_diag - 2 * XX
-
-        if sigma is None:
-            try:
-                mdist = torch.median(pairwise_norm[pairwise_norm != 0])
-                sigma = torch.sqrt(mdist)
-            except RuntimeError:
-                sigma = 1.0
-
-        gaussian_rbf = torch.exp(pairwise_norm * (-0.5 / (sigma ** 2)))
-        return gaussian_rbf
-
-    def centering(self, K: Tensor):
-        n = K.shape[0]
-        unit = torch.ones(n, n).to(self.device)
-        I = torch.eye(n, device=self.device)
-        Q = I - unit / n
-        return torch.mm(torch.mm(Q, K), Q)
-
-    def hsic(self, X, Y):
-        """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
-        out = (
-            torch.sum(self.centering(self.rbf(X, X)) * self.centering(self.rbf(Y, Y)))
-            / self.batch_size
-        )
-        return out
-
-    def mmd_multiscale(self, x, y, normalize_j=True):
-        """ MMD with rationale kernel"""
-        # Normalize Inputs Jointly
-        if normalize_j:
-            xy = torch.cat((x, y), 0).detach()
-            sd = torch.sqrt(xy.var(0))
-            mean = xy.mean(0)
-            x = (x - mean) / sd
-            y = (y - mean) / sd
-
-        xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
-
-        rx = xx.diag().unsqueeze(0).expand_as(xx)
-        ry = yy.diag().unsqueeze(0).expand_as(yy)
-
-        dxx = rx.t() + rx - 2.0 * xx
-        dyy = ry.t() + ry - 2.0 * yy
-        dxy = rx.t() + ry - 2.0 * zz
-
-        XX, YY, XY = (
-            torch.zeros_like(xx),
-            torch.zeros_like(xx),
-            torch.zeros_like(xx),
-        )
-
-        for a in [6e-2, 1e-1, 3e-1, 5e-1, 7e-1, 1, 1.2, 1.5, 1.8, 2, 2.5]:
-            XX += a ** 2 * (a ** 2 + dxx) ** -1
-            YY += a ** 2 * (a ** 2 + dyy) ** -1
-            XY += a ** 2 * (a ** 2 + dxy) ** -1
-
-        return torch.mean(XX + YY - 2.0 * XY)
-
-    @staticmethod
-    def moments(X, Y, order=2):
-        """ Compares Expectation and Variance between two samples """
-        if order == 2:
-            a1 = (X.mean() - Y.mean()).abs()
-            a2 = (X.var() - Y.var()).abs()
-
-            return (a1 + a2) / 2
-
-    @staticmethod
-    def _alpha_moment(data: Tensor, alpha: float):
-        assert alpha > 0, f"Alpha needs to be > 0. Provided: alpha={alpha}."
-        return torch.pow(torch.pow(data, alpha).mean(dim=0), 1 / alpha)
 
     @staticmethod
     def _null_data_hook(*args, **kwargs):
