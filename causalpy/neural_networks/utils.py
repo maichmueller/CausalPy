@@ -1,6 +1,7 @@
 from typing import Optional
 
 import torch
+from torch import Tensor
 import numpy as np
 from torch.utils.data import Sampler
 from sklearn.model_selection import StratifiedShuffleSplit
@@ -61,7 +62,7 @@ class StratifiedSampler(Sampler):
 
 
 def rbf(
-    X: torch.Tensor, Y: Optional[torch.Tensor] = None, sigma: Optional[float] = None
+    X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None
 ):
     # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
     # the numpy code looks like the following:
@@ -106,7 +107,7 @@ def hsic(X, Y, batch_size):
     """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
 
     def centering(
-        K: torch.Tensor,
+        K: Tensor,
         device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         n = K.shape[0]
@@ -125,7 +126,7 @@ def hsic(X, Y, batch_size):
     return out
 
 
-def mmd_multiscale(x, y, normalize_j=False):
+def mmd_multiscale(x: Tensor, y: Tensor, normalize_j=False):
     """ MMD with rationale kernel"""
     # Normalize Inputs Jointly
     if normalize_j:
@@ -158,7 +159,7 @@ def mmd_multiscale(x, y, normalize_j=False):
     return torch.mean(XX + YY - 2.0 * XY)
 
 
-def moments(X, Y, order=2):
+def moments(X: Tensor, Y: Tensor, order=2):
     """ Compares Expectation and Variance between two samples """
     if order == 2:
         a1 = (X.mean() - Y.mean()).abs()
@@ -167,14 +168,31 @@ def moments(X, Y, order=2):
         return (a1 + a2) / 2
 
 
-def alpha_moment(data: torch.Tensor, alpha: float):
+def wasserstein(x: Tensor, y: Tensor, normalize: bool = False):
+    if normalize:
+        x, y = normalize_jointly(x, y)
+    sort_sq_diff = (torch.sort(x, dim=0)[0] - torch.sort(y, dim=0)[0]).pow(2)
+    std_prod = torch.std(x) * torch.std(y)
+    return torch.mean(sort_sq_diff) / std_prod
+
+
+def normalize_jointly(x: Tensor, y: Tensor):
+    xy = torch.cat((x, y), 0).detach()
+    sd = torch.sqrt(xy.var(0))
+    mean = xy.mean(0)
+    x = (x - mean) / sd
+    y = (y - mean) / sd
+    return x, y
+
+
+def alpha_moment(data: Tensor, alpha: float):
     assert alpha > 0, f"Alpha needs to be > 0. Provided: alpha={alpha}."
     return torch.pow(torch.pow(data, alpha).mean(dim=0), 1 / alpha)
 
 
 def get_jacobian(
     network: torch.nn.Module,
-    x: torch.Tensor,
+    x: Tensor,
     dim_in: int = None,
     dim_out: int = None,
     device: torch.device = torch.device(

@@ -25,7 +25,12 @@ from causalpy.neural_networks import (
     L0InputGate,
     cINN,
 )
-from causalpy.neural_networks.utils import StratifiedSampler, mmd_multiscale
+from causalpy.neural_networks.utils import (
+    StratifiedSampler,
+    mmd_multiscale,
+    wasserstein,
+    moments,
+)
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
@@ -223,10 +228,10 @@ class AgnosticPredictor(ICPredictor):
                 inn_loss, gauss_sample = self._compute_cinn_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                # env_batch_indices = self._batch_indices_by_env(env_info)
-                # env_loss, env_samples = self._compute_environmental_loss(
-                #     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
-                # )
+                env_batch_indices = self._batch_indices_by_env(env_info)
+                env_loss, env_samples = self._compute_environmental_loss(
+                    obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
+                )
                 env_loss = self._compute_overall_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
@@ -339,7 +344,7 @@ class AgnosticPredictor(ICPredictor):
     def _batch_indices_by_env(env_batch_info: Union[Tensor]):
         batch_indices_by_env = dict()
 
-        # first sort the batch enviornment affiliation information by each entries env index.
+        # first sort the batch environment affiliation information by each entries env index.
         # we do this as x[argsort(x)] tells us the indices of the environments in order.
         sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
         # To be done now, we only need to know where the breakpoints are in this list, i.e.
@@ -380,12 +385,12 @@ class AgnosticPredictor(ICPredictor):
         save_samples: bool,
     ):
         """
-        Compute the environmental similarity loss of the gauss mapping for each individual environment data only.
-        This is done to enforce that the cinn maps every single environment individually to gauss and not just the
-        complete data package together.
+        Compute the environmental similarity loss of the gauss/target mapping for each individual environment data only.
+        This is done to enforce that the cINN maps every single environment individually to gauss and the target
+        distribution and not just the complete data package together.
         """
         nr_masks = mask.size(0)
-        env_samples = []
+        env_gauss_samples, env_target_samples = [], []
         env_loss = torch.zeros(1, device=self.device)
         for env, env_batch_indices in batch_indices_by_env.items():
             target_env_batch = target[env_batch_indices]
@@ -396,23 +401,37 @@ class AgnosticPredictor(ICPredictor):
                 condition=masked_env_batch,
                 rev=False,
             ).view(nr_masks, -1, 1)
+            env_target_sample = self.cinn(
+                x=torch.randn(target_env_batch.size(0), device=self.device).repeat(
+                    nr_masks, 1
+                ),
+                condition=masked_env_batch,
+                rev=True,
+            )
 
             if save_samples:
-                env_samples.append(env_gauss_sample)
+                env_gauss_samples.append(env_gauss_sample)
+                env_target_samples.append(env_target_samples)
 
             # all environmental samples should be gaussian,
             # thus measure the deviation of their distributions.
             loss_per_mask = torch.zeros(1, device=self.device)
-            true_gauss_sample = torch.randn(
-                env_gauss_sample.size(1), 1, device=self.device
-            )
+            true_gauss = torch.randn(env_gauss_sample.size(1), 1, device=self.device)
+
+            # compute the loss in the normalizing direction (gauss) and the inference direction (target).
             for mask_nr in range(nr_masks):
-                loss_per_mask += mmd_multiscale(
-                    env_gauss_sample[mask_nr], true_gauss_sample
-                )
+                for estimate, observation in zip(
+                    (env_gauss_sample[mask_nr], env_target_sample[mask_nr]),
+                    (true_gauss, target_env_batch),
+                ):
+                    # all three measures are used to enforce a quality approximation of the gauss, and of the
+                    # target marginal distribution.
+                    loss_per_mask += wasserstein(estimate, observation)
+                    loss_per_mask += mmd_multiscale(estimate, observation)
+                    loss_per_mask += moments(estimate, observation)
             env_loss += loss_per_mask
         env_loss = env_loss / nr_masks
-        return env_loss, env_samples
+        return env_loss, env_gauss_samples
 
     def _compute_overall_gaussian_loss(self, gauss_sample: Tensor):
         """
@@ -426,7 +445,7 @@ class AgnosticPredictor(ICPredictor):
         true_gauss_sample = torch.randn(gauss_sample.size(1), 1, device=self.device)
 
         for mask_nr in range(nr_masks):
-            loss_per_mask += self._wasserstein(gauss_sample[mask_nr], true_gauss_sample)
+            loss_per_mask += wasserstein(gauss_sample[mask_nr], true_gauss_sample)
         loss_per_mask /= nr_masks
         return loss_per_mask
 
@@ -451,21 +470,8 @@ class AgnosticPredictor(ICPredictor):
         return inn_loss, gauss_sample
 
     @staticmethod
-    def _wasserstein(x, y, normalize=False):
-        if normalize:
-            x, y = AgnosticPredictor.normalize_jointly(x, y)
-        sort_sq_diff = (torch.sort(x, dim=0)[0] - torch.sort(y, dim=0)[0]).pow(2)
-        std_prod = torch.std(x) * torch.std(y)
-        return torch.mean(sort_sq_diff) / std_prod
-
-    @staticmethod
-    def normalize_jointly(x, y):
-        xy = torch.cat((x, y), 0).detach()
-        sd = torch.sqrt(xy.var(0))
-        mean = xy.mean(0)
-        x = (x - mean) / sd
-        y = (y - mean) / sd
-        return x, y
+    def normalize(x: Tensor):
+        return (x - torch.mean(x)) / torch.std(x)
 
     def _plot_data_approximation(
         self, obs: Tensor, target: Tensor, environments: Dict,

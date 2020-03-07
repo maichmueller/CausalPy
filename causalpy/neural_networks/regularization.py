@@ -432,7 +432,7 @@ class L0InputGate(torch.nn.Module):
         self.log_alpha = torch.nn.Parameter(
             initial_sparsity_rate + 1e-2 * torch.randn(1, dim_input), requires_grad=True
         )
-        self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
+        self.beta = torch.nn.Parameter(0.1 * torch.ones(1), requires_grad=True)
         self.gamma = gamma
         self.zeta = zeta
         self.mcs_size = monte_carlo_sample_size
@@ -447,6 +447,11 @@ class L0InputGate(torch.nn.Module):
         if mask is None:
             self.gates = self.create_gates()
         else:
+            assert (
+                len(mask.size()) == 3
+                and mask.size(1) == 1
+                and mask.size(2) == self.n_dim
+            ), f"Provided mask must be of shape ([any > 0], 1, n_dim) with n_dim = {self.n_dim}"
             self.gates = mask
 
         x = x.repeat(self.mcs_size, 1).view(self.mcs_size, batch_size, self.n_dim)
