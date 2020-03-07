@@ -309,8 +309,8 @@ def generate_data_from_scm(
 
     # perform interventions on selected variables
     for parent in interv_variables:
-        # interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
-        interv_value = 0
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
+        # interv_value = 0
         scm.do_intervention([parent], [interv_value])
         print(
             f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."

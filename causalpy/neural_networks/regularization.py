@@ -433,6 +433,7 @@ class L0InputGate(torch.nn.Module):
             initial_sparsity_rate + 1e-2 * torch.randn(1, dim_input), requires_grad=True
         )
         self.beta = torch.nn.Parameter(0.1 * torch.ones(1), requires_grad=True)
+        # self.beta = 0.1 * torch.ones(1, device=self.device)
         self.gamma = gamma
         self.zeta = zeta
         self.mcs_size = monte_carlo_sample_size
@@ -486,7 +487,7 @@ class L0InputGate(torch.nn.Module):
 
     def create_gates(self, deterministic=False):
         """Creates input gates using parameters log_alpha, beta"""
-        if deterministic:
+        if deterministic or not self.training:
             return self.final_layer()
         dim = self.log_alpha.shape[0]
         m = torch.distributions.uniform.Uniform(

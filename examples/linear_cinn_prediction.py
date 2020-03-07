@@ -46,8 +46,8 @@ if __name__ == "__main__":
             # (build_scm_basic, "Y"),
             # (build_scm_basic_discrete, "Y"),
             # (build_scm_exponential, "Y"),
-            (build_scm_medium, "Y"),
-            # (build_scm_large, "Y"),
+            # (build_scm_medium, "Y"),
+            (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
             # (partial(simulate, nr_genes=25), "G_21"),
@@ -71,13 +71,13 @@ if __name__ == "__main__":
             [possible_parents.index(par) for par in target_parents]
         )
         nr_envs = np.unique(environments).max() + 1
-        nr_repetitions = 20
+        nr_repetitions = 1
         results = []
-        epochs = 100
-        use_visdom = True
-        # for _ in range(nr_repetitions):
+        epochs = 200
+        use_visdom = 0
+        # for _ in range(nr_repetitions)
         ap = AgnosticPredictor(
-            epochs=epochs, batch_size=1000, visualize_with_visdom=use_visdom
+            epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
         results.append(ap.infer(complete_data, environments, target_var,))
         print(results[-1])

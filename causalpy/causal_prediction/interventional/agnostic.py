@@ -66,7 +66,7 @@ class AgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=0.2, env=5, inn=2, l2=0.01)
+            Hyperparams(l0=1.5, env=.5, inn=1, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -96,7 +96,7 @@ class AgnosticPredictor(ICPredictor):
         self.scheduler = None
         self.scheduler_type = scheduler_type
         self.scheduler_params = (
-            dict(step_size=50, gamma=0.9)
+            dict(step_size=500, gamma=0.9)
             if scheduler_params is None
             else scheduler_params
         )
@@ -174,13 +174,7 @@ class AgnosticPredictor(ICPredictor):
             self.cinn = cINN(dim_condition=self.p, **self.cinn_params)
         self.cinn.train().to(self.device)
         self._set_optimizer()
-
-        if self.use_visdom:
-            self._plot_data_approximation(obs, target, environments_map)
-            self._plot_mask(
-                self.masker_net.final_layer().detach().cpu().numpy().reshape(1, -1),
-                self.get_parent_candidates(),
-            )
+        self._set_scheduler()
 
         data_loader = DataLoader(
             dataset=TensorDataset(torch.arange(self.n), torch.as_tensor(envs)),
@@ -224,15 +218,18 @@ class AgnosticPredictor(ICPredictor):
                     nr_masks, -1, self.p
                 )
                 target_batch = target[batch_indices].view(-1, 1)
+                # env_batch_indices = self._batch_indices_by_env(env_info)
+                env_batch_indices = self._batch_indices_by_env(
+                    batch_indices, environments_map
+                )
 
-                inn_loss, gauss_sample = self._compute_cinn_loss(
+                inn_loss, gauss_sample = self._cinn_maxlikelihood_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                env_batch_indices = self._batch_indices_by_env(env_info)
-                env_loss, env_samples = self._compute_environmental_loss(
+                env_loss, env_samples = self._environmental_invariance_loss(
                     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
                 )
-                env_loss = self._compute_overall_gaussian_loss(gauss_sample)
+                env_loss += self._pooled_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
 
@@ -262,12 +259,12 @@ class AgnosticPredictor(ICPredictor):
 
             if self.use_visdom:
                 self._plot_mask(
-                    self.masker_net.final_layer().detach().cpu().numpy(),
+                    self.get_mask(final=True).detach().cpu().numpy(),
                     self.get_parent_candidates(),
                     "mask_0",
                 )
 
-                # self._plot_gaussian_histograms(env_samples)
+                self._plot_gaussian_histograms(env_samples)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -278,12 +275,12 @@ class AgnosticPredictor(ICPredictor):
 
                 self._plot_data_approximation(obs, target, environments_map)
 
-        mask = self.get_mask().detach().cpu().numpy().flatten()
+        mask = self.get_mask(final=True).view(-1).cpu().detach().numpy().round(2)
         results = {
             var: mask_val
             for (var, mask_val) in sorted(
                 {
-                    parent_candidate: round(mask[idx], 2)
+                    parent_candidate: mask[idx]
                     for idx, parent_candidate in self.index_to_varname.iteritems()
                 }.items(),
                 key=lambda x: x[0],
@@ -326,11 +323,10 @@ class AgnosticPredictor(ICPredictor):
                 mask = mask.to_numpy()
             else:
                 # assert the column names fit the actual names
-                assert (
-                    np.all(np.isin(mask.columns, self.index_to_varname.to_numpy())),
-                    "All mask column names need to be either integer indices or "
-                    "the correct variable names of the used data.",
-                )
+                assert np.all(
+                    np.isin(mask.columns, self.index_to_varname.to_numpy())
+                ), "All mask column names need to be integer indices or the correct variable names of the used data."
+
                 mask = mask[self.index_to_varname].to_numpy()
         mask = torch.as_tensor(mask)
         return mask
@@ -340,34 +336,43 @@ class AgnosticPredictor(ICPredictor):
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
+    # @staticmethod
+    # def _batch_indices_by_env(env_batch_info: Union[Tensor]):
+    #     batch_indices_by_env = dict()
+    #
+    #     # first sort the batch environment affiliation information by each entries env index.
+    #     # we do this as x[argsort(x)] tells us the indices of the environments in order.
+    #     sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
+    #     # To be done now, we only need to know where the breakpoints are in this list, i.e.
+    #     # at which indices we are crossing into the next environment index.
+    #     # To this end we compute the unique indices in the argsorted env info list, which will give us a tuple
+    #     # of two lists:
+    #     # 1st list: the unique, and sorted environments we can find in the total env list.
+    #     # 2nd list: the list of index breaks. This will look like
+    #     #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
+    #     # so that we can then find the full list by iterating over the environment names in the first returned list,
+    #     # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
+    #     unique_envs_in_batch, indices_of_env_transitions = np.unique(
+    #         env_batch_info[argsort_env_info].numpy(), return_index=True
+    #     )
+    #     for i, env in enumerate(unique_envs_in_batch[:-1]):
+    #         batch_indices_by_env[env] = argsort_env_info[
+    #             indices_of_env_transitions[i] : indices_of_env_transitions[i + 1]
+    #         ]
+    #
+    #     # the last env entry are all the indices from the last unique entry pointer to the end.
+    #     batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
+    #         indices_of_env_transitions[-1] :
+    #     ]
+    #     return batch_indices_by_env
+
     @staticmethod
-    def _batch_indices_by_env(env_batch_info: Union[Tensor]):
+    def _batch_indices_by_env(batch_indices: Union[Tensor, np.ndarray], env_map: Dict):
         batch_indices_by_env = dict()
-
-        # first sort the batch environment affiliation information by each entries env index.
-        # we do this as x[argsort(x)] tells us the indices of the environments in order.
-        sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
-        # To be done now, we only need to know where the breakpoints are in this list, i.e.
-        # at which indices we are crossing into the next environment index.
-        # To this end we compute the unique indices in the argsorted env info list, which will give us a tuple
-        # of two lists:
-        # 1st list: the unique, and sorted environments we can find in the total env list.
-        # 2nd list: the list of index breaks. This will look like
-        #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
-        # so that we can then find the full list by iterating over the environment names in the first returned list,
-        # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
-        unique_envs_in_batch, indices_of_env_transitions = np.unique(
-            env_batch_info[argsort_env_info].numpy(), return_index=True
-        )
-        for i, env in enumerate(unique_envs_in_batch[:-1]):
-            batch_indices_by_env[env] = argsort_env_info[
-                indices_of_env_transitions[i] : indices_of_env_transitions[i + 1]
-            ]
-
-        # the last env entry are all the indices from the last unique entry pointer to the end.
-        batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
-            indices_of_env_transitions[-1] :
-        ]
+        if isinstance(batch_indices, Tensor):
+            batch_indices = batch_indices.numpy()
+        for env, env_indices in env_map.items():
+            batch_indices_by_env[env] = np.intersect1d(batch_indices, env_indices)
         return batch_indices_by_env
 
     def _l2_regularization(self):
@@ -376,7 +381,7 @@ class AgnosticPredictor(ICPredictor):
             loss += (param ** 2).sum()
         return loss
 
-    def _compute_environmental_loss(
+    def _environmental_invariance_loss(
         self,
         obs: Tensor,
         target: Tensor,
@@ -392,40 +397,49 @@ class AgnosticPredictor(ICPredictor):
         nr_masks = mask.size(0)
         env_gauss_samples, env_target_samples = [], []
         env_loss = torch.zeros(1, device=self.device)
+
         for env, env_batch_indices in batch_indices_by_env.items():
-            target_env_batch = target[env_batch_indices]
+            target_env_batch = target[env_batch_indices].view(-1, 1)
             masked_env_batch = self.masker_net(obs[env_batch_indices], mask)
 
             env_gauss_sample = self.cinn(
-                x=target_env_batch.view(-1, 1).repeat(nr_masks, 1),
+                x=target_env_batch.repeat(nr_masks, 1),
                 condition=masked_env_batch,
                 rev=False,
             ).view(nr_masks, -1, 1)
+
             env_target_sample = self.cinn(
-                x=torch.randn(target_env_batch.size(0), device=self.device).repeat(
+                x=torch.randn(target_env_batch.size(0), 1, device=self.device).repeat(
                     nr_masks, 1
                 ),
                 condition=masked_env_batch,
                 rev=True,
-            )
+            ).view(nr_masks, -1, 1)
 
             if save_samples:
                 env_gauss_samples.append(env_gauss_sample)
-                env_target_samples.append(env_target_samples)
+                env_target_samples.append(env_target_sample)
 
-            # all environmental samples should be gaussian,
-            # thus measure the deviation of their distributions.
+            # all environmental normalized samples should be gaussian,
+            # all environmental target samples should follow the target marginal distribution,
+            # thus measure the deviation of these distributions.
             loss_per_mask = torch.zeros(1, device=self.device)
             true_gauss = torch.randn(env_gauss_sample.size(1), 1, device=self.device)
 
             # compute the loss in the normalizing direction (gauss) and the inference direction (target).
             for mask_nr in range(nr_masks):
+
+                # loss_per_mask += wasserstein(env_gauss_sample[mask_nr], true_gauss)
+                # loss_per_mask += mmd_multiscale(env_gauss_sample[mask_nr], true_gauss)
+                # loss_per_mask += moments(env_gauss_sample[mask_nr], true_gauss)
+
                 for estimate, observation in zip(
                     (env_gauss_sample[mask_nr], env_target_sample[mask_nr]),
                     (true_gauss, target_env_batch),
                 ):
-                    # all three measures are used to enforce a quality approximation of the gauss, and of the
+                    # all three measures enforce a quality approximation of the gauss, and of the
                     # target marginal distribution.
+                    # (Should in theory suffice taking either mmd + moments or wasserstein)
                     loss_per_mask += wasserstein(estimate, observation)
                     loss_per_mask += mmd_multiscale(estimate, observation)
                     loss_per_mask += moments(estimate, observation)
@@ -433,7 +447,7 @@ class AgnosticPredictor(ICPredictor):
         env_loss = env_loss / nr_masks
         return env_loss, env_gauss_samples
 
-    def _compute_overall_gaussian_loss(self, gauss_sample: Tensor):
+    def _pooled_gaussian_loss(self, gauss_sample: Tensor):
         """
         Compute the environmental similarity loss of the gauss mapping for all environment data together.
         This is done to enforce that the cinn maps all environments combined to gauss. This seems redundant
@@ -449,7 +463,7 @@ class AgnosticPredictor(ICPredictor):
         loss_per_mask /= nr_masks
         return loss_per_mask
 
-    def _compute_cinn_loss(
+    def _cinn_maxlikelihood_loss(
         self, masked_batch: Tensor, target_batch: Tensor, nr_masks: int
     ):
         # compute the INN loss per mask, then average loss over the number of masks.
@@ -553,7 +567,7 @@ class AgnosticPredictor(ICPredictor):
     def _plot_loss(self, losses, loss_win, title="Loss Behaviour"):
         losses = np.array(losses)
         if len(losses) > 1:
-            ytickmax = np.mean(losses[losses < np.quantile(losses, 0.95)])
+            ytickmax = np.mean(losses[losses < np.quantile(losses, 0.99)])
             ytickmax = ytickmax + abs(ytickmax)
             ytickmin = np.mean(losses[losses > np.quantile(losses, 0.01)])
             ytickmin = ytickmin - abs(ytickmin)
