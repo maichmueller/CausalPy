@@ -26,7 +26,7 @@ from causalpy.neural_networks import (
     L0InputGate,
     cINN,
 )
-from causalpy.neural_networks.utils import StratifiedSampler
+from causalpy.neural_networks.utils import StratifiedSampler, wasserstein
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
@@ -154,8 +154,10 @@ class MultiAgnosticPredictor(ICPredictor):
         # Setup #
         #########
 
-        obs, target, environments = self.preprocess_input(obs, target_variable, envs)
-        nr_envs = max(environments.keys())
+        obs, target, environments_map = self.preprocess_input(
+            obs, target_variable, envs
+        )
+        nr_envs = max(environments_map.keys())
         obs, target = tuple(
             map(
                 lambda data: torch.from_numpy(data).float().to(self.device),
@@ -178,7 +180,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self._set_optimizer()
 
         if self.use_visdom:
-            self._plot_data_approximation(obs, target, environments)
+            self._plot_data_approximation(obs, target, environments_map)
             self._plot_mask(
                 self.masker_net.final_layer().detach().cpu().numpy().reshape(1, -1),
                 self.get_parent_candidates(),
@@ -226,13 +228,16 @@ class MultiAgnosticPredictor(ICPredictor):
                 )
                 target_batch = target[batch_indices].view(-1, 1)
 
-                inn_loss = self._compute_cinn_loss(
-                    obs, target, batch_indices, environments, mask
+                env_batch_indices = self._batch_indices_by_env(
+                    batch_indices, environments_map
                 )
-                env_loss, env_samples = self._compute_environmental_loss(
-                    obs, target, batch_indices, environments, mask,
+                inn_loss = self._cinn_maxlikelihood_loss(
+                    obs, target, batch_indices, environments_map, mask
                 )
-                env_loss += self._compute_overall_gaussian_loss(
+                env_loss, env_samples = self._environmental_invariance_loss(
+                    obs, target, env_batch_indices, mask,
+                )
+                env_loss += self._pooled_gaussian_loss(
                     masked_batch, target_batch, nr_masks
                 )
                 l0_loss = self.masker_net.complexity_loss()
@@ -278,7 +283,7 @@ class MultiAgnosticPredictor(ICPredictor):
                         f"{loss_name.capitalize()} Loss Movement",
                     )
 
-                self._plot_data_approximation(obs, target, environments)
+                self._plot_data_approximation(obs, target, environments_map)
 
         mask = self.get_mask().detach().cpu().numpy().flatten()
         results = {
@@ -322,6 +327,15 @@ class MultiAgnosticPredictor(ICPredictor):
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
+    @staticmethod
+    def _batch_indices_by_env(batch_indices: Union[Tensor, np.ndarray], env_map: Dict):
+        batch_indices_by_env = dict()
+        if isinstance(batch_indices, Tensor):
+            batch_indices = batch_indices.numpy()
+        for env, env_indices in env_map.items():
+            batch_indices_by_env[env] = np.intersect1d(batch_indices, env_indices)
+        return batch_indices_by_env
+
     def _l2_regularization(self):
         loss = torch.zeros(1, device=self.device)
         for cinn in self.cinns:
@@ -329,12 +343,11 @@ class MultiAgnosticPredictor(ICPredictor):
                 loss += (param ** 2).sum()
         return loss
 
-    def _compute_environmental_loss(
+    def _environmental_invariance_loss(
         self,
         obs: Tensor,
         target: Tensor,
-        batch_indices: Union[Tensor, np.ndarray],
-        environments: Dict,
+        batch_indices_by_env: Dict[int, Tensor],
         mask: Tensor,
     ):
         """
@@ -345,31 +358,30 @@ class MultiAgnosticPredictor(ICPredictor):
         nr_masks = mask.size(0)
         env_samples = []
         env_loss = torch.zeros(1, device=self.device)
-        for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
+        for env_cinn, (env, env_indices) in zip(
+            self.cinns, batch_indices_by_env.items()
+        ):
             # split data by environmental affiliation
-            indices = batch_indices[np.logical_not(np.isin(batch_indices, env_indices))]
-            target_notenv_batch = target[indices].view(-1, 1)
-            masked_notenv_batch = self.masker_net(obs[indices], mask).view(
+            target_notenv_batch = target[env_indices].view(-1, 1)
+            masked_notenv_batch = self.masker_net(obs[env_indices], mask).view(
                 nr_masks, -1, self.p
             )
             # compute the INN loss per mask
             per_mask_samples = []
-            true_gauss_sample = torch.randn(len(indices), 1, device=self.device)
+            true_gauss_sample = torch.randn(len(env_indices), 1, device=self.device)
             for mask_nr in range(nr_masks):
                 gauss_sample = env_cinn(
                     x=target_notenv_batch,
                     condition=masked_notenv_batch[mask_nr],
                     rev=False,
                 )
-                env_loss += self._wasserstein(
-                    gauss_sample, true_gauss_sample
-                )
+                env_loss += wasserstein(gauss_sample, true_gauss_sample)
                 per_mask_samples.append(gauss_sample)
             env_samples.append(torch.cat(per_mask_samples).view(nr_masks, -1, 1))
         env_loss = env_loss / nr_masks
         return env_loss, env_samples
 
-    def _compute_overall_gaussian_loss(
+    def _pooled_gaussian_loss(
         self, masked_batch: Tensor, target_batch: Tensor, nr_masks: int
     ):
         """
@@ -387,18 +399,17 @@ class MultiAgnosticPredictor(ICPredictor):
                     x=target_batch, condition=masked_batch[mask_nr], rev=False,
                 ).view(nr_masks, -1, 1)
 
-                loss_per_mask += self._wasserstein(
+                loss_per_mask += wasserstein(
                     env_gauss_sample[mask_nr], true_gauss_sample
                 )
         loss_per_mask /= nr_masks
         return loss_per_mask
 
-    def _compute_cinn_loss(
+    def _cinn_maxlikelihood_loss(
         self,
         obs: Tensor,
         target: Tensor,
-        batch_indices: Union[Tensor, np.ndarray],
-        environments: Dict,
+        batch_indices_by_env: Dict[int, Tensor],
         mask: Tensor,
     ):
         """
@@ -406,50 +417,27 @@ class MultiAgnosticPredictor(ICPredictor):
         per mask, then average loss over the number of masks.
         This is the monte carlo approximation of the loss via multiple mask samples.
         """
-        if isinstance(batch_indices, Tensor):
-            batch_indices = batch_indices.numpy()
         nr_masks = mask.size(0)
         inn_loss = torch.zeros(1, device=self.device)
-        for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
+        for env_cinn, (env, env_indices) in zip(
+            self.cinns, batch_indices_by_env.items()
+        ):
             # split data by environmental affiliation
-            indices = np.intersect1d(batch_indices, env_indices)
-
-            target_env_batch = target[indices].view(-1, 1)
-            masked_env_batch = self.masker_net(obs[indices], mask).view(
-                nr_masks, -1, self.p
+            target_env_batch = target[env_indices].view(-1, 1).repeat(nr_masks, 1)
+            masked_env_batch = self.masker_net(obs[env_indices], mask)
+            gauss_sample = env_cinn(
+                x=target_env_batch, condition=masked_env_batch, rev=False,
+            ).view(nr_masks, -1, 1)
+            inn_loss += torch.mean(
+                torch.mean(
+                    gauss_sample ** 2 / 2
+                    - env_cinn.log_jacobian_cache.view(gauss_sample.shape),
+                    dim=1,
+                ),
+                dim=0,
             )
-            # compute the INN loss per mask
-            for mask_nr in range(nr_masks):
-                gauss_sample = env_cinn(
-                    x=target_env_batch, condition=masked_env_batch[mask_nr], rev=False,
-                )
-                # log maximum likelihood loss here
-                inn_loss += self._inn_mllhood_loss(
-                    gauss_sample, env_cinn.log_jacobian_cache
-                )
         inn_loss /= nr_masks
         return inn_loss
-
-    @staticmethod
-    def _inn_mllhood_loss(gauss_sample, log_jacobian):
-        return (gauss_sample ** 2 / 2 - log_jacobian).mean()
-
-    @staticmethod
-    def _wasserstein(x, y, normalize=False):
-        if normalize:
-            x, y = MultiAgnosticPredictor.normalize_jointly(x, y)
-        sort_sq_diff = (torch.sort(x, dim=0)[0] - torch.sort(y, dim=0)[0]).pow(2)
-        std_prod = torch.std(x) * torch.std(y)
-        return torch.mean(sort_sq_diff) / std_prod
-
-    @staticmethod
-    def normalize_jointly(x, y):
-        xy = torch.cat((x, y), 0).detach()
-        sd = torch.sqrt(xy.var(0))
-        mean = xy.mean(0)
-        x = (x - mean) / sd
-        y = (y - mean) / sd
-        return x, y
 
     def _plot_data_approximation(
         self, obs: Tensor, target: Tensor, environments: Dict,
@@ -459,7 +447,7 @@ class MultiAgnosticPredictor(ICPredictor):
                 target_approx_sample = env_cinn(
                     x=torch.randn(self.n, 1, device=self.device),
                     condition=(obs * self.get_mask(final=True)).view(-1, self.p),
-                    rev=False,
+                    rev=True,
                 )
 
                 targ_hist_fig = go.Figure()
@@ -482,7 +470,7 @@ class MultiAgnosticPredictor(ICPredictor):
                 # Reduce opacity to see all histograms
                 targ_hist_fig.update_traces(opacity=0.5)
                 targ_hist_fig.update_layout(
-                    title=r"Observed Y and approximated Y_hat Env. " + str(env)
+                    title=r"Marginal observ. Y vs approx. Y_hat Env. " + str(env)
                 )
                 self.viz.plotlyplot(targ_hist_fig, win=f"target_env_{env}")
 
