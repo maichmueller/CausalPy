@@ -17,7 +17,7 @@ from causalpy.neural_networks import cINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.causal_prediction.interventional import ICPredictor, AgnosticPredictor
+from causalpy.causal_prediction.interventional import ICPredictor, MultiAgnosticPredictor
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
@@ -75,12 +75,12 @@ if __name__ == "__main__":
         results = []
         epochs = 300
         use_visdom = 0
-        # for _ in range(nr_repetitions):
-        ap = AgnosticPredictor(
+        # for _ in range(nr_repetitions)
+        ap = MultiAgnosticPredictor(
             epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
         results.append(ap.infer(complete_data, environments, target_var,))
-        print(results[-1][0])
+        print(results[-1])
 
         evaluate(
             complete_data,

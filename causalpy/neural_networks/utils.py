@@ -111,7 +111,7 @@ def hsic(X, Y, batch_size):
         device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         n = K.shape[0]
-        unit = torch.ones(n, n).to(device)
+        unit = torch.ones(n, n, device=device)
         I = torch.eye(n, device=device)
         Q = I - unit / n
         return torch.mm(torch.mm(Q, K), Q)

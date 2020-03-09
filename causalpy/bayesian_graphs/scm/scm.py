@@ -21,6 +21,7 @@ from typing import (
     Mapping,
     Collection,
     Optional,
+    Hashable,
 )
 
 
@@ -47,7 +48,7 @@ class SCM:
 
     def __init__(
         self,
-        assignment_map: Mapping[object, Tuple[Collection, Assignment, Noise]],
+        assignment_map: Mapping[Hashable, Tuple[Collection, Assignment, Noise]],
         variable_tex_names: Dict = None,
         scm_name: str = "Structural Causal Model",
     ):
@@ -144,7 +145,12 @@ class SCM:
     def __str__(self):
         return self.str()
 
-    def sample(self, n, variables=None, seed=None):
+    def sample(
+        self,
+        n: int,
+        variables: Optional[Collection[Hashable]] = None,
+        seed: Optional[int] = None,
+    ):
         """
         Sample method to generate data for the given variables. If no list of variables is supplied, the method will
         simply generate data for all variables.
@@ -181,7 +187,7 @@ class SCM:
     def intervention(
         self,
         interventions: Dict[
-            object,
+            Hashable,
             Union[
                 Dict,
                 Tuple[
@@ -287,7 +293,9 @@ class SCM:
             for parent in parent_list:
                 self.graph.add_edge(parent, var)
 
-    def do_intervention(self, variables: Collection, values: Collection[float]):
+    def do_intervention(
+        self, variables: Collection[Hashable], values: Collection[float]
+    ):
         """
         Perform do-interventions, i.e. setting specific variables to a constant value.
         This method removes the noise influence of the intervened variables.
@@ -305,12 +313,14 @@ class SCM:
         -------
             None
         """
-        interventions_dict: Dict[object, Tuple[List, Assignment, None]] = dict()
+        interventions_dict: Dict[Hashable, Tuple[List, Assignment, None]] = dict()
         for var, val in zip(variables, values):
             interventions_dict[var] = ([], LinearAssignment(0, val), None)
         self.intervention(interventions_dict)
 
-    def soft_intervention(self, variables: Collection, noise_models: Collection[Noise]):
+    def soft_intervention(
+        self, variables: Collection[Hashable], noise_models: Collection[Noise]
+    ):
         """
         Perform hard interventions, i.e. setting specific variables to a constant value.
         This method doesn't change the current noise neural_networks.
@@ -324,12 +334,12 @@ class SCM:
         noise_models : Collection[float],
             the constant values the chosen variables should be set to.
         """
-        interventions_dict: Dict[object, Tuple[None, None, Noise]] = dict()
+        interventions_dict: Dict[Hashable, Tuple[None, None, Noise]] = dict()
         for var, noise in zip(variables, noise_models):
             interventions_dict[var] = (None, None, noise)
         self.intervention(interventions_dict)
 
-    def undo_intervention(self, variables: Collection = None):
+    def undo_intervention(self, variables: Collection[Hashable] = None):
         """
         Method to undo previously done interventions.
 
@@ -473,7 +483,7 @@ class SCM:
             parents_vars = [pred for pred in self.graph.predecessors(node)]
             line = f"{str(node).rjust(max_var_space)} := {self.graph.nodes[node][self.function_key].str(parents_vars)}"
             # add explanation to the noise term
-            line += f'\t [ N := {str(self.graph.nodes[node][self.noise_key])} ]'
+            line += f"\t [ N := {str(self.graph.nodes[node][self.noise_key])} ]"
             lines.append(line)
         return "\n".join(lines)
 

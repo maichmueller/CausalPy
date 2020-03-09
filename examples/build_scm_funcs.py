@@ -150,7 +150,7 @@ def build_scm_exponential(seed=0):
 
 
 def build_scm_medium(seed=0):
-    scale = 1
+    scale = .5
     cn = SCM(
         assignment_map={
             "X_0": (
@@ -202,57 +202,58 @@ def build_scm_medium(seed=0):
 
 
 def build_scm_large(seed=0):
+    scale = .5
     cn = SCM(
         assignment_map={
             "X_0": (
                 [],
                 LinearAssignment(1),
-                NoiseGenerator("standard_normal", seed=seed),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed)
             ),
             "X_1": (
                 ["X_0"],
                 LinearAssignment(1, 1, 1),
-                NoiseGenerator("standard_normal", seed=seed + 1),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 1),
             ),
             "X_2": (
                 ["X_0", "X_1"],
                 LinearAssignment(1, 1, 0.8, -1.2),
-                NoiseGenerator("standard_normal", seed=seed + 2),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 2),
             ),
             "X_3": (
                 ["X_1", "X_2"],
                 LinearAssignment(1, 0, 0.3, 0.4),
-                NoiseGenerator("standard_normal", seed=seed + 3),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 3),
             ),
             "Y": (
                 ["X_3", "X_0"],
                 LinearAssignment(1, 0.67, 1, -1),
-                NoiseGenerator("standard_normal", seed=seed + 4),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 4),
             ),
             "X_4": (
                 ["Y"],
                 LinearAssignment(1, 1.2, -0.7),
-                NoiseGenerator("standard_normal", seed=seed + 5),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 5),
             ),
             "X_5": (
                 ["X_3", "Y"],
                 LinearAssignment(1, 0.5, -0.7, 0.4),
-                NoiseGenerator("standard_normal", seed=seed + 6),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 6),
             ),
             "X_6": (
                 ["X_5", "X_4"],
                 LinearAssignment(1, 0.5, -1.7, 1.4),
-                NoiseGenerator("standard_normal", seed=seed + 7),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 7),
             ),
             "X_7": (
                 [],
                 LinearAssignment(1, 0.5),
-                NoiseGenerator("standard_normal", seed=seed + 8),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 8),
             ),
             "X_8": (
                 ["Y"],
                 LinearAssignment(1, 0.5, 0.1),
-                NoiseGenerator("standard_normal", seed=seed + 9),
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 9),
             ),
         },
         variable_tex_names={
@@ -309,7 +310,7 @@ def generate_data_from_scm(
 
     # perform interventions on selected variables
     for parent in interv_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * 5
         # interv_value = 0
         scm.do_intervention([parent], [interv_value])
         print(

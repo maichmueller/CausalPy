@@ -26,7 +26,12 @@ from causalpy.neural_networks import (
     L0InputGate,
     cINN,
 )
-from causalpy.neural_networks.utils import StratifiedSampler, wasserstein
+from causalpy.neural_networks.utils import (
+    StratifiedSampler,
+    wasserstein,
+    mmd_multiscale,
+    moments,
+)
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
@@ -40,7 +45,6 @@ class MultiAgnosticPredictor(ICPredictor):
         masker_network_params: Optional[Dict] = None,
         epochs: int = 100,
         batch_size: int = 1024,
-        mask_monte_carlo_size=1,
         device: Union[str, torch.device] = None,
         optimizer_type: Type[Optimizer] = torch.optim.Adam,
         optimizer_params: Optional[Dict] = None,
@@ -62,7 +66,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=0.2, env=5, inn=2, l2=0.005)
+            Hyperparams(l0=2, env=1, inn=1, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -78,7 +82,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.masker_net_params = (
             masker_network_params
             if masker_network_params is not None
-            else dict(monte_carlo_sample_size=mask_monte_carlo_size, device=self.device)
+            else dict(monte_carlo_sample_size=1, device=self.device)
         )
 
         self.optimizer = None
@@ -92,7 +96,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.scheduler = None
         self.scheduler_type = scheduler_type
         self.scheduler_params = (
-            dict(step_size=50, gamma=0.9)
+            dict(step_size_mask=50, step_size_model=100, mask_factor=2, model_factor=1)
             if scheduler_params is None
             else scheduler_params
         )
@@ -118,8 +122,20 @@ class MultiAgnosticPredictor(ICPredictor):
 
     def _set_scheduler(self, force: bool = False):
         if self.scheduler is None or force:
-            self.scheduler = torch.optim.lr_scheduler.StepLR(
-                self._set_optimizer(), **self.scheduler_params
+
+            def mask_lr(epoch: int) -> float:
+                exponent = epoch // self.scheduler_params["step_size_mask"]
+                return self.scheduler_params["mask_factor"] ** min(4, exponent)
+
+            def model_lr(epoch: int) -> float:
+                exponent = epoch // self.scheduler_params["step_size_model"]
+                return self.scheduler_params["model_factor"] ** exponent
+
+            # self.scheduler = torch.optim.lr_scheduler.StepLR(
+            #     self._set_optimizer(), **self.scheduler_params
+            # )
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self._set_optimizer(), lr_lambda=[mask_lr, model_lr]
             )
         return self.scheduler
 
@@ -167,24 +183,17 @@ class MultiAgnosticPredictor(ICPredictor):
 
         if self.masker_net is None:
             self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
-        self.masker_net.to(self.device)
+        self.masker_net.to(self.device).train()
 
         if self.cinns is None:
             self.cinns = torch.nn.ModuleList(
                 [cINN(dim_condition=self.p, **self.cinn_params) for _ in range(nr_envs)]
             )
-        else:
-            for cinn in self.cinns:
-                cinn.to(self.device)
+        for cinn in self.cinns:
+            cinn.to(self.device).train()
 
         self._set_optimizer()
-
-        if self.use_visdom:
-            self._plot_data_approximation(obs, target, environments_map)
-            self._plot_mask(
-                self.masker_net.final_layer().detach().cpu().numpy().reshape(1, -1),
-                self.get_parent_candidates(),
-            )
+        self._set_scheduler()
 
         data_loader = DataLoader(
             dataset=TensorDataset(torch.arange(self.n), torch.zeros(self.n)),
@@ -196,11 +205,6 @@ class MultiAgnosticPredictor(ICPredictor):
             ),
         )
 
-        nr_masks = (
-            self.masker_net_params["monte_carlo_sample_size"]
-            if "monte_carlo_sample_size" in self.masker_net_params
-            else 1
-        )
         if ground_truth_mask is not None:
             ground_truth_mask = torch.as_tensor(
                 ground_truth_mask, device=self.device
@@ -220,6 +224,7 @@ class MultiAgnosticPredictor(ICPredictor):
                 self.optimizer.zero_grad()
 
                 mask = self.get_mask(ground_truth_mask)
+                nr_masks = mask.size(0)
 
                 batch_indices = torch.sort(batch_indices)[0]
 
@@ -232,9 +237,13 @@ class MultiAgnosticPredictor(ICPredictor):
                     batch_indices, environments_map
                 )
                 inn_loss = self._cinn_maxlikelihood_loss(
-                    obs, target, batch_indices, environments_map, mask
+                    obs, target, env_batch_indices, mask
                 )
-                env_loss, env_samples = self._environmental_invariance_loss(
+                (
+                    env_loss,
+                    env_gauss_samples,
+                    env_target_samples,
+                ) = self._environmental_invariance_loss(
                     obs, target, env_batch_indices, mask,
                 )
                 env_loss += self._pooled_gaussian_loss(
@@ -258,7 +267,8 @@ class MultiAgnosticPredictor(ICPredictor):
 
                 batch_loss.backward()
                 self.optimizer.step()
-
+            self.scheduler.step()
+            print(self._mask_dict())
             # store the various losses per batch into the epoch by averaging over batches
             for loss_acc, loss_list in epoch_losses.items():
                 loss_list.append(np.mean(batch_losses[loss_acc]))
@@ -274,7 +284,7 @@ class MultiAgnosticPredictor(ICPredictor):
                     "mask_0",
                 )
 
-                self._plot_gaussian_histograms(env_samples)
+                self._plot_gaussian_histograms(env_gauss_samples)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -285,26 +295,29 @@ class MultiAgnosticPredictor(ICPredictor):
 
                 self._plot_data_approximation(obs, target, environments_map)
 
-        mask = self.get_mask().detach().cpu().numpy().flatten()
-        results = {
-            var: mask
-            for (var, mask) in sorted(
-                {
-                    parent_candidate: round(mask[idx], 2)
-                    for idx, parent_candidate in self.index_to_varname.iteritems()
-                }.items(),
-                key=lambda x: x[0],
-            )
-        }
+        results = self._mask_dict()
         return results
 
-    def predict(self, obs: Union[pd.DataFrame]):
-        obs = torch.as_tensor(
-            obs[self.index_to_varname.values].to_numpy(),
-            dtype=torch.float32,
-            device=self.device,
-        )
-        mask = self.masker_net.create_gates(deterministic=True)
+    def predict(
+        self,
+        obs: Union[pd.DataFrame, Tensor],
+        mask: Optional[Union[pd.DataFrame, np.ndarray, Tensor]] = None,
+    ):
+        if isinstance(obs, pd.DataFrame):
+            obs = torch.as_tensor(
+                obs[self.index_to_varname].to_numpy(),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        if mask is None:
+            self.masker_net.eval()
+            mask = self.get_mask(final=True)
+        else:
+            mask = self._validate_mask(mask)
+
+        for cinn in self.cinns:
+            cinn.eval()
+
         obs *= mask
         predictions = torch.mean(
             torch.cat(
@@ -327,13 +340,51 @@ class MultiAgnosticPredictor(ICPredictor):
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
+    def _mask_dict(self):
+        mask = self.get_mask(final=True).view(-1).cpu().detach().numpy().round(2)
+        results = {
+            var: mask_val
+            for (var, mask_val) in sorted(
+                {
+                    parent_candidate: mask[idx]
+                    for idx, parent_candidate in self.index_to_varname.iteritems()
+                }.items(),
+                key=lambda x: x[0],
+            )
+        }
+        return results
+
+    def _validate_mask(self, mask: Union[pd.DataFrame, np.ndarray, Tensor]):
+        assert mask.shape == (
+            1,
+            self.p,
+        ), f"Provided mask shape needs to be (1, {self.p})."
+        if isinstance(mask, pd.DataFrame):
+            no_real_column_names = mask.columns == range(self.p)
+            if no_real_column_names:
+                # masking values assumed to be in correct order
+                mask = mask.to_numpy()
+            else:
+                # assert the column names fit the actual names
+                assert np.all(
+                    np.isin(mask.columns, self.index_to_varname.to_numpy())
+                ), "All mask column names need to be integer indices or the correct variable names of the used data."
+
+                mask = mask[self.index_to_varname].to_numpy()
+        mask = torch.as_tensor(mask)
+        return mask
+
     @staticmethod
-    def _batch_indices_by_env(batch_indices: Union[Tensor, np.ndarray], env_map: Dict):
+    def _batch_indices_by_env(
+        batch_indices: Union[Tensor, np.ndarray], env_map: Dict[int, np.ndarray]
+    ) -> Dict[int, np.ndarray]:
         batch_indices_by_env = dict()
         if isinstance(batch_indices, Tensor):
             batch_indices = batch_indices.numpy()
         for env, env_indices in env_map.items():
-            batch_indices_by_env[env] = np.intersect1d(batch_indices, env_indices)
+            batch_indices_by_env[env] = np.intersect1d(
+                batch_indices, env_indices, return_indices=False
+            )
         return batch_indices_by_env
 
     def _l2_regularization(self):
@@ -347,7 +398,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self,
         obs: Tensor,
         target: Tensor,
-        batch_indices_by_env: Dict[int, Tensor],
+        batch_indices_by_env: Dict[int, np.ndarray],
         mask: Tensor,
     ):
         """
@@ -356,30 +407,42 @@ class MultiAgnosticPredictor(ICPredictor):
         complete data package together.
         """
         nr_masks = mask.size(0)
-        env_samples = []
-        env_loss = torch.zeros(1, device=self.device)
-        for env_cinn, (env, env_indices) in zip(
+        env_gauss_samples, env_target_samples = [], []
+        env_loss = 0
+        for env_cinn, (env, env_batch_indices) in zip(
             self.cinns, batch_indices_by_env.items()
         ):
             # split data by environmental affiliation
-            target_notenv_batch = target[env_indices].view(-1, 1)
-            masked_notenv_batch = self.masker_net(obs[env_indices], mask).view(
-                nr_masks, -1, self.p
-            )
+            target_env_batch = target[env_batch_indices].view(-1, 1)
+            masked_env_batch = self.masker_net(obs[env_batch_indices], mask)
             # compute the INN loss per mask
-            per_mask_samples = []
-            true_gauss_sample = torch.randn(len(env_indices), 1, device=self.device)
+            true_gauss_sample = torch.randn(
+                len(env_batch_indices), 1, device=self.device
+            )
+            gauss_sample = env_cinn(
+                x=target_env_batch.repeat(nr_masks, 1),
+                condition=masked_env_batch,
+                rev=False,
+            ).view(nr_masks, -1, 1)
+            target_sample = env_cinn(
+                x=true_gauss_sample.repeat(nr_masks, 1),
+                condition=masked_env_batch,
+                rev=True,
+            ).view(nr_masks, -1, 1)
+
             for mask_nr in range(nr_masks):
-                gauss_sample = env_cinn(
-                    x=target_notenv_batch,
-                    condition=masked_notenv_batch[mask_nr],
-                    rev=False,
-                )
-                env_loss += wasserstein(gauss_sample, true_gauss_sample)
-                per_mask_samples.append(gauss_sample)
-            env_samples.append(torch.cat(per_mask_samples).view(nr_masks, -1, 1))
+                for estimate, observation in zip(
+                    (gauss_sample[mask_nr], target_sample[mask_nr]),
+                    (true_gauss_sample, target_env_batch),
+                ):
+                    env_loss += wasserstein(estimate, observation)
+                    # env_loss += mmd_multiscale(estimate, observation)
+                    env_loss += moments(estimate, observation)
+
+            env_gauss_samples.append(gauss_sample)
+            env_target_samples.append(target_sample)
         env_loss = env_loss / nr_masks
-        return env_loss, env_samples
+        return env_loss, env_gauss_samples, env_target_samples
 
     def _pooled_gaussian_loss(
         self, masked_batch: Tensor, target_batch: Tensor, nr_masks: int
@@ -390,18 +453,18 @@ class MultiAgnosticPredictor(ICPredictor):
         to the cINN maximum likelihood loss which enforces the same, yet this extra loss has proved to be
         necessary for stable training.
         """
-        loss_per_mask = torch.zeros(1, device=self.device)
+        loss_per_mask = 0
 
         true_gauss_sample = torch.randn(target_batch.size(0), 1, device=self.device)
-        for mask_nr in range(nr_masks):
-            for cinn in self.cinns:
-                env_gauss_sample = cinn(
-                    x=target_batch, condition=masked_batch[mask_nr], rev=False,
-                ).view(nr_masks, -1, 1)
-
-                loss_per_mask += wasserstein(
-                    env_gauss_sample[mask_nr], true_gauss_sample
-                )
+        for cinn in self.cinns:
+            gauss_sample = cinn(
+                x=target_batch.repeat(nr_masks, 1), condition=masked_batch.view(-1, self.p), rev=False,
+            ).view(nr_masks, -1, 1)
+            for mask_nr in range(nr_masks):
+                estimate = gauss_sample[mask_nr]
+                loss_per_mask += wasserstein(estimate, true_gauss_sample)
+                # loss_per_mask += mmd_multiscale(estimate, true_gauss_sample)
+                loss_per_mask += moments(estimate, true_gauss_sample)
         loss_per_mask /= nr_masks
         return loss_per_mask
 
@@ -409,7 +472,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self,
         obs: Tensor,
         target: Tensor,
-        batch_indices_by_env: Dict[int, Tensor],
+        batch_indices_by_env: Dict[int, np.ndarray],
         mask: Tensor,
     ):
         """
@@ -418,7 +481,7 @@ class MultiAgnosticPredictor(ICPredictor):
         This is the monte carlo approximation of the loss via multiple mask samples.
         """
         nr_masks = mask.size(0)
-        inn_loss = torch.zeros(1, device=self.device)
+        inn_loss = 0
         for env_cinn, (env, env_indices) in zip(
             self.cinns, batch_indices_by_env.items()
         ):
@@ -515,10 +578,10 @@ class MultiAgnosticPredictor(ICPredictor):
     def _plot_loss(self, losses, loss_win, title="Loss Behaviour"):
         losses = np.array(losses)
         if len(losses) > 1:
-            ytickmax = np.mean(losses[losses < np.quantile(losses, 0.95)])
-            ytickmax = ytickmax + abs(ytickmax)
-            ytickmin = np.mean(losses[losses > np.quantile(losses, 0.01)])
-            ytickmin = ytickmin - abs(ytickmin)
+            ytickmax = np.quantile(losses, 0.99)
+            ytickmax = ytickmax + 0.5 * abs(ytickmax)
+            ytickmin = np.quantile(losses, 0)
+            ytickmin = ytickmin - 0.5 * abs(ytickmin)
         else:
             ytickmin = ytickmax = None
         self.viz.line(

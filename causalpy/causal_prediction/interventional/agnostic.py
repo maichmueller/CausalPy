@@ -30,7 +30,7 @@ from causalpy.neural_networks.utils import (
     mmd_multiscale,
     wasserstein,
     moments,
-)
+    hsic)
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
 
@@ -44,7 +44,6 @@ class AgnosticPredictor(ICPredictor):
         masker_network_params: Optional[Dict] = None,
         epochs: int = 100,
         batch_size: int = 1024,
-        mask_monte_carlo_size=1,
         device: Union[str, torch.device] = None,
         optimizer_type: Type[Optimizer] = torch.optim.Adam,
         optimizer_params: Optional[Dict] = None,
@@ -66,7 +65,7 @@ class AgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=1.5, env=.5, inn=1, l2=0.01)
+            Hyperparams(l0=2, env=1, inn=1, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -75,14 +74,14 @@ class AgnosticPredictor(ICPredictor):
         self.cinn_params = (
             cinn_params
             if cinn_params is not None
-            else dict(nr_blocks=2, dim=1, nr_layers=30, device=self.device)
+            else dict(nr_blocks=3, dim=1, nr_layers=30, device=self.device)
         )
 
         self.masker_net = masker_network
         self.masker_net_params = (
             masker_network_params
             if masker_network_params is not None
-            else dict(monte_carlo_sample_size=mask_monte_carlo_size, device=self.device)
+            else dict(monte_carlo_sample_size=1, device=self.device)
         )
 
         self.optimizer = None
@@ -96,7 +95,7 @@ class AgnosticPredictor(ICPredictor):
         self.scheduler = None
         self.scheduler_type = scheduler_type
         self.scheduler_params = (
-            dict(step_size=500, gamma=0.9)
+            dict(step_size_mask=50, step_size_model=100, mask_factor=2, model_factor=1)
             if scheduler_params is None
             else scheduler_params
         )
@@ -122,8 +121,18 @@ class AgnosticPredictor(ICPredictor):
 
     def _set_scheduler(self, force: bool = False):
         if self.scheduler is None or force:
-            self.scheduler = torch.optim.lr_scheduler.StepLR(
-                self._set_optimizer(), **self.scheduler_params
+            def mask_lr(epoch: int) -> float:
+                exponent = epoch // self.scheduler_params["step_size_mask"]
+                return self.scheduler_params["mask_factor"] ** min(4, exponent)
+
+            def model_lr(epoch: int) -> float:
+                exponent = epoch // self.scheduler_params["step_size_model"]
+                return self.scheduler_params["model_factor"] ** exponent
+            # self.scheduler = torch.optim.lr_scheduler.StepLR(
+            #     self._set_optimizer(), **self.scheduler_params
+            # )
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self._set_optimizer(), lr_lambda=[mask_lr, model_lr]
             )
         return self.scheduler
 
@@ -218,7 +227,6 @@ class AgnosticPredictor(ICPredictor):
                     nr_masks, -1, self.p
                 )
                 target_batch = target[batch_indices].view(-1, 1)
-                # env_batch_indices = self._batch_indices_by_env(env_info)
                 env_batch_indices = self._batch_indices_by_env(
                     batch_indices, environments_map
                 )
@@ -226,9 +234,9 @@ class AgnosticPredictor(ICPredictor):
                 inn_loss, gauss_sample = self._cinn_maxlikelihood_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                env_loss, env_samples = self._environmental_invariance_loss(
+                env_loss = self._environmental_invariance_loss(
                     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
-                )
+                )[0]
                 env_loss += self._pooled_gaussian_loss(gauss_sample)
                 l0_loss = self.masker_net.complexity_loss()
                 l2_loss = self._l2_regularization()
@@ -248,7 +256,9 @@ class AgnosticPredictor(ICPredictor):
 
                 batch_loss.backward()
                 self.optimizer.step()
-
+            # update lr after last batch has finished
+            self.scheduler.step()
+            print(self._mask_dict())
             # store the various losses per batch into the epoch by averaging over batches
             for loss_acc, loss_list in epoch_losses.items():
                 loss_list.append(np.mean(batch_losses[loss_acc]))
@@ -264,7 +274,7 @@ class AgnosticPredictor(ICPredictor):
                     "mask_0",
                 )
 
-                self._plot_gaussian_histograms(env_samples)
+                self._plot_gaussian_histograms(obs, target, environments_map)
 
                 for loss_name, losses in epoch_losses.items():
                     self._plot_loss(
@@ -275,6 +285,10 @@ class AgnosticPredictor(ICPredictor):
 
                 self._plot_data_approximation(obs, target, environments_map)
 
+        results = self._mask_dict()
+        return results, epoch_losses
+
+    def _mask_dict(self):
         mask = self.get_mask(final=True).view(-1).cpu().detach().numpy().round(2)
         results = {
             var: mask_val
@@ -387,7 +401,7 @@ class AgnosticPredictor(ICPredictor):
         target: Tensor,
         batch_indices_by_env: Dict,
         mask: Tensor,
-        save_samples: bool,
+        save_samples: bool = False,
     ):
         """
         Compute the environmental similarity loss of the gauss/target mapping for each individual environment data only.
@@ -427,25 +441,34 @@ class AgnosticPredictor(ICPredictor):
             true_gauss = torch.randn(env_gauss_sample.size(1), 1, device=self.device)
 
             # compute the loss in the normalizing direction (gauss) and the inference direction (target).
+            masked_env_batch = masked_env_batch.view(nr_masks, -1, self.p)
             for mask_nr in range(nr_masks):
+                estimate_gauss = env_gauss_sample[mask_nr]
+                loss_per_mask += wasserstein(estimate_gauss, true_gauss)
+                # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
+                loss_per_mask += moments(estimate_gauss, true_gauss)
 
-                # loss_per_mask += wasserstein(env_gauss_sample[mask_nr], true_gauss)
-                # loss_per_mask += mmd_multiscale(env_gauss_sample[mask_nr], true_gauss)
-                # loss_per_mask += moments(env_gauss_sample[mask_nr], true_gauss)
+                # punish dependence between predictors and noise
+                # loss_per_mask += hsic(estimate_gauss, masked_env_batch[mask_nr], len(estimate_gauss))
 
-                for estimate, observation in zip(
-                    (env_gauss_sample[mask_nr], env_target_sample[mask_nr]),
-                    (true_gauss, target_env_batch),
-                ):
-                    # all three measures enforce a quality approximation of the gauss, and of the
-                    # target marginal distribution.
-                    # (Should in theory suffice taking either mmd + moments or wasserstein)
-                    loss_per_mask += wasserstein(estimate, observation)
-                    loss_per_mask += mmd_multiscale(estimate, observation)
-                    loss_per_mask += moments(estimate, observation)
+                estimate_target = env_target_sample[mask_nr]
+                # loss_per_mask += wasserstein(estimate_target, target_env_batch)
+                # loss_per_mask += mmd_multiscale(estimate_target, target_env_batch)
+                loss_per_mask += moments(estimate_target, target_env_batch)
+
+                # for estimate, observation in zip(
+                #     (env_gauss_sample[mask_nr], env_target_sample[mask_nr]),
+                #     (true_gauss, target_env_batch),
+                # ):
+                #     # all three measures enforce a quality approximation of the gauss, and of the
+                #     # target marginal distribution.
+                #     # (Should in theory suffice taking either mmd + moments or wasserstein)
+                #     loss_per_mask += wasserstein(estimate, observation)
+                #     loss_per_mask += mmd_multiscale(estimate, observation)
+                #     loss_per_mask += moments(estimate, observation)
             env_loss += loss_per_mask
         env_loss = env_loss / nr_masks
-        return env_loss, env_gauss_samples
+        return env_loss, env_gauss_samples, env_target_samples
 
     def _pooled_gaussian_loss(self, gauss_sample: Tensor):
         """
@@ -525,13 +548,23 @@ class AgnosticPredictor(ICPredictor):
                 )
                 self.viz.plotlyplot(targ_hist_fig, win=f"target_env_{env}")
 
-    def _plot_gaussian_histograms(self, env_samples: Collection):
+    def _plot_gaussian_histograms(
+        self, obs: Tensor, target: Tensor, environments_map: Dict[int, Tensor]
+    ):
         fig = go.Figure()
         xr = torch.linspace(-5, 5, 100)
-        for env, samples in enumerate(env_samples):
+        mask = self.get_mask(final=True)
+        nr_masks = mask.size(0)
+        for env, env_indices in environments_map.items():
+            target_env = target[env_indices].view(-1, 1)
+            masked_env = self.masker_net(obs[env_indices], mask).view(-1, self.p)
+
+            env_gauss_sample = self.cinn(
+                x=target_env, condition=masked_env, rev=False,
+            ).view(nr_masks, -1, 1)
             fig.add_trace(
                 go.Histogram(
-                    x=samples.view(-1).cpu().detach().numpy(),
+                    x=env_gauss_sample.view(-1).cpu().detach().numpy(),
                     name=f"E = {env}",
                     histnorm="probability density",
                     nbinsx=30,
@@ -566,11 +599,11 @@ class AgnosticPredictor(ICPredictor):
 
     def _plot_loss(self, losses, loss_win, title="Loss Behaviour"):
         losses = np.array(losses)
-        if len(losses) > 1:
-            ytickmax = np.mean(losses[losses < np.quantile(losses, 0.99)])
-            ytickmax = ytickmax + abs(ytickmax)
-            ytickmin = np.mean(losses[losses > np.quantile(losses, 0.01)])
-            ytickmin = ytickmin - abs(ytickmin)
+        if not len(losses):
+            ytickmax = np.quantile(losses, 0.99)
+            ytickmax = ytickmax + .5 * abs(ytickmax)
+            ytickmin = np.quantile(losses, 0)
+            ytickmin = ytickmin - .5 * abs(ytickmin)
         else:
             ytickmin = ytickmax = None
         self.viz.line(
