@@ -37,7 +37,7 @@ def evaluate(
     plot=True,
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
-    if len(x_vars) != 2:
+    if len(x_vars) > 2:
         raise ValueError("Needs to be less than 3 predictors.")
     y = complete_data[targ_var]
     complete_data = complete_data.drop(columns=targ_var)

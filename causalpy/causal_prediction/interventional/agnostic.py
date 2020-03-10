@@ -1,10 +1,8 @@
-import os
-from collections import namedtuple
 from typing import Union, Optional, Callable, List, Dict, Type, Collection
 import importlib
-
 import numpy as np
 import torch
+
 import pandas as pd
 import networkx as nx
 from torch.optim.optimizer import Optimizer
@@ -14,9 +12,9 @@ from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions import Normal
 from tqdm.auto import tqdm
-
 from .icpbase import ICPredictor
 import warnings
+
 from causalpy.neural_networks import (
     AgnosticModel,
     Linear3D,
@@ -30,9 +28,31 @@ from causalpy.neural_networks.utils import (
     mmd_multiscale,
     wasserstein,
     moments,
-    hsic)
+    hsic,
+)
+from collections import namedtuple
+import shutil
+import os
+import re
+
 
 Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
+
+
+class TempFolder:
+    def __init__(self, folder: str):
+        self.folder = folder
+
+    def __enter__(self):
+        i = 0
+        while os.path.isdir(self.folder):
+            self.folder += f"_{i}"
+            i += 1
+
+        os.mkdir(self.folder)
+
+    def __exit__(self, type, value, traceback):
+        shutil.rmtree(self.folder, ignore_errors=True)
 
 
 class AgnosticPredictor(ICPredictor):
@@ -81,7 +101,9 @@ class AgnosticPredictor(ICPredictor):
         self.masker_net_params = (
             masker_network_params
             if masker_network_params is not None
-            else dict(monte_carlo_sample_size=1, device=self.device)
+            else dict(
+                monte_carlo_sample_size=1, initial_sparsity_rate=1, device=self.device
+            )
         )
 
         self.optimizer = None
@@ -121,6 +143,7 @@ class AgnosticPredictor(ICPredictor):
 
     def _set_scheduler(self, force: bool = False):
         if self.scheduler is None or force:
+
             def mask_lr(epoch: int) -> float:
                 exponent = epoch // self.scheduler_params["step_size_mask"]
                 return self.scheduler_params["mask_factor"] ** min(4, exponent)
@@ -128,9 +151,7 @@ class AgnosticPredictor(ICPredictor):
             def model_lr(epoch: int) -> float:
                 exponent = epoch // self.scheduler_params["step_size_model"]
                 return self.scheduler_params["model_factor"] ** exponent
-            # self.scheduler = torch.optim.lr_scheduler.StepLR(
-            #     self._set_optimizer(), **self.scheduler_params
-            # )
+
             self.scheduler = torch.optim.lr_scheduler.LambdaLR(
                 self._set_optimizer(), lr_lambda=[mask_lr, model_lr]
             )
@@ -151,12 +172,81 @@ class AgnosticPredictor(ICPredictor):
             )
         return self.optimizer
 
+    def reset(self):
+        """
+        Reset the neural network components for a fresh learning iteration.
+        """
+        if self.cinn is None:
+            self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
+        else:
+            self.masker_net = type(self.masker_net)(
+                dim_input=self.p, **self.masker_net_params
+            )
+        self.masker_net.to(self.device).train()
+        if self.cinn is None:
+            self.cinn = cINN(dim_condition=self.p, **self.cinn_params)
+        else:
+            self.cinn = type(self.cinn)(dim_condition=self.p, **self.cinn_params)
+        self.cinn.to(self.device).train()
+        self._set_optimizer()
+        self._set_scheduler()
+
     def infer(
         self,
         obs: Union[pd.DataFrame, np.ndarray],
         envs: np.ndarray,
         target_variable: Union[int, str],
-        show_epoch_progressbar=True,
+        nr_runs: int = 1,
+        save_results: bool = False,
+        results_folder: str = ".",
+        results_filename: str = "results",
+        **kwargs,
+    ):
+        temp_folder = "temp_model_folder"
+        with TempFolder(temp_folder):
+
+            results_masks = []
+            results_losses = []
+            for run in range(nr_runs):
+                final_mask, losses = self._infer(obs, envs, target_variable, **kwargs)
+                results_masks.append(final_mask)
+                results_losses.append(losses)
+                torch.save(
+                    self.cinn.state_dict(),
+                    os.path.join(".", temp_folder, f"run_{run}_model.pt"),
+                )
+                torch.save(
+                    self.masker_net.state_dict(),
+                    os.path.join(".", temp_folder, f"run_{run}_masker.pt"),
+                )
+
+            best_run, lowest_loss = self._results_statistics(
+                results_losses,
+                results_masks,
+                results_filename,
+                results_folder,
+                save_results,
+            )
+            self.cinn = type(self.cinn)(dim_condition=self.p, **self.cinn_params)
+            self.masker_net = type(self.masker_net)(
+                dim_input=self.p, **self.masker_net_params
+            )
+            self.cinn.load_state_dict(
+                torch.load(os.path.join(".", temp_folder, f"run_{best_run}_model.pt"))
+            )
+            self.masker_net.load_state_dict(
+                torch.load(os.path.join(".", temp_folder, f"run_{best_run}_masker.pt"))
+            )
+
+        return results_masks, results_losses
+
+    def _infer(
+        self,
+        obs: Union[pd.DataFrame, np.ndarray],
+        envs: np.ndarray,
+        target_variable: Union[int, str],
+        normalize: bool = False,
+        show_epoch_progressbar: bool = True,
         ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
     ):
         #########
@@ -164,7 +254,7 @@ class AgnosticPredictor(ICPredictor):
         #########
 
         obs, target, environments_map = self.preprocess_input(
-            obs, target_variable, envs
+            obs, target_variable, envs, normalize
         )
 
         obs, target = tuple(
@@ -174,16 +264,7 @@ class AgnosticPredictor(ICPredictor):
             )
         )
 
-        if self.masker_net is None:
-            self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
-        self.masker_net.train().to(
-            self.device
-        )  # needs to happen for the case of 'masker_net is None == False'.
-        if self.cinn is None:
-            self.cinn = cINN(dim_condition=self.p, **self.cinn_params)
-        self.cinn.train().to(self.device)
-        self._set_optimizer()
-        self._set_scheduler()
+        self.reset()
 
         data_loader = DataLoader(
             dataset=TensorDataset(torch.arange(self.n), torch.as_tensor(envs)),
@@ -213,14 +294,25 @@ class AgnosticPredictor(ICPredictor):
         ############
         # Training #
         ############
+        for param in self.masker_net.parameters():
+            param.requires_grad = False
+        mask_training_activated = False
 
         epoch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
         for epoch in epoch_pbar:
             batch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
+
+            if epoch > 10 and not mask_training_activated:
+                for param in self.masker_net.parameters():
+                    param.requires_grad = True
+                mask_training_activated = True
+
             for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()
 
-                mask = self.get_mask(ground_truth_mask)
+                mask = self.get_mask(
+                    ground_truth_mask, final=not mask_training_activated
+                )
                 batch_indices = torch.sort(batch_indices)[0]
 
                 masked_batch = self.masker_net(obs[batch_indices], mask).view(
@@ -238,7 +330,12 @@ class AgnosticPredictor(ICPredictor):
                     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
                 )[0]
                 env_loss += self._pooled_gaussian_loss(gauss_sample)
-                l0_loss = self.masker_net.complexity_loss()
+
+                l0_loss = (
+                    self.masker_net.complexity_loss()
+                    if mask_training_activated
+                    else torch.zeros(1, device=self.device)
+                )
                 l2_loss = self._l2_regularization()
 
                 batch_loss = (
@@ -256,9 +353,10 @@ class AgnosticPredictor(ICPredictor):
 
                 batch_loss.backward()
                 self.optimizer.step()
+
             # update lr after last batch has finished
             self.scheduler.step()
-            print(self._mask_dict())
+
             # store the various losses per batch into the epoch by averaging over batches
             for loss_acc, loss_list in epoch_losses.items():
                 loss_list.append(np.mean(batch_losses[loss_acc]))
@@ -350,36 +448,6 @@ class AgnosticPredictor(ICPredictor):
             return ground_truth_mask
         return self.masker_net.create_gates(deterministic=final)
 
-    # @staticmethod
-    # def _batch_indices_by_env(env_batch_info: Union[Tensor]):
-    #     batch_indices_by_env = dict()
-    #
-    #     # first sort the batch environment affiliation information by each entries env index.
-    #     # we do this as x[argsort(x)] tells us the indices of the environments in order.
-    #     sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
-    #     # To be done now, we only need to know where the breakpoints are in this list, i.e.
-    #     # at which indices we are crossing into the next environment index.
-    #     # To this end we compute the unique indices in the argsorted env info list, which will give us a tuple
-    #     # of two lists:
-    #     # 1st list: the unique, and sorted environments we can find in the total env list.
-    #     # 2nd list: the list of index breaks. This will look like
-    #     #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
-    #     # so that we can then find the full list by iterating over the environment names in the first returned list,
-    #     # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
-    #     unique_envs_in_batch, indices_of_env_transitions = np.unique(
-    #         env_batch_info[argsort_env_info].numpy(), return_index=True
-    #     )
-    #     for i, env in enumerate(unique_envs_in_batch[:-1]):
-    #         batch_indices_by_env[env] = argsort_env_info[
-    #             indices_of_env_transitions[i] : indices_of_env_transitions[i + 1]
-    #         ]
-    #
-    #     # the last env entry are all the indices from the last unique entry pointer to the end.
-    #     batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
-    #         indices_of_env_transitions[-1] :
-    #     ]
-    #     return batch_indices_by_env
-
     @staticmethod
     def _batch_indices_by_env(batch_indices: Union[Tensor, np.ndarray], env_map: Dict):
         batch_indices_by_env = dict()
@@ -449,7 +517,9 @@ class AgnosticPredictor(ICPredictor):
                 loss_per_mask += moments(estimate_gauss, true_gauss)
 
                 # punish dependence between predictors and noise
-                # loss_per_mask += hsic(estimate_gauss, masked_env_batch[mask_nr], len(estimate_gauss))
+                loss_per_mask += hsic(
+                    estimate_gauss, masked_env_batch[mask_nr], len(estimate_gauss)
+                )
 
                 estimate_target = env_target_sample[mask_nr]
                 # loss_per_mask += wasserstein(estimate_target, target_env_batch)
@@ -469,6 +539,36 @@ class AgnosticPredictor(ICPredictor):
             env_loss += loss_per_mask
         env_loss = env_loss / nr_masks
         return env_loss, env_gauss_samples, env_target_samples
+
+    # @staticmethod
+    # def _batch_indices_by_env(env_batch_info: Union[Tensor]):
+    #     batch_indices_by_env = dict()
+    #
+    #     # first sort the batch environment affiliation information by each entries env index.
+    #     # we do this as x[argsort(x)] tells us the indices of the environments in order.
+    #     sorted_env_info, argsort_env_info = torch.sort(env_batch_info)
+    #     # To be done now, we only need to know where the breakpoints are in this list, i.e.
+    #     # at which indices we are crossing into the next environment index.
+    #     # To this end we compute the unique indices in the argsorted env info list, which will give us a tuple
+    #     # of two lists:
+    #     # 1st list: the unique, and sorted environments we can find in the total env list.
+    #     # 2nd list: the list of index breaks. This will look like
+    #     #   [start_idx_{env 0}, start_idx_{env 1}, start_idx_{env 2},...],
+    #     # so that we can then find the full list by iterating over the environment names in the first returned list,
+    #     # and taking all the indices in argsorted_env_list with the slice (start_idx{env k} : start_idx_{env k+1}).
+    #     unique_envs_in_batch, indices_of_env_transitions = np.unique(
+    #         env_batch_info[argsort_env_info].numpy(), return_index=True
+    #     )
+    #     for i, env in enumerate(unique_envs_in_batch[:-1]):
+    #         batch_indices_by_env[env] = argsort_env_info[
+    #             indices_of_env_transitions[i] : indices_of_env_transitions[i + 1]
+    #         ]
+    #
+    #     # the last env entry are all the indices from the last unique entry pointer to the end.
+    #     batch_indices_by_env[unique_envs_in_batch[-1]] = argsort_env_info[
+    #         indices_of_env_transitions[-1] :
+    #     ]
+    #     return batch_indices_by_env
 
     def _pooled_gaussian_loss(self, gauss_sample: Tensor):
         """
@@ -597,13 +697,91 @@ class AgnosticPredictor(ICPredictor):
             opts=dict(title=f"Final Mask for variables", ytickmin=0, ytickmax=1),
         )
 
+    def _results_statistics(
+        self,
+        results_losses,
+        results_masks,
+        results_filename,
+        results_folder,
+        save_results,
+    ):
+        full_results = {
+            var: []
+            for var in sorted(
+                self.get_parent_candidates(),
+                key=lambda x: int(x.split("_")[-1]) if "_" in x else x,
+            )
+        }
+        best_invariance_result = -1
+        lowest_invariance_loss = float("infinity")
+        for i, (result_mask, result_loss) in enumerate(
+            zip(results_masks, results_losses)
+        ):
+            for var, mask in result_mask.items():
+                full_results[var].append(mask)
+                if result_loss["invariance"][-1] < lowest_invariance_loss:
+                    lowest_invariance_loss = result_loss["invariance"][-1]
+                    best_invariance_result = i
+        statistics = dict()
+        for var, values in full_results.items():
+            stats_dict = dict()
+            for func, args, kwargs in zip(
+                (
+                    np.mean,
+                    np.min,
+                    np.max,
+                    np.var,
+                    np.quantile,
+                    np.quantile,
+                    np.quantile,
+                ),
+                [values] * 7,
+                (None, None, None, None, {"q": 0.25}, {"q": 0.5}, {"q": 0.75}),
+            ):
+                func_str = str(
+                    re.search(r"(?<=function\s)[a-zA-z\d]+(?=\s)", str(func)).group()
+                )
+                if kwargs is not None:
+                    func_str += ", " + ", ".join(
+                        [f"{k}={v}" for k, v in kwargs.items()]
+                    )
+                    stats_dict[func_str] = func(args, **kwargs).round(3)
+                else:
+                    stats_dict[func_str] = func(args).round(3)
+            statistics[var] = stats_dict
+        print("\nLearning outcomes:")
+        for var, stat_dict in statistics.items():
+            print(var)
+            for func_str, value in stat_dict.items():
+                print(
+                    f"\t{func_str}:", value,
+                )
+            print(f"\tresults:", full_results[var])
+        print("Best individual run by invariance loss:")
+        print(f"\tRun: {best_invariance_result}")
+        print(f"\tLoss: {lowest_invariance_loss}")
+        print(
+            f"\tMask: {', '.join([f'{var}: {val}' for var, val in results_masks[best_invariance_result].items()])}"
+        )
+        print("")
+        if save_results:
+            if not os.path.isdir(results_folder):
+                os.mkdir(results_folder)
+            results_df = pd.DataFrame.from_dict(statistics, orient="columns")
+            results_df.loc["results_array"] = {
+                var: str(values) for (var, values) in full_results.items()
+            }
+            results_df.to_csv(f"{os.path.join(results_folder, results_filename)}.csv")
+
+        return best_invariance_result, lowest_invariance_loss
+
     def _plot_loss(self, losses, loss_win, title="Loss Behaviour"):
         losses = np.array(losses)
         if not len(losses):
             ytickmax = np.quantile(losses, 0.99)
-            ytickmax = ytickmax + .5 * abs(ytickmax)
+            ytickmax = ytickmax + 0.5 * abs(ytickmax)
             ytickmin = np.quantile(losses, 0)
-            ytickmin = ytickmin - .5 * abs(ytickmin)
+            ytickmin = ytickmin - 0.5 * abs(ytickmin)
         else:
             ytickmin = ytickmax = None
         self.viz.line(

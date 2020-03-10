@@ -190,9 +190,7 @@ class SCM:
             Hashable,
             Union[
                 Dict,
-                Tuple[
-                    Optional[Union[Tuple, List]], Optional[Assignment], Optional[Noise],
-                ],
+                Tuple[Optional[Collection], Optional[Assignment], Optional[Noise]],
             ],
         ],
     ):
@@ -313,6 +311,9 @@ class SCM:
         -------
             None
         """
+        if len(variables) != len(values):
+            raise ValueError(f"Got {len(variables)} variables, but {len(values)} values.")
+
         interventions_dict: Dict[Hashable, Tuple[List, Assignment, None]] = dict()
         for var, val in zip(variables, values):
             interventions_dict[var] = ([], LinearAssignment(0, val), None)
@@ -334,12 +335,15 @@ class SCM:
         noise_models : Collection[float],
             the constant values the chosen variables should be set to.
         """
+        if len(variables) != len(noise_models):
+            raise ValueError(f"Got {len(variables)} variables, but {len(noise_models)} values.")
+
         interventions_dict: Dict[Hashable, Tuple[None, None, Noise]] = dict()
         for var, noise in zip(variables, noise_models):
             interventions_dict[var] = (None, None, noise)
         self.intervention(interventions_dict)
 
-    def undo_intervention(self, variables: Collection[Hashable] = None):
+    def undo_intervention(self, variables: Optional[Collection[Hashable]] = None):
         """
         Method to undo previously done interventions.
 
@@ -393,7 +397,7 @@ class SCM:
         figsize: Tuple[int, int] = (6, 4),
         dpi: int = 150,
         alpha: float = 0.5,
-        savefig_fullpath: Optional[str] = None,
+        savefig_full_path: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -430,7 +434,7 @@ class SCM:
             the dots per inch arg for matplotlib. Default is 150.
         alpha : (optional) float,
             the statistical significance level for the test. Default value is 0.05.
-        savefig_fullpath: (opitional) str,
+        savefig_full_path: (opitional) str,
             the full filepath to the, to which the plot should be saved. If not provided, the plot will not be saved.
         kwargs :
             arguments to be passed to the ``networkx.draw`` method. Check its documentation for a full list.
@@ -454,8 +458,8 @@ class SCM:
             alpha=alpha,
             **kwargs,
         )
-        if savefig_fullpath is not None:
-            plt.savefig(savefig_fullpath)
+        if savefig_full_path is not None:
+            plt.savefig(savefig_full_path)
 
     def str(self):
         """

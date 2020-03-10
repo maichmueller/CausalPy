@@ -66,7 +66,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=2, env=1, inn=1, l2=0.01)
+            Hyperparams(l0=.8, env=1, inn=1, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -82,7 +82,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.masker_net_params = (
             masker_network_params
             if masker_network_params is not None
-            else dict(monte_carlo_sample_size=1, device=self.device)
+            else dict(monte_carlo_sample_size=1, initial_sparsity_rate=1, device=self.device)
         )
 
         self.optimizer = None
@@ -213,6 +213,9 @@ class MultiAgnosticPredictor(ICPredictor):
         ############
         # Training #
         ############
+        for param in self.masker_net.parameters():
+            param.requires_grad = False
+        mask_training_activated = False
 
         epoch_iter = (
             tqdm(range(self.epochs)) if show_epoch_progressbar else range(self.epochs)
@@ -220,6 +223,12 @@ class MultiAgnosticPredictor(ICPredictor):
         epoch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
         for epoch in epoch_iter:
             batch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
+
+            if epoch > 50 and not mask_training_activated:
+                for param in self.masker_net.parameters():
+                    param.requires_grad = True
+                mask_training_activated = True
+
             for batch_indices, _ in data_loader:
                 self.optimizer.zero_grad()
 
@@ -237,7 +246,7 @@ class MultiAgnosticPredictor(ICPredictor):
                     batch_indices, environments_map
                 )
                 inn_loss = self._cinn_maxlikelihood_loss(
-                    obs, target, env_batch_indices, mask
+                    obs, target, batch_indices, env_batch_indices, mask
                 )
                 (
                     env_loss,
@@ -249,7 +258,11 @@ class MultiAgnosticPredictor(ICPredictor):
                 env_loss += self._pooled_gaussian_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                l0_loss = self.masker_net.complexity_loss()
+                l0_loss = (
+                    self.masker_net.complexity_loss()
+                    if mask_training_activated
+                    else torch.zeros(1, device=self.device)
+                )
                 l2_loss = self._l2_regularization()
 
                 batch_loss = (
@@ -472,6 +485,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self,
         obs: Tensor,
         target: Tensor,
+        batch_indices: Union[Tensor, np.ndarray],
         batch_indices_by_env: Dict[int, np.ndarray],
         mask: Tensor,
     ):
@@ -486,10 +500,11 @@ class MultiAgnosticPredictor(ICPredictor):
             self.cinns, batch_indices_by_env.items()
         ):
             # split data by environmental affiliation
-            target_env_batch = target[env_indices].view(-1, 1).repeat(nr_masks, 1)
-            masked_env_batch = self.masker_net(obs[env_indices], mask)
+            notenv_batch_indices = torch.from_numpy(np.setdiff1d(batch_indices,env_indices))
+            target_notenv_batch = target[notenv_batch_indices].view(-1, 1).repeat(nr_masks, 1)
+            masked_notenv_batch = self.masker_net(obs[notenv_batch_indices], mask)
             gauss_sample = env_cinn(
-                x=target_env_batch, condition=masked_env_batch, rev=False,
+                x=target_notenv_batch, condition=masked_notenv_batch, rev=False,
             ).view(nr_masks, -1, 1)
             inn_loss += torch.mean(
                 torch.mean(
@@ -507,11 +522,8 @@ class MultiAgnosticPredictor(ICPredictor):
     ):
         with torch.no_grad():
             for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
-                target_approx_sample = env_cinn(
-                    x=torch.randn(self.n, 1, device=self.device),
-                    condition=(obs * self.get_mask(final=True)).view(-1, self.p),
-                    rev=True,
-                )
+                environment_size = env_indices.size
+                target_approx_sample = self.predict(obs[env_indices])
 
                 targ_hist_fig = go.Figure()
                 targ_hist_fig.add_trace(
@@ -578,7 +590,7 @@ class MultiAgnosticPredictor(ICPredictor):
     def _plot_loss(self, losses, loss_win, title="Loss Behaviour"):
         losses = np.array(losses)
         if len(losses) > 1:
-            ytickmax = np.quantile(losses, 0.99)
+            ytickmax = np.quantile(losses, 0.9)
             ytickmax = ytickmax + 0.5 * abs(ytickmax)
             ytickmin = np.quantile(losses, 0)
             ytickmin = ytickmin - 0.5 * abs(ytickmin)

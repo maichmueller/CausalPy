@@ -164,8 +164,8 @@ def build_scm_medium(seed=0):
                 NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 1),
             ),
             "X_2": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 1, 0.8, -1.2),
+                ["X_0"],
+                LinearAssignment(1, 1, 0.8),
                 NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 2),
             ),
             "X_3": (
@@ -216,8 +216,8 @@ def build_scm_large(seed=0):
                 NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 1),
             ),
             "X_2": (
-                ["X_0", "X_1"],
-                LinearAssignment(1, 1, 0.8, -1.2),
+                ["X_0"],
+                LinearAssignment(1, 1, 0.8),
                 NoiseGenerator("normal", loc=0, scale=scale, seed=seed + 2),
             ),
             "X_3": (
@@ -310,7 +310,7 @@ def generate_data_from_scm(
 
     # perform interventions on selected variables
     for parent in interv_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 5
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * 3
         # interv_value = 0
         scm.do_intervention([parent], [interv_value])
         print(

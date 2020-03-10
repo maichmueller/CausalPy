@@ -31,20 +31,25 @@ class ICPredictor(ABC):
         *args,
         **kwargs,
     ):
-        pass
+        raise NotImplementedError
 
     def preprocess_input(
             self,
             obs: Union[pd.DataFrame, np.ndarray],
             target_variable: Hashable,
-            envs: Union[List, Tuple, np.ndarray]
+            envs: Union[List, Tuple, np.ndarray],
+            normalize: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, Dict]:
         self.n, self.p = obs.shape[0], obs.shape[1] - 1
         assert (
-            len(envs) == self.n
+                len(envs) == self.n
         ), f"Number of observation samples ({len(envs)}) and number of environment labels ({self.n}) have to be equal."
 
         self.target_name = target_variable
+
+        if normalize:
+            obs = np.subtract(obs, obs.mean(1)[:, np.newaxis])
+            obs = np.divide(obs, obs.std(1)[:, np.newaxis])
 
         if isinstance(obs, pd.DataFrame):
             self.variables = obs.columns.values
@@ -66,10 +71,10 @@ class ICPredictor(ABC):
             )
         else:
             raise ValueError(
-                "Observations have to be either a pandas DataFrame or numpy ndarray."
+                "Observations have to be passed as a pandas DataFrame or numpy ndarray."
             )
 
-        environments: Dict = {env: np.where(envs == env)[0] for env in np.unique(envs)}
+        environments = {env: np.where(envs == env)[0] for env in np.unique(envs)}
 
         return obs, target, environments
 

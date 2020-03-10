@@ -42,11 +42,11 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            # (build_scm_minimal, "Y"),
-            # (build_scm_basic, "Y"),
-            # (build_scm_basic_discrete, "Y"),
-            # (build_scm_exponential, "Y"),
-            # (build_scm_medium, "Y"),
+            (build_scm_minimal, "Y"),
+            (build_scm_basic, "Y"),
+            (build_scm_basic_discrete, "Y"),
+            (build_scm_exponential, "Y"),
+            (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
@@ -71,22 +71,23 @@ if __name__ == "__main__":
             [possible_parents.index(par) for par in target_parents]
         )
         nr_envs = np.unique(environments).max() + 1
-        nr_repetitions = 1
-        results = []
+
+        nr_runs = 50
+
         epochs = 300
         use_visdom = 0
-        # for _ in range(nr_repetitions):
+
         ap = AgnosticPredictor(
             epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
-        results.append(ap.infer(complete_data, environments, target_var,))
-        print(results[-1][0])
+        results_mask, results_loss = ap.infer(complete_data, environments, target_var, nr_runs=nr_runs, normalize=True)
+        print(results_mask)
 
-        evaluate(
-            complete_data,
-            ap,
-            environments,
-            ground_truth_assignment=scm[target_var][1][scm.function_key],
-            x_vars=target_parents,
-            targ_var=target_var,
-        )
+        # evaluate(
+        #     complete_data,
+        #     ap,
+        #     environments,
+        #     ground_truth_assignment=scm[target_var][1][scm.function_key],
+        #     x_vars=target_parents,
+        #     targ_var=target_var,
+        # )
