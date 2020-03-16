@@ -312,7 +312,9 @@ class SCM:
             None
         """
         if len(variables) != len(values):
-            raise ValueError(f"Got {len(variables)} variables, but {len(values)} values.")
+            raise ValueError(
+                f"Got {len(variables)} variables, but {len(values)} values."
+            )
 
         interventions_dict: Dict[Hashable, Tuple[List, Assignment, None]] = dict()
         for var, val in zip(variables, values):
@@ -336,7 +338,9 @@ class SCM:
             the constant values the chosen variables should be set to.
         """
         if len(variables) != len(noise_models):
-            raise ValueError(f"Got {len(variables)} variables, but {len(noise_models)} values.")
+            raise ValueError(
+                f"Got {len(variables)} variables, but {len(noise_models)} values."
+            )
 
         interventions_dict: Dict[Hashable, Tuple[None, None, Noise]] = dict()
         for var, noise in zip(variables, noise_models):

@@ -477,7 +477,7 @@ def train(epochs=300, use_visdom=True):
     l0_masker = L0InputGate(
         complete_data.shape[1],
         monte_carlo_sample_size=10,
-        initial_sparsity_rate=1.,
+        initial_sparsity_rate=1.0,
         device=dev,
     ).to(dev)
     mask_rep_size = l0_masker.mcs_size
@@ -594,14 +594,10 @@ def train_together(
                 ).view(mask_rep_size, env_batch_size, -1)
                 for masked_condition_data in masked_env_batch_data:
                     gauss_sample = env_cinn(
-                        x=target_env_data,
-                        condition=masked_condition_data,
-                        rev=False,
+                        x=target_env_data, condition=masked_condition_data, rev=False,
                     )
                     log_grad = env_cinn.log_jacobian_cache
-                    inn_loss += inn_max_likelihood_loss(
-                        gauss_sample, log_grad
-                    )
+                    inn_loss += inn_max_likelihood_loss(gauss_sample, log_grad)
                 inn_loss /= mask_rep_size
 
                 # gauss_sample = env_cinn(
@@ -695,7 +691,7 @@ def train_together(
                         go.Histogram(
                             x=gen_samples_mask_i.view(-1).cpu().detach().numpy(),
                             name=f"Mask {i}",
-                            histnorm="probability density"
+                            histnorm="probability density",
                         )
                     )
 
@@ -989,9 +985,11 @@ def pretrain_environment(
 
         if use_visdom:
             visdom_plot_loss(
-                viz,total_losses, loss_windows["total"], "Total Loss Behaviour"
+                viz, total_losses, loss_windows["total"], "Total Loss Behaviour"
             )
-            visdom_plot_loss(viz,cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
+            visdom_plot_loss(
+                viz, cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour"
+            )
 
             if epoch % 1 == 0:
                 with torch.no_grad():
@@ -1014,9 +1012,7 @@ def pretrain_environment(
                             .to(dev)
                         )
                         gauss_sample = env_cinn(
-                            x=torch.randn(
-                                env_indices.size, 1, device=dev
-                            ),
+                            x=torch.randn(env_indices.size, 1, device=dev),
                             condition=(complete_data[env_indices] * mask).view(
                                 -1, mask.shape[-1]
                             ),

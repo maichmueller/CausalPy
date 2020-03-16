@@ -80,7 +80,9 @@ if __name__ == "__main__":
         ap = AgnosticPredictor(
             epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
-        results_mask, results_loss = ap.infer(complete_data, environments, target_var, nr_runs=nr_runs, normalize=True)
+        results_mask, results_loss = ap.infer(
+            complete_data, environments, target_var, nr_runs=nr_runs, normalize=True
+        )
         print(results_mask)
 
         # evaluate(

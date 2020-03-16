@@ -322,9 +322,7 @@ if __name__ == "__main__":
     env_map = {e: np.where(environments == e)[0] for e in envs_unique}
 
     data, target_data = list(
-        map(
-            lambda x: torch.as_tensor(x).float().to(dev), (data, target_data)
-        )
+        map(lambda x: torch.as_tensor(x).float().to(dev), (data, target_data))
     )
 
     dim_condition = data.shape[1]
@@ -335,8 +333,9 @@ if __name__ == "__main__":
     l0mask = L0InputGate(data.shape[1], monte_carlo_sample_size=100).to(dev)
 
     optimizer = torch.optim.Adam(
-        itertools.chain(l0mask.parameters(), *[c_inn.parameters() for c_inn in cINN_list]
-                        ),
+        itertools.chain(
+            l0mask.parameters(), *[c_inn.parameters() for c_inn in cINN_list]
+        ),
         lr=0.01,
         weight_decay=1e-5,
     )
@@ -385,8 +384,8 @@ if __name__ == "__main__":
 
             x_range_for_plots = (
                 torch.arange(-2, 2, 4 / env_masked_cond_data.shape[0])
-                    .unsqueeze(1)
-                    .to(dev)
+                .unsqueeze(1)
+                .to(dev)
             )
             gauss_sample = env_cinn(
                 x=target_data.unsqueeze(1), condition=env_masked_cond_data, rev=False
@@ -436,7 +435,7 @@ if __name__ == "__main__":
             X=l0mask.final_layer().detach().numpy().reshape(1, -1),
             Y=np.arange(l0mask.final_layer().nelement()).reshape(1, -1),
             win=mask_win,
-            opts=dict(title=f"Final Mask for variables", xlabel=[0,1,2]),
+            opts=dict(title=f"Final Mask for variables", xlabel=[0, 1, 2]),
         )
         # print(loss)
         loss.backward()

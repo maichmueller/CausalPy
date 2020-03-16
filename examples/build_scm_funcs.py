@@ -150,7 +150,7 @@ def build_scm_exponential(seed=0):
 
 
 def build_scm_medium(seed=0):
-    scale = .5
+    scale = 0.5
     cn = SCM(
         assignment_map={
             "X_0": (
@@ -202,13 +202,13 @@ def build_scm_medium(seed=0):
 
 
 def build_scm_large(seed=0):
-    scale = .5
+    scale = 0.5
     cn = SCM(
         assignment_map={
             "X_0": (
                 [],
                 LinearAssignment(1),
-                NoiseGenerator("normal", loc=0, scale=scale, seed=seed)
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed),
             ),
             "X_1": (
                 ["X_0"],

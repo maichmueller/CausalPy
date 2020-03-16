@@ -61,9 +61,7 @@ class StratifiedSampler(Sampler):
         return len(self.class_vector)
 
 
-def rbf(
-    X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None
-):
+def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
     # for computing the general 2-pairwise norm ||x_i - y_j||_2 ^ 2 for each row i and j of the matrices X and Y:
     # the numpy code looks like the following:
     #   XY = X @ Y.transpose()

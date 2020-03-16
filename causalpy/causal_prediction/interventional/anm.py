@@ -71,11 +71,9 @@ class ANMPredictor(ICPredictor):
         elif loss_transform_res_to_par == "max":
             self.loss_reduce_par = torch.max
         elif loss_transform_res_to_par == "alpha_moment":
-            self.loss_reduce_par = partial(
-                alpha_moment, alpha=kwargs.pop("alpha", 1)
-            )
+            self.loss_reduce_par = partial(alpha_moment, alpha=kwargs.pop("alpha", 1))
         else:
-            args = ['sum', 'max', 'alpha_moment']
+            args = ["sum", "max", "alpha_moment"]
             raise ValueError(
                 f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_par}'."
             )
@@ -85,11 +83,9 @@ class ANMPredictor(ICPredictor):
         elif loss_transform_res_to_res == "max":
             self.loss_reduce_res = torch.max
         elif loss_transform_res_to_res == "alpha_moment":
-            self.loss_reduce_res = partial(
-                alpha_moment, alpha=kwargs.pop("alpha", 1)
-            )
+            self.loss_reduce_res = partial(alpha_moment, alpha=kwargs.pop("alpha", 1))
         else:
-            args = ['sum', 'max', 'alpha_moment']
+            args = ["sum", "max", "alpha_moment"]
             raise ValueError(
                 f"Loss Transform function needs to be one of {args}. Provided: '{loss_transform_res_to_res}'."
             )
@@ -264,7 +260,9 @@ class ANMPredictor(ICPredictor):
             # Compute Residuals for different contexts
             residuals = dict()
             for env, env_ind in environments.items():
-                residuals[env] = target[env_ind].view(-1, 1) - self.network(obs[env_ind])
+                residuals[env] = target[env_ind].view(-1, 1) - self.network(
+                    obs[env_ind]
+                )
 
             # Regression Loss
             loss_regression = 0

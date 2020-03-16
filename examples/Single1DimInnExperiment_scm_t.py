@@ -75,7 +75,11 @@ if __name__ == "__main__":
         use_visdom = True
         for _ in range(nr_repetitions):
             results.append(
-                AgnosticPredictor(epochs=epochs, batch_size=10000, visualize_with_visdom=use_visdom).infer(complete_data, environments, target_var,)
+                AgnosticPredictor(
+                    epochs=epochs, batch_size=10000, visualize_with_visdom=use_visdom
+                ).infer(
+                    complete_data, environments, target_var,
+                )
             )
 
         full_results = {var: [] for var in results[0].keys()}
