@@ -36,7 +36,7 @@ import os
 import re
 
 
-Hyperparams = namedtuple("Hyperparams", "inn env l0 l2")
+Hyperparams = namedtuple("Hyperparams", "inn env independence l0 l2")
 
 
 class TempFolder:
@@ -46,13 +46,15 @@ class TempFolder:
     def __enter__(self):
         i = 0
         while os.path.isdir(self.folder):
+            if i != 0:
+                self.folder = "_".join(self.folder.split("_")[:-1])
             self.folder += f"_{i}"
             i += 1
 
         os.mkdir(self.folder)
 
     def __exit__(self, type, value, traceback):
-        shutil.rmtree(self.folder, ignore_errors=True)
+        shutil.rmtree(self.folder, ignore_errors=False)
 
 
 class AgnosticPredictor(ICPredictor):
@@ -85,7 +87,7 @@ class AgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=2, env=1, inn=1, l2=0.01)
+            Hyperparams(l0=2, env=1, inn=1, independence=0.5, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -111,7 +113,7 @@ class AgnosticPredictor(ICPredictor):
         self.optimizer_params = (
             optimizer_params
             if optimizer_params is not None
-            else dict(lr=1e-3, mask_lr=1e-2)
+            else dict(lr=1e-3, mask_lr=1e-1)
         )
 
         self.scheduler = None
@@ -203,6 +205,7 @@ class AgnosticPredictor(ICPredictor):
         **kwargs,
     ):
         temp_folder = "temp_model_folder"
+
         with TempFolder(temp_folder):
 
             results_masks = []
@@ -298,9 +301,9 @@ class AgnosticPredictor(ICPredictor):
             param.requires_grad = False
         mask_training_activated = False
 
-        epoch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
+        epoch_losses = dict(total=[], invariance=[], cinn=[], independence=[], l0_mask=[], l2=[])
         for epoch in epoch_pbar:
-            batch_losses = dict(total=[], invariance=[], cinn=[], l0_mask=[], l2=[])
+            batch_losses = dict(total=[], invariance=[], cinn=[], independence=[], l0_mask=[], l2=[])
 
             if epoch > 10 and not mask_training_activated:
                 for param in self.masker_net.parameters():
@@ -326,9 +329,15 @@ class AgnosticPredictor(ICPredictor):
                 inn_loss, gauss_sample = self._cinn_maxlikelihood_loss(
                     masked_batch, target_batch, nr_masks
                 )
-                env_loss = self._environmental_invariance_loss(
+                env_loss, env_gauss_samples, env_target_samples = self._environmental_invariance_loss(
                     obs, target, env_batch_indices, mask, save_samples=self.use_visdom,
-                )[0]
+                )
+                independence_loss = self._independence_loss(
+                    obs,
+                    env_gauss_samples,
+                    env_batch_indices,
+                    mask
+                )
                 env_loss += self._pooled_gaussian_loss(gauss_sample)
 
                 l0_loss = (
@@ -336,16 +345,18 @@ class AgnosticPredictor(ICPredictor):
                     if mask_training_activated
                     else torch.zeros(1, device=self.device)
                 )
-                l2_loss = self._l2_regularization()
+                l2_loss = torch.zeros(1, device=self.device)
 
                 batch_loss = (
                     self.hyperparams.inn * inn_loss
                     + self.hyperparams.env * env_loss
                     + self.hyperparams.l0 * l0_loss
                     + self.hyperparams.l2 * l2_loss
+                    + self.hyperparams.independence * independence_loss
                 )
 
                 batch_losses["invariance"].append(env_loss.item())
+                batch_losses["independence"].append(independence_loss.item())
                 batch_losses["cinn"].append(inn_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
                 batch_losses["l2"].append(l2_loss.item())
@@ -378,7 +389,7 @@ class AgnosticPredictor(ICPredictor):
                     self._plot_loss(
                         losses,
                         f"{loss_name}_loss",
-                        f"{loss_name.capitalize()} Loss Movement",
+                        f"{loss_name.capitalize()} Loss",
                     )
 
                 self._plot_data_approximation(obs, target, environments_map)
@@ -516,11 +527,6 @@ class AgnosticPredictor(ICPredictor):
                 # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
                 loss_per_mask += moments(estimate_gauss, true_gauss)
 
-                # punish dependence between predictors and noise
-                loss_per_mask += hsic(
-                    estimate_gauss, masked_env_batch[mask_nr], len(estimate_gauss)
-                )
-
                 estimate_target = env_target_sample[mask_nr]
                 # loss_per_mask += wasserstein(estimate_target, target_env_batch)
                 # loss_per_mask += mmd_multiscale(estimate_target, target_env_batch)
@@ -539,6 +545,31 @@ class AgnosticPredictor(ICPredictor):
             env_loss += loss_per_mask
         env_loss = env_loss / nr_masks
         return env_loss, env_gauss_samples, env_target_samples
+
+    def _independence_loss(
+        self,
+        obs: Tensor,
+        env_gauss_samples: Collection[Tensor],
+        batch_indices_by_env: Dict,
+        mask: Tensor,
+    ):
+        """
+        Compute the dependence between the estimated gaussian noise and the predictors X of the target Y in each
+        environment. This independence is an essential assumption in the construction of SCMs, thus should be enforced.
+        """
+        nr_masks = mask.size(0)
+        independence_loss = torch.zeros(1, device=self.device)
+
+        for gauss_sample, (env, env_batch_indices) in zip(env_gauss_samples, batch_indices_by_env.items()):
+            masked_env_batch = self.masker_net(obs[env_batch_indices], mask).view(nr_masks, -1, self.p)
+            for mask_nr in range(nr_masks):
+                # punish dependence between predictors and noise
+                independence_loss += hsic(
+                    gauss_sample[mask_nr], masked_env_batch[mask_nr], gauss_sample.size(1)
+                )
+
+        independence_loss = independence_loss / nr_masks
+        return independence_loss
 
     # @staticmethod
     # def _batch_indices_by_env(env_batch_info: Union[Tensor]):
@@ -615,14 +646,7 @@ class AgnosticPredictor(ICPredictor):
     ):
         with torch.no_grad():
             for env, env_indices in environments.items():
-                environment_size = env_indices.size
-                target_approx_sample = self.cinn(
-                    x=torch.randn(environment_size, 1, device=self.device),
-                    condition=(obs[env_indices] * self.get_mask(final=True)).view(
-                        -1, self.p
-                    ),
-                    rev=True,
-                )
+                target_approx_sample = self.predict(obs[env_indices])
 
                 targ_hist_fig = go.Figure()
                 targ_hist_fig.add_trace(
@@ -788,5 +812,5 @@ class AgnosticPredictor(ICPredictor):
             X=np.arange(len(losses)),
             Y=losses,
             win=loss_win,
-            opts=dict(title=title, ytickmin=ytickmin, ytickmax=ytickmax),
+            opts=dict(title=title, ytickmin=ytickmin, ytickmax=ytickmax, xlabel="Epoch"),
         )
