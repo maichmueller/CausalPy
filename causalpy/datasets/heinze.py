@@ -31,8 +31,12 @@ class SumAssignment(Assignment):
 
     def function_str(self, variable_names: Optional[Collection[str]] = None):
         rep = "N"
-        for assignment, var in zip(self.assignment, variable_names):
-            rep += f" + {assignment.function_str(var)}"
+        var_strs = [
+            f"{assignment.function_str([var])}"
+            for assignment, var in zip(self.assignment, variable_names[1:])
+        ]
+        if var_strs:
+            rep += f"{' + '.join(var_strs)}"
         return rep
 
 
@@ -54,11 +58,13 @@ class ProductAssignment(Assignment):
         return len(self.coefficients)
 
     def function_str(self, variable_names: Optional[Collection[str]] = None):
+        rep = "N"
         var_strs = [
-            f"{assignment.function_str(var)}"
-            for assignment, var in zip(self.assignment, variable_names)
+            f"{assignment.function_str([var])}"
+            for assignment, var in zip(self.assignment, variable_names[1:])
         ]
-        rep = f"N + {' * '.join(var_strs)}"
+        if var_strs:
+            rep += f"{' * '.join(var_strs)}"
         return rep
 
 

@@ -96,7 +96,7 @@ class Assignment(ABC):
                     )
                 )
             else:
-                variable_names = [f"x_{i}" for i in range(len(self))]
+                variable_names = [f"X_{i}" for i in range(len(self))]
         variable_names = ["N"] + variable_names
         assignment = self.function_str(variable_names)
         prefix = f"f({', '.join(variable_names)}) = "
