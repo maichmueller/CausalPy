@@ -13,31 +13,57 @@ from visdom import Visdom
 
 class VisdomLinePlotter(object):
     """Plots to Visdom"""
-    def __init__(self, env_name='main'):
+
+    def __init__(self, env_name="main"):
         self.viz = Visdom()
         self.env = env_name
         self.plots = {}
 
     def plot(self, var_name, split_name, title_name, x, y):
         if var_name not in self.plots:
-            self.plots[var_name] = self.viz.line(X=np.array([x,x]), Y=np.array([y,y]), env=self.env, opts=dict(
-                legend=[split_name],
-                title=title_name,
-                xlabel='Epochs',
-                ylabel=var_name
-            ))
+            self.plots[var_name] = self.viz.line(
+                X=np.array([x, x]),
+                Y=np.array([y, y]),
+                env=self.env,
+                opts=dict(
+                    legend=[split_name],
+                    title=title_name,
+                    xlabel="Epochs",
+                    ylabel=var_name,
+                ),
+            )
         else:
-            self.viz.line(X=np.array([x]), Y=np.array([y]), env=self.env, win=self.plots[var_name], name=split_name, update = 'append')
+            self.viz.line(
+                X=np.array([x]),
+                Y=np.array([y]),
+                env=self.env,
+                win=self.plots[var_name],
+                name=split_name,
+                update="append",
+            )
 
-limit_a, limit_b, epsilon = -.1, 1.1, 1e-6
+
+limit_a, limit_b, epsilon = -0.1, 1.1, 1e-6
 import math
 from torch.nn import Parameter, Module, init
 import torch.nn.functional as F
+
+
 class L0Dense(Module):
     """Implementation of L0 regularization for the input units of a fully connected layer"""
 
-    def __init__(self, in_features, out_features, bias=True, weight_decay=1., droprate_init=0.5, temperature=2./3.,
-                 lamba=1., local_rep=False, **kwargs):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        weight_decay=1.0,
+        droprate_init=0.5,
+        temperature=2.0 / 3.0,
+        lamba=1.0,
+        local_rep=False,
+        **kwargs
+    ):
         """
         :param in_features: Input dimensionality
         :param out_features: Output dimensionality
@@ -55,21 +81,27 @@ class L0Dense(Module):
         self.weights = Parameter(torch.Tensor(in_features, out_features))
         self.qz_loga = Parameter(torch.Tensor(in_features))
         self.temperature = temperature
-        self.droprate_init = droprate_init if droprate_init != 0. else 0.5
+        self.droprate_init = droprate_init if droprate_init != 0.0 else 0.5
         self.lamba = lamba
         self.use_bias = False
         self.local_rep = local_rep
         if bias:
             self.bias = Parameter(torch.Tensor(out_features))
             self.use_bias = True
-        self.floatTensor = torch.FloatTensor if not torch.cuda.is_available() else torch.cuda.FloatTensor
+        self.floatTensor = (
+            torch.FloatTensor
+            if not torch.cuda.is_available()
+            else torch.cuda.FloatTensor
+        )
         self.reset_parameters()
         print(self)
 
     def reset_parameters(self):
-        init.kaiming_normal(self.weights, mode='fan_out')
+        init.kaiming_normal(self.weights, mode="fan_out")
 
-        self.qz_loga.data.normal_(math.log(1 - self.droprate_init) - math.log(self.droprate_init), 1e-2)
+        self.qz_loga.data.normal_(
+            math.log(1 - self.droprate_init) - math.log(self.droprate_init), 1e-2
+        )
 
         if self.use_bias:
             self.bias.data.fill_(0)
@@ -81,18 +113,28 @@ class L0Dense(Module):
         """Implements the CDF of the 'stretched' concrete distribution"""
         xn = (x - limit_a) / (limit_b - limit_a)
         logits = math.log(xn) - math.log(1 - xn)
-        return F.sigmoid(logits * self.temperature - self.qz_loga).clamp(min=epsilon, max=1 - epsilon)
+        return F.sigmoid(logits * self.temperature - self.qz_loga).clamp(
+            min=epsilon, max=1 - epsilon
+        )
 
     def quantile_concrete(self, x):
         """Implements the quantile, aka inverse CDF, of the 'stretched' concrete distribution"""
-        y = F.sigmoid((torch.log(x) - torch.log(1 - x) + self.qz_loga) / self.temperature)
+        y = F.sigmoid(
+            (torch.log(x) - torch.log(1 - x) + self.qz_loga) / self.temperature
+        )
         return y * (limit_b - limit_a) + limit_a
 
     def _reg_w(self):
         """Expected L0 norm under the stochastic gates, takes into account and re-weights also a potential L2 penalty"""
-        logpw_col = torch.sum(- (.5 * self.prior_prec * self.weights.pow(2)) - self.lamba, 1)
+        logpw_col = torch.sum(
+            -(0.5 * self.prior_prec * self.weights.pow(2)) - self.lamba, 1
+        )
         logpw = torch.sum((1 - self.cdf_qz(0)) * logpw_col)
-        logpb = 0 if not self.use_bias else - torch.sum(.5 * self.prior_prec * self.bias.pow(2))
+        logpb = (
+            0
+            if not self.use_bias
+            else -torch.sum(0.5 * self.prior_prec * self.bias.pow(2))
+        )
         return logpw + logpb
 
     def regularization(self):
@@ -113,7 +155,7 @@ class L0Dense(Module):
 
     def get_eps(self, size):
         """Uniform random numbers for the concrete distribution"""
-        eps = self.floatTensor(size).uniform_(epsilon, 1-epsilon)
+        eps = self.floatTensor(size).uniform_(epsilon, 1 - epsilon)
         eps.requires_grad_(True)
         return eps
 
@@ -124,7 +166,11 @@ class L0Dense(Module):
             z = self.quantile_concrete(eps)
             return F.hardtanh(z, min_val=0, max_val=1)
         else:  # mode
-            pi = F.sigmoid(self.qz_loga).view(1, self.in_features).expand(batch_size, self.in_features)
+            pi = (
+                F.sigmoid(self.qz_loga)
+                .view(1, self.in_features)
+                .expand(batch_size, self.in_features)
+            )
             return F.hardtanh(pi * (limit_b - limit_a) + limit_a, min_val=0, max_val=1)
 
     def sample_weights(self):
@@ -145,12 +191,14 @@ class L0Dense(Module):
         return output
 
     def __repr__(self):
-        s = ('{name}({in_features} -> {out_features}, droprate_init={droprate_init}, '
-             'lamba={lamba}, temperature={temperature}, weight_decay={prior_prec}, '
-             'local_rep={local_rep}')
+        s = (
+            "{name}({in_features} -> {out_features}, droprate_init={droprate_init}, "
+            "lamba={lamba}, temperature={temperature}, weight_decay={prior_prec}, "
+            "local_rep={local_rep}"
+        )
         if not self.use_bias:
-            s += ', bias=False'
-        s += ')'
+            s += ", bias=False"
+        s += ")"
         return s.format(name=self.__class__.__name__, **self.__dict__)
 
 
@@ -168,7 +216,7 @@ class Single(torch.nn.Module):
 
 if __name__ == "__main__":
     global plotter
-    plotter = VisdomLinePlotter(env_name='Tutorial Plots')
+    plotter = VisdomLinePlotter(env_name="Tutorial Plots")
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -261,7 +309,9 @@ if __name__ == "__main__":
     # l0 = L0Mask(fc_inp).to(dev)
     # # params = [fc.parameters(), l0.parameters()]
     # # params = [fc.parameters()]
-    optimizer = torch.optim.Adam(itertools.chain(fc_inp.parameters(), l0.parameters()), lr=0.01)
+    optimizer = torch.optim.Adam(
+        itertools.chain(fc_inp.parameters(), l0.parameters()), lr=0.01
+    )
     optimizer.zero_grad()
     loss_f = torch.nn.MSELoss()
     losses = []
@@ -285,7 +335,9 @@ if __name__ == "__main__":
             # loss = loss_f(fc(data), target)
             print(l0.sample_mask(1, deterministic=True)[0])
             losses.append(loss.detach().item())
-            plotter.plot('loss', 'train', 'Class Loss', epoch, np.array(losses)[-1:].mean())
+            plotter.plot(
+                "loss", "train", "Class Loss", epoch, np.array(losses)[-1:].mean()
+            )
             loss.backward()
             # for loga in  l0.log_alphas:
             #     print(loga.grad)

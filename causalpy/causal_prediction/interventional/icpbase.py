@@ -8,7 +8,6 @@ import os
 
 
 class ICPredictor(ABC):
-
     def __init__(self, log_level: Optional[Union[str, int]] = False):
         self.n: int = -1
         self.p: int = -1
@@ -18,7 +17,9 @@ class ICPredictor(ABC):
         self.variables: np.ndarray = np.array([])
 
         self.log_level = log_level.upper() if isinstance(log_level, str) else log_level
-        logging.basicConfig(format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
+        logging.basicConfig(
+            format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S"
+        )
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
 
@@ -34,15 +35,15 @@ class ICPredictor(ABC):
         raise NotImplementedError
 
     def preprocess_input(
-            self,
-            obs: Union[pd.DataFrame, np.ndarray],
-            target_variable: Hashable,
-            envs: Union[List, Tuple, np.ndarray],
-            normalize: bool = False
+        self,
+        obs: Union[pd.DataFrame, np.ndarray],
+        target_variable: Hashable,
+        envs: Union[List, Tuple, np.ndarray],
+        normalize: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray, Dict]:
         self.n, self.p = obs.shape[0], obs.shape[1] - 1
         assert (
-                len(envs) == self.n
+            len(envs) == self.n
         ), f"Number of observation samples ({len(envs)}) and number of environment labels ({self.n}) have to be equal."
 
         self.target_name = target_variable
@@ -80,4 +81,3 @@ class ICPredictor(ABC):
 
     def get_parent_candidates(self):
         return self.index_to_varname.values
-

@@ -66,7 +66,7 @@ class MultiAgnosticPredictor(ICPredictor):
         self.batch_size = batch_size
         self.epochs = epochs
         self.hyperparams = (
-            Hyperparams(l0=.8, env=1, inn=1, l2=0.01)
+            Hyperparams(l0=0.8, env=1, inn=1, l2=0.01)
             if hyperparams is None
             else hyperparams
         )
@@ -82,7 +82,9 @@ class MultiAgnosticPredictor(ICPredictor):
         self.masker_net_params = (
             masker_network_params
             if masker_network_params is not None
-            else dict(monte_carlo_sample_size=1, initial_sparsity_rate=1, device=self.device)
+            else dict(
+                monte_carlo_sample_size=1, initial_sparsity_rate=1, device=self.device
+            )
         )
 
         self.optimizer = None
@@ -471,7 +473,9 @@ class MultiAgnosticPredictor(ICPredictor):
         true_gauss_sample = torch.randn(target_batch.size(0), 1, device=self.device)
         for cinn in self.cinns:
             gauss_sample = cinn(
-                x=target_batch.repeat(nr_masks, 1), condition=masked_batch.view(-1, self.p), rev=False,
+                x=target_batch.repeat(nr_masks, 1),
+                condition=masked_batch.view(-1, self.p),
+                rev=False,
             ).view(nr_masks, -1, 1)
             for mask_nr in range(nr_masks):
                 estimate = gauss_sample[mask_nr]
@@ -500,8 +504,12 @@ class MultiAgnosticPredictor(ICPredictor):
             self.cinns, batch_indices_by_env.items()
         ):
             # split data by environmental affiliation
-            notenv_batch_indices = torch.from_numpy(np.setdiff1d(batch_indices,env_indices))
-            target_notenv_batch = target[notenv_batch_indices].view(-1, 1).repeat(nr_masks, 1)
+            notenv_batch_indices = torch.from_numpy(
+                np.setdiff1d(batch_indices, env_indices)
+            )
+            target_notenv_batch = (
+                target[notenv_batch_indices].view(-1, 1).repeat(nr_masks, 1)
+            )
             masked_notenv_batch = self.masker_net(obs[notenv_batch_indices], mask)
             gauss_sample = env_cinn(
                 x=target_notenv_batch, condition=masked_notenv_batch, rev=False,

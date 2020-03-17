@@ -96,6 +96,7 @@ def generate_data_from_scm(
 
     return (data, environments, scm, possible_parents, target_parents)
 
+
 if __name__ == "__main__":
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")

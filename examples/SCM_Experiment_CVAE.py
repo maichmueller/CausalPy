@@ -553,9 +553,7 @@ if __name__ == "__main__":
             rev=False,
         )
         vis_wins["map"].append(
-            viz.line(
-                X=s(x), Y=s(y_sample), opts=dict(title=f"Forward Map Env {env}")
-            )
+            viz.line(X=s(x), Y=s(y_sample), opts=dict(title=f"Forward Map Env {env}"))
         )
         vis_wins["density"].append(
             viz.line(
@@ -712,16 +710,22 @@ if __name__ == "__main__":
                     )
                     y_sample = env_cinn(
                         x=torch.randn(env_indices.size * mask_rep_size, 1, device=dev),
-                        condition=(complete_data[env_indices] * mask).view(-1, mask.shape[-1]),
+                        condition=(complete_data[env_indices] * mask).view(
+                            -1, mask.shape[-1]
+                        ),
                         rev=True,
                     )
                     viz.line(
                         X=s(x_range),
-                        Y=s(env_cinn(
-                            x=x_range,
-                            condition=(complete_data[env_indices] * mask).view(-1, mask.shape[-1]),
-                            rev=True,
-                        )),
+                        Y=s(
+                            env_cinn(
+                                x=x_range,
+                                condition=(complete_data[env_indices] * mask).view(
+                                    -1, mask.shape[-1]
+                                ),
+                                rev=True,
+                            )
+                        ),
                         win=vis_wins["map"][env],
                         opts=dict(title=f"Forward Map Env {env}"),
                     )
@@ -732,10 +736,15 @@ if __name__ == "__main__":
                     )
         epoch_pbar.set_description(
             str(
-                sorted({
-                    possible_parents[idx]: round(mask.cpu().numpy().flatten()[idx], 2)
-                    for idx in range(len(possible_parents))
-                }.items(), key=lambda x: x[0])
+                sorted(
+                    {
+                        possible_parents[idx]: round(
+                            mask.cpu().numpy().flatten()[idx], 2
+                        )
+                        for idx in range(len(possible_parents))
+                    }.items(),
+                    key=lambda x: x[0],
+                )
             )
         )
 

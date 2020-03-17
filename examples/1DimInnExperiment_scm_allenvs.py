@@ -525,18 +525,16 @@ def train(epochs=300, use_visdom=True):
                 # we need to repeat the input by the number of monte carlo samples we generate in the
                 # l0 masker network, as this is the number of repeated, different maskings of the data.
                 target_batch_data = target_data[batch_indices].view(-1, 1)
-                masked_batch_data_per_mask = masked_batch_data.view(mask_rep_size, this_batch_size, -1)
+                masked_batch_data_per_mask = masked_batch_data.view(
+                    mask_rep_size, this_batch_size, -1
+                )
 
                 for masked_condition_data in masked_batch_data_per_mask:
                     gauss_sample = env_cinn(
-                        x=target_batch_data,
-                        condition=masked_condition_data,
-                        rev=False,
+                        x=target_batch_data, condition=masked_condition_data, rev=False,
                     )
                     log_grad = env_cinn.log_jacobian_cache
-                    inn_loss += inn_max_likelihood_loss(
-                        gauss_sample, log_grad
-                    )
+                    inn_loss += inn_max_likelihood_loss(gauss_sample, log_grad)
                 inn_loss /= mask_rep_size
 
                 # we need to repeat the input by the number of monte carlo samples we generate in the
@@ -591,9 +589,9 @@ def train(epochs=300, use_visdom=True):
             l0_batch_losses.append(l0_loss.item())
 
             batch_loss = (
-                    hyperparams["inn"] * inn_loss
-                    + hyperparams["env"] * env_distribution_distance
-                    + hyperparams["l0"] * l0_loss
+                hyperparams["inn"] * inn_loss
+                + hyperparams["env"] * env_distribution_distance
+                + hyperparams["l0"] * l0_loss
             )
 
             if use_visdom:
@@ -644,9 +642,7 @@ def train(epochs=300, use_visdom=True):
                             .to(dev)
                         )
                         gauss_sample = env_cinn(
-                            x=torch.randn(
-                                env_indices.size, 1, device=dev
-                            ),
+                            x=torch.randn(env_indices.size, 1, device=dev),
                             condition=(complete_data[env_indices] * mask).view(
                                 -1, mask.shape[-1]
                             ),

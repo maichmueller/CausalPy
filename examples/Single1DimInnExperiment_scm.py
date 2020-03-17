@@ -306,9 +306,7 @@ def inn_max_likelihood_loss(gauss_sample, log_grad):
 
 def train(epochs, use_visdom):
     dim_condition = complete_data.shape[1]
-    cinn = cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition).to(
-        dev
-    )
+    cinn = cINN(nr_blocks=3, dim=1, nr_layers=30, dim_condition=dim_condition).to(dev)
     l0_masker_net = L0InputGate(
         complete_data.shape[1], monte_carlo_sample_size=1, device=dev
     ).to(dev)
@@ -349,8 +347,8 @@ def train(epochs, use_visdom):
                     torch.as_tensor(
                         np.linspace(*quantiles_envs[env], complete_data.shape[0])
                     )
-                        .unsqueeze(1)
-                        .to(dev)
+                    .unsqueeze(1)
+                    .to(dev)
                 )
                 gauss_sample = cinn(
                     x=x,
@@ -386,7 +384,7 @@ def train(epochs, use_visdom):
     cinn_losses = []
     l0_losses = []
     nr_total_samples = complete_data.shape[0]
-    hyperparams = {"l0": .2, "env": 5, "inn": 2}
+    hyperparams = {"l0": 0.2, "env": 5, "inn": 2}
     epoch_pbar = tqdm(range(epochs))
     batch_size = min(1000, complete_data.shape[0])
     sampler = StratifiedSampler(
@@ -430,12 +428,16 @@ def train(epochs, use_visdom):
             # we need to repeat the input by the number of monte carlo samples we generate in the
             # l0 masker network, as this is the number of repeated, different maskings of the data.
             target_batch_data = (
-                target_data[batch_indices].repeat(mask_rep_size, 1).view(mask_rep_size, -1, 1)
+                target_data[batch_indices]
+                .repeat(mask_rep_size, 1)
+                .view(mask_rep_size, -1, 1)
             )
             # compute the INN loss per mask, then average over the loss outcome with respect to the number of masks.
             inn_loss = torch.zeros(1, device=dev)
             samples_per_mask = []
-            for target_batch_data_for_mask, masked_condition_data in zip(target_batch_data, masked_batch_data):
+            for target_batch_data_for_mask, masked_condition_data in zip(
+                target_batch_data, masked_batch_data
+            ):
                 samples_per_mask_per_env = []
                 # for env, env_indices in env_map.items():
                 gauss_sample = cinn(
@@ -459,9 +461,7 @@ def train(epochs, use_visdom):
             generated_samples = samples_per_mask
             for gen_samples_mask_i in generated_samples:
                 loss_per_mask = 0
-                gauss_sample = torch.randn(
-                    gen_samples_mask_i.size(0), 1, device=dev
-                )
+                gauss_sample = torch.randn(gen_samples_mask_i.size(0), 1, device=dev)
                 loss_per_mask += wasserstein(gauss_sample, gen_samples_mask_i)
 
                 env_distribution_distance += loss_per_mask
@@ -474,9 +474,9 @@ def train(epochs, use_visdom):
             l0_batch_losses.append(l0_loss.item())
 
             batch_loss = (
-                    hyperparams["inn"] * inn_loss
-                    # + hyperparams["env"] * env_distribution_distance
-                    + hyperparams["l0"] * l0_loss
+                hyperparams["inn"] * inn_loss
+                # + hyperparams["env"] * env_distribution_distance
+                + hyperparams["l0"] * l0_loss
             )
             # batch_distr_losses.append(env_distribution_distance.item())
             batch_inn_losses.append(batch_loss.item())
@@ -549,9 +549,7 @@ def train(epochs, use_visdom):
                 loss_windows["dist"],
                 "Distributional Distance Loss Behaviour",
             )
-            visdom_plot_loss(
-                cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour"
-            )
+            visdom_plot_loss(cinn_losses, loss_windows["cinn"], "CINN Loss Behaviour")
             visdom_plot_loss(l0_losses, loss_windows["l0"], "L0 Loss Behaviour")
             if not use_ground_truth_mask:
                 mask = l0_masker_net.final_layer().detach().flatten()
@@ -569,8 +567,8 @@ def train(epochs, use_visdom):
                                     target_data[env_indices].shape[0],
                                 )
                             )
-                                .unsqueeze(1)
-                                .to(dev)
+                            .unsqueeze(1)
+                            .to(dev)
                         )
                         gauss_sample = cinn(
                             x=torch.randn(env_indices.size, 1, device=dev),
@@ -584,9 +582,9 @@ def train(epochs, use_visdom):
                             Y=s(
                                 cinn(
                                     x=x_range,
-                                    condition=(
-                                            complete_data[env_indices] * mask
-                                    ).view(-1, mask.shape[-1]),
+                                    condition=(complete_data[env_indices] * mask).view(
+                                        -1, mask.shape[-1]
+                                    ),
                                     rev=True,
                                 )
                             ),
@@ -626,6 +624,7 @@ def train(epochs, use_visdom):
         )
     }
     return results
+
 
 if __name__ == "__main__":
 

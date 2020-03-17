@@ -150,7 +150,7 @@ def build_scm_exponential(seed=0):
 
 
 def build_scm_medium(seed=0):
-    scale = .5
+    scale = 0.5
     cn = SCM(
         assignment_map={
             "X_0": (
@@ -202,13 +202,13 @@ def build_scm_medium(seed=0):
 
 
 def build_scm_large(seed=0):
-    scale = .5
+    scale = 0.5
     cn = SCM(
         assignment_map={
             "X_0": (
                 [],
                 LinearAssignment(1),
-                NoiseGenerator("normal", loc=0, scale=scale, seed=seed)
+                NoiseGenerator("normal", loc=0, scale=scale, seed=seed),
             ),
             "X_1": (
                 ["X_0"],
@@ -274,7 +274,7 @@ def build_scm_large(seed=0):
 def generate_data_from_scm(
     scm,
     target_var=None,
-    markovblanket_interv_only=True,
+    intervention_style="markov",
     countify=False,
     sample_size=100,
     seed=None,
@@ -298,8 +298,15 @@ def generate_data_from_scm(
     sample = scm.sample(sample_size_per_env)
     sample_data = [sample[variables]]
     environments += [0] * sample_size_per_env
-    if markovblanket_interv_only:
+    if intervention_style == "markov":
         interv_variables = set(target_parents)
+        for child in scm.graph.successors(target_var):
+            child_pars = set(scm.graph.predecessors(child))
+            child_pars = child_pars.union([child])
+            child_pars.remove(target_var)
+            interv_variables = interv_variables.union(child_pars)
+    elif intervention_style == "children":
+        interv_variables = set([])
         for child in scm.graph.successors(target_var):
             child_pars = set(scm.graph.predecessors(child))
             child_pars = child_pars.union([child])

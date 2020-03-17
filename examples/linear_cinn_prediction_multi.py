@@ -17,7 +17,10 @@ from causalpy.neural_networks import cINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.causal_prediction.interventional import ICPredictor, MultiAgnosticPredictor
+from causalpy.causal_prediction.interventional import (
+    ICPredictor,
+    MultiAgnosticPredictor,
+)
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go

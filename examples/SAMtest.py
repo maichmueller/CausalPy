@@ -3,6 +3,7 @@ from cdt.causality.graph.SAM import SAM
 from causalpy.bayesian_graphs import LinearAssignment, NoiseGenerator, SCM
 import torch
 
+
 def build_scm_medium(seed=0):
     cn = SCM(
         assignment_map={
@@ -54,9 +55,10 @@ def build_scm_medium(seed=0):
     return cn
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import networkx as nx
     import matplotlib.pyplot as plt
+
     scm = build_scm_medium(0)
     data = scm.sample(10000)
     sam = SAM(train_epochs=100, test_epochs=10, nh=10, dnh=10, nruns=10, njobs=1)

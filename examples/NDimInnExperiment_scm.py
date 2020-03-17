@@ -193,7 +193,7 @@ def generate_data_from_scm(seed=None, countify=False):
             ),
             columns=data.columns,
         )
-        data += np.random.normal(0, .1, size=data.shape)
+        data += np.random.normal(0, 0.1, size=data.shape)
 
     environments = np.array(environments)
     target_data = data[target_var]
@@ -227,40 +227,47 @@ if __name__ == "__main__":
     # Data Generation #
     ###################
 
-    data, target_data, envs_unique, env_map, scm, target_var = generate_data_from_scm(seed)
+    data, target_data, envs_unique, env_map, scm, target_var = generate_data_from_scm(
+        seed
+    )
     target_parents = list(scm.graph.predecessors(target_var))
     possible_parents = list(scm.get_variables())
     possible_parents.remove(target_var)
-    target_parents_indices = np.array([list(scm.get_variables()).index(par) for par in target_parents])
+    target_parents_indices = np.array(
+        [list(scm.get_variables()).index(par) for par in target_parents]
+    )
 
     ####################
     # Model Generation #
     ####################
     def subnet_fc(c_in, c_out):
-        return torch.nn.Sequential(torch.nn.Linear(c_in, 512), torch.nn.ReLU(),
-                                   torch.nn.Linear(512, c_out))
+        return torch.nn.Sequential(
+            torch.nn.Linear(c_in, 512), torch.nn.ReLU(), torch.nn.Linear(512, c_out)
+        )
 
     dim_condition = data.size(1)
-    cond = Ff.ConditionNode(dim_condition, name='condition')
+    cond = Ff.ConditionNode(dim_condition, name="condition")
     nr_envs = envs_unique[-1]
-    nodes = [Ff.InputNode(nr_envs, name='input')]
+    nodes = [Ff.InputNode(nr_envs, name="input")]
 
     for k in range(3):
-        nodes.append(Ff.Node(nodes[-1],
-                             Fm.GLOWCouplingBlock,
-                             {'subnet_constructor': subnet_fc, 'clamp': 2.0},
-                             conditions=cond,
-                             name=F'coupling_{k}'))
+        nodes.append(
+            Ff.Node(
+                nodes[-1],
+                Fm.GLOWCouplingBlock,
+                {"subnet_constructor": subnet_fc, "clamp": 2.0},
+                conditions=cond,
+                name=f"coupling_{k}",
+            )
+        )
 
-    nodes.append(Ff.OutputNode(nodes[-1], name='output'))
+    nodes.append(Ff.OutputNode(nodes[-1], name="output"))
     cinn = Ff.ReversibleGraphNet(nodes + [cond]).to(dev)
 
     l0mask = L0InputGate(dim_condition, monte_carlo_sample_size=10).to(dev)
 
     optimizer = torch.optim.Adam(
-        itertools.chain(
-            l0mask.parameters(), cinn.parameters()
-        ),
+        itertools.chain(l0mask.parameters(), cinn.parameters()),
         lr=0.01,
         # weight_decay=1e-5,
     )
@@ -275,18 +282,22 @@ if __name__ == "__main__":
 
         plot_linspace.append(
             torch.as_tensor(np.linspace(*quantiles_envs[env], data.shape[0]))
-                .unsqueeze(1)
-                .to(dev)
+            .unsqueeze(1)
+            .to(dev)
         )
     plot_linspace = torch.stack(plot_linspace)
     gauss_samples = cinn(
-        x=plot_linspace, c=torch.zeros(int(data.shape[0]), int(dim_condition)).to(dev), rev=False
+        x=plot_linspace,
+        c=torch.zeros(int(data.shape[0]), int(dim_condition)).to(dev),
+        rev=False,
     )
 
     for env in envs_unique:
         vis_wins["map"].append(
             viz.line(
-                X=s(plot_linspace), Y=s(gauss_samples[env]), opts=dict(title=f"Forward Map Env {env}")
+                X=s(plot_linspace),
+                Y=s(gauss_samples[env]),
+                opts=dict(title=f"Forward Map Env {env}"),
             )
         )
         vis_wins["density"].append(
@@ -297,7 +308,8 @@ if __name__ == "__main__":
             )
         )
         vis_wins["ground_truth"] = viz.histogram(
-            X=target_data[env_map[env]], opts=dict(numbins=20, title=f"Target data histogram Env {env}")
+            X=target_data[env_map[env]],
+            opts=dict(numbins=20, title=f"Target data histogram Env {env}"),
         )
 
     loss_win = viz.line(
@@ -325,9 +337,7 @@ if __name__ == "__main__":
         # masked_conditional_data = data
         loss = torch.zeros(1).to(dev)
         gauss_samples = cinn(
-            x=target_data.unsqueeze(1),
-            c=masked_conditional_data,
-            rev=False,
+            x=target_data.unsqueeze(1), c=masked_conditional_data, rev=False,
         )
 
         log_grad = cinn.log_jacobian_cache
@@ -344,12 +354,13 @@ if __name__ == "__main__":
 
         sample_size = 10
         target_samples = cinn(
-            x=torch.randn(masked_conditional_data.shape[0] * sample_size, nr_envs).to(dev),
+            x=torch.randn(masked_conditional_data.shape[0] * sample_size, nr_envs).to(
+                dev
+            ),
             c=masked_conditional_data.repeat(sample_size, 1),
             rev=True,
         ).view(sample_size, masked_conditional_data.shape[0], nr_envs)
         # print(target_sample)
-
 
         # all environmental distributions of Y should become equal, thus use
         # MMD to measure the distance of their distributions.
@@ -363,7 +374,8 @@ if __name__ == "__main__":
         unbound_targ_samples_env_0 = torch.unbind(target_samples[:, :, 0], dim=1)
         for env in envs_unique:
             for y_c_samples_env_0, y_c_samples_env_i in zip(
-                    unbound_targ_samples_env_0, torch.unbind(target_samples[:, :, env], dim=1),
+                unbound_targ_samples_env_0,
+                torch.unbind(target_samples[:, :, env], dim=1),
             ):
                 mmd_loss = mmd_multiscale(
                     y_c_samples_env_0.view(-1, 1), y_c_samples_env_i.view(-1, 1)
@@ -374,9 +386,7 @@ if __name__ == "__main__":
         if epoch % 1 == 0:
             # plot the distribution of the environment
             x_range = plot_linspace
-            gauss_sample = cinn(
-                x=x_range, condition=masked_conditional_data, rev=False
-            )
+            gauss_sample = cinn(x=x_range, condition=masked_conditional_data, rev=False)
             viz.line(
                 X=s(x_range),
                 Y=s(gauss_sample),
@@ -415,7 +425,10 @@ if __name__ == "__main__":
         optimizer.step()
         epoch_pbar.set_description(
             str(
-                {possible_parents[idx]: round(curr_mask[idx], 2) for idx in target_parents_indices}
+                {
+                    possible_parents[idx]: round(curr_mask[idx], 2)
+                    for idx in target_parents_indices
+                }
             )
         )
 

@@ -451,8 +451,10 @@ class L0InputGate(torch.nn.Module):
             try:
                 mask = mask.view(-1, 1, self.n_dim)
             except RuntimeError as e:
-                raise RuntimeError(f"{e}. Provided mask must be broad-castable to shape "
-                                   f"([any > 0], 1, n_dim) with n_dim = {self.n_dim}")
+                raise RuntimeError(
+                    f"{e}. Provided mask must be broad-castable to shape "
+                    f"([any > 0], 1, n_dim) with n_dim = {self.n_dim}"
+                )
             self.gates = mask
 
         x = x.repeat(self.mcs_size, 1).view(self.mcs_size, batch_size, self.n_dim)

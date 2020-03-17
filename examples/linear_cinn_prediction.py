@@ -42,11 +42,11 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            (build_scm_minimal, "Y"),
-            (build_scm_basic, "Y"),
-            (build_scm_basic_discrete, "Y"),
-            (build_scm_exponential, "Y"),
-            (build_scm_medium, "Y"),
+            # (build_scm_minimal, "Y"),
+            # (build_scm_basic, "Y"),
+            # (build_scm_basic_discrete, "Y"),
+            # (build_scm_exponential, "Y"),
+            # (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
@@ -62,9 +62,9 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
-            markovblanket_interv_only=False,
+            intervention_style="children",
             target_var=target_var,
-            sample_size=3000,
+            sample_size=1024,
             seed=seed,
         )
         target_parents_indices = np.array(
@@ -80,7 +80,9 @@ if __name__ == "__main__":
         ap = AgnosticPredictor(
             epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
-        results_mask, results_loss = ap.infer(complete_data, environments, target_var, nr_runs=nr_runs, normalize=True)
+        results_mask, results_loss = ap.infer(
+            complete_data, environments, target_var, nr_runs=nr_runs, normalize=True
+        )
         print(results_mask)
 
         # evaluate(
