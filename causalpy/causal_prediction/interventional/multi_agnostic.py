@@ -530,7 +530,6 @@ class MultiAgnosticPredictor(ICPredictor):
     ):
         with torch.no_grad():
             for env_cinn, (env, env_indices) in zip(self.cinns, environments.items()):
-                environment_size = env_indices.size
                 target_approx_sample = self.predict(obs[env_indices])
 
                 targ_hist_fig = go.Figure()
@@ -553,7 +552,7 @@ class MultiAgnosticPredictor(ICPredictor):
                 # Reduce opacity to see all histograms
                 targ_hist_fig.update_traces(opacity=0.5)
                 targ_hist_fig.update_layout(
-                    title=r"Marginal observ. Y vs approx. Y_hat Env. " + str(env)
+                    title=r"Marginal observ. Y and approx. Y_hat Env. " + str(env)
                 )
                 self.viz.plotlyplot(targ_hist_fig, win=f"target_env_{env}")
 
