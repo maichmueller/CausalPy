@@ -28,7 +28,9 @@ from linear_regression_eval import *
 import torch as th
 import math
 from torch.utils.data import Sampler
+import warnings
 
+warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
 
@@ -42,11 +44,11 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            # (build_scm_minimal, "Y"),
-            # (build_scm_basic, "Y"),
-            # (build_scm_basic_discrete, "Y"),
-            # (build_scm_exponential, "Y"),
-            # (build_scm_medium, "Y"),
+            (build_scm_minimal, "Y"),
+            (build_scm_basic, "Y"),
+            (build_scm_basic_discrete, "Y"),
+            (build_scm_exponential, "Y"),
+            (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
@@ -72,18 +74,22 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 50
+        nr_runs = 10
 
-        epochs = 300
+        epochs = 600
         use_visdom = 0
 
         ap = AgnosticPredictor(
             epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
         )
-        results_mask, results_loss = ap.infer(
+        results_mask, results_loss, res_str = ap.infer(
             complete_data, environments, target_var, nr_runs=nr_runs, normalize=True
         )
-        print(results_mask)
+        last_losses = [
+            {key: results_loss[i][key][-1] for key in results_loss[0].keys()}
+            for i in range(len(results_loss))
+        ]
+        print(res_str)
 
         # evaluate(
         #     complete_data,

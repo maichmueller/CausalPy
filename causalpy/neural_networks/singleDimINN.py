@@ -26,15 +26,17 @@ class CouplingBase(torch.nn.Module, ABC):
         self.nr_layers = nr_layers
         self.nr_inverse_iters = 10
 
+        # dummy buffers which become filled with parameters for the non conditional case.
+        # otherwise these will hold the values given by the conditional net.
         self.mat_like_params = [
-            torch.randn(1, dim, nr_layers, requires_grad=False),
-            torch.randn(1, dim, nr_layers, requires_grad=False),
-            torch.randn(1, dim, nr_layers, requires_grad=False),
+            torch.empty(1, self.dim, self.nr_layers),
+            torch.empty(1, self.dim, self.nr_layers),
+            torch.empty(1, self.dim, self.nr_layers),
         ]
         self.vec_like_params = [
-            torch.randn(1, dim, requires_grad=False),  # bias2
-            torch.ones(1, dim, requires_grad=False) * -1,  # eps
-            torch.zeros(1, dim, requires_grad=False),  # alpha
+            torch.empty(1, self.dim),  # bias2
+            torch.empty(1, self.dim),  # eps
+            torch.empty(1, self.dim),  # alpha
         ]
 
         self.is_conditional = dim_condition > 0
@@ -62,6 +64,7 @@ class CouplingBase(torch.nn.Module, ABC):
         else:
             # only in the case of no conditional neural network are these trainable parameters.
             # Otherwise their data will be provided by the condition generating network.
+            self.reset_parameters()
             self.mat_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
@@ -74,6 +77,28 @@ class CouplingBase(torch.nn.Module, ABC):
                     for tensor in self.vec_like_params
                 ]
             )
+
+    def reset_parameters(self):
+        if self.is_conditional:
+            with torch.no_grad():
+                if isinstance(self.conditional_net, torch.nn.Sequential):
+                    for layer in self.conditional_net:
+                        if list(layer.parameters()):
+                            # true if the layer has any parameters (e.g. false for a ReLu)
+                            layer.reset_parameters()
+                else:
+                    # in case the net is external we expect it to have a reset parameters method.
+                    self.conditional_net.reset_parameters()
+        else:
+            self._reset_conditional_parameters()
+
+    def _reset_conditional_parameters(self):
+        with torch.no_grad():
+            for mat in self.mat_like_params:
+                mat.normal_(mean=0, std=1)
+            self.bias2.normal_(mean=0, std=1)
+            self.eps.fill_(value=-1)
+            self.alpha.fill_(value=0)
 
     @property
     def mat1(self):
@@ -103,12 +128,12 @@ class CouplingBase(torch.nn.Module, ABC):
         self,
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
-        rev: bool = False,
+        reverse: bool = False,
     ):
         if self.is_conditional:
             self.set_conditional_params(condition)
 
-        if not rev:
+        if not reverse:
             self.log_jacobian_cache = torch.log(self.transform_deriv(x))
             return self.transform(x)
         else:
@@ -130,7 +155,7 @@ class CouplingBase(torch.nn.Module, ABC):
         """
         yn = y  # * torch.exp(-self.alpha) - self.bias2
         with torch.no_grad():
-            for i in range(nr_iters-1):
+            for i in range(nr_iters - 1):
                 yn = yn - (self.transform(yn) - y) / self.transform_deriv(yn)
         return yn - (self.transform(yn) - y) / self.transform_deriv(yn)
 
@@ -257,13 +282,21 @@ class cINN(torch.nn.Module):
         dim_condition,
         nr_blocks: int = 3,
         nr_layers: int = 16,
+        normalize_forward: bool = True,
         conditional_net: Optional[torch.nn.Module] = None,
-        device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu"
+        device: Union[str, torch.device] = "cuda"
+        if torch.cuda.is_available()
+        else "cpu",
     ):
         super().__init__()
         self.nr_blocks = nr_blocks
+
+        # whether we pass through the network in the forward or backward direction for normalizing.
+        self.normalize_forward = normalize_forward
+
         if conditional_net is not None:
             conditional_net = conditional_net.to(device)
+
         self.blocks = torch.nn.ModuleList([])
         for i in range(nr_blocks):
             self.blocks.append(
@@ -272,7 +305,7 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
-                    device=device
+                    device=device,
                 )
             )
             self.blocks.append(
@@ -281,7 +314,7 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
-                    device=device
+                    device=device,
                 )
             )
         self.log_jacobian_cache = torch.zeros(dim)
@@ -290,16 +323,44 @@ class cINN(torch.nn.Module):
         self,
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
-        rev: bool = False,
+        reverse: bool = False,
     ):
         self.log_jacobian_cache = 0.0
 
-        block_iter = self.blocks[::-1] if rev else self.blocks
+        block_iter = self.blocks[::-1] if reverse else self.blocks
         for block in block_iter:
-            x = block(x=x, condition=condition, rev=rev)
+            x = block(x=x, condition=condition, reverse=reverse)
             self.log_jacobian_cache += block.jacobian()
 
         return x
+
+    def normalizing_flow(
+        self, x: torch.Tensor, condition: Optional[torch.Tensor] = None,
+    ):
+        """
+        Transport the incoming target samples `x` under condition `condition` to the gauss distribution.
+        This is referred to as the normalizing flow direction.
+
+        Notes
+        -----
+        Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
+        in the parameter `normalize_forward`.
+        """
+        return self(x, condition=condition, reverse=not self.normalize_forward)
+
+    def generating_flow(
+        self, z: torch.Tensor, condition: Optional[torch.Tensor] = None,
+    ):
+        """
+        Transport the incoming gaussian samples `x` under condition `condition` to the target distribution.
+        This is referred to as the generating flow direction.
+
+        Notes
+        -----
+        Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
+        in the parameter `normalize_forward`.
+        """
+        return self(z, condition=condition, reverse=self.normalize_forward)
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):
         if x is None:
@@ -308,6 +369,10 @@ class cINN(torch.nn.Module):
             return get_jacobian(
                 self, x, dim_in=1, dim_out=1, device=self.device, rev=rev
             )
+
+    def reset_parameters(self):
+        for block in self.blocks:
+            block.reset_parameters()
 
 
 class CN(torch.nn.Module):
@@ -336,7 +401,7 @@ class CN(torch.nn.Module):
             return x
         else:
             for block in self.blocks[::-1]:
-                x = block.forward(x, y, rev=True)
+                x = block.forward(x, y, reverse=True)
                 self.log_jacobian += block.jacobian(x)
             return x
 

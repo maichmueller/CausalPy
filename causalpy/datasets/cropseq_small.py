@@ -1,9 +1,11 @@
 import pandas as pd
 import networkx as nx
+import os
 
 
 def load_cropseq_small():
-    data = pd.read_csv("./causalpy/datasets/data/CROPseq_data_small.csv").drop(
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    data = pd.read_csv(os.path.join(dir_path, "data/CROPseq_data_small.csv")).drop(
         columns=["Unnamed: 0", "cell.barcode"]
     )
     gene_names = pd.unique(data["gene_targeted"])

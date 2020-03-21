@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import nn, distributions, Tensor
 
 
 class CVAE(nn.Module):
@@ -20,7 +20,14 @@ class CVAE(nn.Module):
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
 
-    def encode(self, x, c):
+    def normalizing_flow(self, x: Tensor, c: Tensor):
+        z_mu, z_var = self.encode(x, c)
+        return torch.distributions.Normal(z_mu, z_var).rsample(x.size(0))
+
+    def generating_flow(self, z: Tensor, c: Tensor):
+        return self.decode(z, c)
+
+    def encode(self, x: Tensor, c: Tensor):
         """
         Q(z|x, c)
 
@@ -33,7 +40,7 @@ class CVAE(nn.Module):
         z_var = self.fc22(h1)
         return z_mu, z_var
 
-    def reparametrize(self, mu, logvar):
+    def reparametrize(self, mu: Tensor, logvar: Tensor):
         if self.training:
             std = logvar.mul(0.5).exp_()
             eps = std.data.new(std.size()).normal_()
@@ -42,7 +49,7 @@ class CVAE(nn.Module):
         else:
             return mu
 
-    def decode(self, z, c):
+    def decode(self, z: Tensor, c: Tensor):
         """
         P(x|z, c)
 
@@ -53,7 +60,7 @@ class CVAE(nn.Module):
         h3 = self.relu(self.fc3(inputs))
         return self.sigmoid(self.fc4(h3))
 
-    def forward(self, x, c):
+    def forward(self, x: Tensor, c: Tensor):
         mu, logvar = self.encode(x.view(-1, 28 * 28), c)
         z = self.reparametrize(mu, logvar)
         return self.decode(z, c), mu, logvar

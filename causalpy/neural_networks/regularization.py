@@ -13,7 +13,7 @@ from typing import (
 )
 
 import torch
-from torch.nn import Hardtanh
+from torch.nn import Hardtanh, init
 from torch.distributions import RelaxedBernoulli, Distribution
 import numpy as np
 from numpy.random import Generator
@@ -428,12 +428,12 @@ class L0InputGate(torch.nn.Module):
             if device is None
             else device
         )
-
+        self.initial_gate_value = initial_sparsity_rate
         self.log_alpha = torch.nn.Parameter(
-            initial_sparsity_rate + 1e-2 * torch.randn(1, dim_input), requires_grad=True
+            torch.empty(1, dim_input), requires_grad=True
         )
-        self.beta = torch.nn.Parameter(0.1 * torch.ones(1), requires_grad=True)
-        # self.beta = 0.1 * torch.ones(1, device=self.device)
+        self.beta = torch.nn.Parameter(torch.empty(1), requires_grad=True)
+        self.reset_parameters()
         self.gamma = gamma
         self.zeta = zeta
         self.mcs_size = monte_carlo_sample_size
@@ -441,6 +441,11 @@ class L0InputGate(torch.nn.Module):
 
         self.hardTanh = torch.nn.Hardtanh(0, 1)
         self.sigmoid = torch.nn.Sigmoid()
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            self.log_alpha.normal_(mean=self.initial_gate_value, std=1e-2)
+            self.beta.fill_(0.66)
 
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None):
         batch_size = x.shape[0]

@@ -37,25 +37,27 @@ class ICPredictor(ABC):
     def preprocess_input(
         self,
         obs: Union[pd.DataFrame, np.ndarray],
-        target_variable: Hashable,
+        target_name: Hashable,
         envs: Union[List, Tuple, np.ndarray],
         normalize: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray, Dict]:
+
         self.n, self.p = obs.shape[0], obs.shape[1] - 1
         assert (
             len(envs) == self.n
         ), f"Number of observation samples ({len(envs)}) and number of environment labels ({self.n}) have to be equal."
 
-        self.target_name = target_variable
+        self.target_name = target_name
 
         if normalize:
-            obs = np.subtract(obs, obs.mean(1)[:, np.newaxis])
-            obs = np.divide(obs, obs.std(1)[:, np.newaxis])
+            mean = obs.mean(0)
+            std = obs.std(0)
+            obs = np.divide(np.subtract(obs, mean[np.newaxis, :]), std[np.newaxis, :])
 
         if isinstance(obs, pd.DataFrame):
             self.variables = obs.columns.values
-            target = obs[target_variable].to_numpy().flatten()
-            obs = obs.drop(columns=[target_variable])
+            target = obs[target_name].to_numpy().flatten()
+            obs = obs.drop(columns=[target_name])
             self.index_to_varname = pd.Series(obs.columns, index=range(self.p))
             self.varname_to_index = pd.Series(range(self.p), index=obs.columns)
             obs = obs.to_numpy()
@@ -63,18 +65,19 @@ class ICPredictor(ABC):
         elif isinstance(obs, np.ndarray):
             self.index_to_varname = pd.Series(np.arange(self.p))
             self.variables = self.index_to_varname.values
-            target = obs[:, target_variable].flatten()
-            obs = np.delete(obs, target_variable, axis=1)
+            target = obs[:, target_name].flatten()
+            obs = np.delete(obs, target_name, axis=1)
             itv = self.index_to_varname
-            target_index = itv[itv == target_variable].index
+            target_index = itv[itv == target_name].index
             self.varname_to_index = (itv.loc[target_index + 1 :] - 1).drop(
-                index=target_variable
+                index=target_name
             )
         else:
             raise ValueError(
                 "Observations have to be passed as a pandas DataFrame or numpy ndarray."
             )
 
+        # dict of env -> env indices.
         environments = {env: np.where(envs == env)[0] for env in np.unique(envs)}
 
         return obs, target, environments

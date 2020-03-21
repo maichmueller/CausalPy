@@ -317,7 +317,7 @@ def generate_data_from_scm(
 
     # perform interventions on selected variables
     for parent in interv_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 3
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * 10
         # interv_value = 0
         scm.do_intervention([parent], [interv_value])
         print(

@@ -24,10 +24,12 @@ from plotly import graph_objs as go
 from build_scm_funcs import *
 from linear_regression_eval import *
 from causalpy.datasets import HeinzeData
+from causalpy.utils import TempFolder
 
 import torch as th
 import math
 from torch.utils.data import Sampler
+import logging
 
 
 if __name__ == "__main__":
@@ -35,34 +37,57 @@ if __name__ == "__main__":
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
     np.random.seed(seed)
+    nr_heinze_configs = 100
+    for i_heinze_cfg in range(nr_heinze_configs):
 
-    ###################
-    # Data Generation #
-    ###################
+        with open(f"./results/heinzeRun_{i_heinze_cfg}.log", "w") as f:
+            data_configurator = HeinzeData()
+            data, target, envs = data_configurator.sample()
+            target_parents = list(data_configurator.scm[target][0])
+            possible_parents = list(data.columns)
+            target_parents_indices = np.array(
+                [possible_parents.index(par) for par in target_parents]
+            )
 
-    data_configurator = HeinzeData()
-    data, target, envs = data_configurator.sample()
-    target_parents = list(data_configurator.scm[target][0])
-    possible_parents = list(data.columns)
-    target_parents_indices = np.array(
-        [possible_parents.index(par) for par in target_parents]
-    )
-    print("Config")
-    for key, val in data_configurator.config.items():
-        print(f"{key}:", val)
-    print(data_configurator.scm)
-    nr_envs = np.unique(envs).max() + 1
+            nr_envs = np.unique(envs).max() + 1
 
-    nr_runs = 5
+            nr_runs = 10
 
-    epochs = 300
-    use_visdom = 0
+            epochs = 300
+            use_visdom = 0
 
-    ap = AgnosticPredictor(
-        epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
-    )
-    results_mask, results_loss = ap.infer(
-        data, envs, target, nr_runs=nr_runs, normalize=True
-    )
-    print(results_mask)
+            ap = AgnosticPredictor(
+                epochs=epochs,
+                batch_size=10000,
+                visualize_with_visdom=bool(use_visdom),
+                masker_network_params=dict(monte),
+            )
+            f.write("Config\n")
+            interv_1 = {
+                f"Intervention 1 variable {var} value": value
+                for var, value in zip(*data_configurator.intervention_values[0])
+            }
+            interv_2 = {
+                f"Intervention 1 variable {var} value": value
+                for var, value in zip(*data_configurator.intervention_values[1])
+            }
+            zip(*data_configurator.intervention_values[1]),
 
+            for key, val in itertools.chain(
+                data_configurator.config.items(),
+                interv_1.items(),
+                interv_2.items(),
+                ap.hyperparams._asdict().items(),
+                ap.masker_net_params.items(),
+                ap.networks_params.items(),
+                ap.scheduler_params.items(),
+                ap.optimizer_params.items(),
+            ):
+                f.write(f"{key}: {val}\n")
+            f.write(f"{data_configurator.scm}\n")
+
+            results_mask, results_loss, res_str = ap.infer(
+                data, envs, target, nr_runs=nr_runs, normalize=True
+            )
+            f.write(f"{res_str}\n")
+            print(res_str)
