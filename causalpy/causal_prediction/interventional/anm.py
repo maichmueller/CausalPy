@@ -21,8 +21,6 @@ import matplotlib.pyplot as plt
 
 from tqdm.auto import tqdm
 
-Hyperparams = namedtuple("Hyperparams", "alpha beta gamma")
-
 
 class ANMPredictor(ICPredictor):
     def __init__(
@@ -115,116 +113,6 @@ class ANMPredictor(ICPredictor):
         self.optimizer.add_param_group({"params": list(self.network.parameters())})
         self.optimizer.zero_grad()
 
-    def _get_jacobian(self, x: Tensor, dim_in: int = None, dim_out: int = None):
-        r"""
-        Computes the Jacobian matrix for a batch of input data x with respect to the network of the class.
-
-        Notes
-        -----
-        The output Jacobian for this method is potentially the transpose of the definition one might be familiar with.
-        That is, the output Jacobian J is of the form:
-
-        .. math:: J_{ij} = d_i f_j
-
-        or in matrix form:
-
-        .. math:: | d_1 f_1 \quad d_1 f_2 \quad \dots \quad d_1 f_m |
-        .. math:: | d_2 f_1 \quad d_2 f_2 \quad \dots \quad d_2 f_m |
-        .. math:: | ... \quad ... \quad ... \quad ... \quad ...  \quad ... \quad ... \quad ... \quad ... |
-        .. math:: | d_n f_1 \quad d_n f_2 \quad \dots \quad d_n f_m |
-
-
-        Parameters
-        ----------
-        x: Tensor,
-            the data tensor of appropriate shape for the network. Can also be supplied in batches.
-        dim_in: int,
-            the input dimension for data intended for the neural network.
-            If not provided by the user, will be inferred from the network.
-        dim_in: int,
-            the output dimension of the data returned by neural network.
-            If not provided by the user, will be inferred from the network.
-
-        Returns
-        -------
-        Jacobian: Tensor,
-            the jacobian matrix for every entry of data in the batch.
-        """
-        if not self.compute_jacobian_iteratively:
-            if dim_in is None:
-                dim_in = self.network.dim_in
-            if dim_out is None:
-                dim_out = self.network.dim_out
-
-            x = x.squeeze()
-            n = x.size(0)
-
-            # ``torch.autograd.grad`` only returns the product J @ v with J = Jacobian, v = gradient vector, so as to
-            # allow the user to provide external gradients.
-            # Therefore we need to build a matrix of basis vectors v_i = (0, ..., 0, 1, 0, ..., 0), with 1 being on the
-            # i-th position, in order to get each column of J (and with this every derivation of each input variable x_i
-            # and each output function f_j).
-            #
-            # The output of the ``autograd.grad`` method apparently returns a tensor of shape (..., ``dim_out), which
-            # must mean, that the torch definition of J must be J_ij = d_i f_j, thus we need basis vectors of length
-            # ``dim_out`` to get the correct aforementioned matrix product.
-
-            # Unfortunately this also means that we will need to copy the input data ``dim_out`` times, in order to
-            # cover all derivatives. This could be memory costly, if the input is big and might is replaced by iterative
-            # calls to ``grad`` instead in case the memory allocation fails. However, if the data fits into memory, this
-            # should be the faster than an iterative python call to ``autograd.grad``.
-            try:
-                x = x.repeat(dim_out, 1)
-                x.requires_grad_(True)
-
-                z = self.network(x)
-
-                unit_vec_matrix = torch.zeros(
-                    (dim_out * n, dim_out), device=self.device
-                )
-
-                for j in range(dim_out):
-                    unit_vec_matrix[j * n : (j + 1) * n, j] = 1
-
-                grad_data = torch.autograd.grad(
-                    z,
-                    x,
-                    grad_outputs=unit_vec_matrix,
-                    retain_graph=True,
-                    create_graph=True,
-                )[0]
-
-                # we now have the gradient data, but all the derivation vectors D f_j are spread out over ``dim_out``
-                # many repetitive computations. Therefore we need to find all the deriv. vectors belonging to the same
-                # function f_j and put them into the jacobian batch tensor of shape (batch_size, dim_in, dim_out).
-                # This will provide a Jacobian matrix for every batch data entry.
-                jacobian = torch.zeros((n, dim_in, dim_out))
-                for batch_entry in range(n):
-                    jacobian[batch_entry] = torch.cat(
-                        tuple(
-                            grad_data[batch_entry + j * n].view(-1, 1)
-                            for j in range(dim_out)
-                        ),
-                        1,
-                    )
-                return jacobian
-
-            except MemoryError:
-                self.compute_jacobian_iteratively = True
-                return self._get_jacobian(x=x, dim_in=dim_in, dim_out=dim_out)
-
-        else:
-            y = self.network(x)
-            unit_vectors = torch.eye(dim_out)
-            result = [
-                torch.autograd.grad(
-                    outputs=[y], inputs=[x], grad_outputs=[unit_vec], retain_graph=True
-                )[0]
-                for unit_vec in unit_vectors
-            ]
-            jacobian = torch.stack(result, dim=0)
-            return jacobian
-
     @staticmethod
     def _null_data_hook(*args, **kwargs):
         """
@@ -238,7 +126,7 @@ class ANMPredictor(ICPredictor):
 
         residual_ground_truth = kwargs.pop("ground_truth", None)
         if residual_ground_truth is not None:
-            residual_ground_truth = np.array(residual_ground_truth)
+            residual_ground_truth = np.asarray(residual_ground_truth)
 
         visualize = any(kwargs.pop(kwarg, False) for kwarg in ("plot", "visualize"))
         losses = defaultdict(list)
@@ -273,14 +161,22 @@ class ANMPredictor(ICPredictor):
             # Expectation is estimated via the mean of each entry in the jacobian (i.e. gradient in this case, as f is
             # 1-dimensional in its output).
             gradient_abs_expectation = (
-                self._get_jacobian(obs, dim_out=1).abs().mean(dim=0)
+                get_jacobian(
+                    network=self.network,
+                    x=obs,
+                    dim_in=self.network.dim_in,
+                    dim_out=1,
+                    device=self.device,
+                )
+                .abs()
+                .mean(dim=0)
             )
 
             # Loss that computes the dependence of parent variables and residuals per context
             # loss is weighted by expectation of absolute values of the partial derivatives
 
-            # Computing the sigma for when HSIC is being used, as do-interventional data (i.e. a constant value for a
-            # whole environment for a variable) breaks the rbf methods computation.
+            # TODO: Computing the sigma for when HSIC is being used, as do-interventional data (i.e. a constant value for a
+            #  whole environment for a variable) breaks the rbf methods computation. Check out why
             # if self.variable_independence_metric_str == "hsic":
             #     sigma = {var: self.rbf(obs[:, var], obs[:, var]) for var in range(self.p)}
 

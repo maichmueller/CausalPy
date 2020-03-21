@@ -22,6 +22,7 @@ from causalpy.neural_networks import (
     cINN,
 )
 from causalpy.neural_networks.utils import (
+    Hyperparams,
     StratifiedSampler,
     mmd_multiscale,
     wasserstein,
@@ -43,31 +44,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
     under different environments.
     The theory to this predictor follows the paper called INSERT-TITLE-HERE (INSERT-LINK-HERE).
     """
-
-    class Hyperparams:
-        """
-        Data struct holding the hyperparams of the model in one place.
-        """
-
-        def __init__(
-            self,
-            l0: float = 0.5,
-            env: float = 1,
-            inn: float = 1,
-            independence: float = 0.5,
-            l2: float = 0.01,
-            **ignored_kwargs,
-        ):
-            self.l0 = l0
-            self.env = env
-            self.inn = inn
-            self.independence = independence
-            self.l2 = l2
-
-        def update(self, param_dict: Dict[str, float]):
-            for loss_name, hyper_param in param_dict.items():
-                if hasattr(self, loss_name):
-                    setattr(self, loss_name, hyper_param)
 
     def __init__(
         self,
@@ -95,7 +71,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             self.device = device
         self.batch_size = batch_size
         self.epochs = epochs
-        self.hyperparams = AgnosticPredictorBase.Hyperparams()
+        self.hyperparams = Hyperparams(l0=0.5, env=1, inn=1, independence=0.5, l2=0.01)
         if hyperparams is not None:
             self.hyperparams.update(**hyperparams)
 

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union, Dict
 
 import torch
 from torch import Tensor
@@ -193,7 +193,7 @@ def get_jacobian(
     x: Tensor,
     dim_in: int = None,
     dim_out: int = None,
-    device: torch.device = torch.device(
+    device: Union[str, torch.device] = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu",
     ),
     **kwargs,
@@ -282,6 +282,21 @@ def get_jacobian(
             1,
         )
     return jacobian
+
+
+class Hyperparams:
+    """
+    Data struct holding the hyperparams of a neural network architecture in one place.
+    """
+
+    def __init__(
+        self, **hyperparams,
+    ):
+        self.update(hyperparams)
+
+    def update(self, param_dict: Dict[str, float]):
+        for param_name, param_val in param_dict.items():
+            setattr(self, param_name, param_val)
 
 
 if __name__ == "__main__":
