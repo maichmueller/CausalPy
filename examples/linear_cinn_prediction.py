@@ -44,10 +44,10 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            (build_scm_minimal, "Y"),
-            (build_scm_basic, "Y"),
-            (build_scm_basic_discrete, "Y"),
-            (build_scm_exponential, "Y"),
+            # (build_scm_minimal, "Y"),
+            # (build_scm_basic, "Y"),
+            # (build_scm_basic_discrete, "Y"),
+            # (build_scm_exponential, "Y"),
             (build_scm_medium, "Y"),
             (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 10
+        nr_runs = 500
 
         epochs = 600
         use_visdom = 0

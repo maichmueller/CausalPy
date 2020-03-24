@@ -15,6 +15,7 @@ class ICPredictor(ABC):
         self.index_to_varname: pd.Series = pd.Series([])
         self.varname_to_index: pd.Series = pd.Series([])
         self.variables: np.ndarray = np.array([])
+        self.env_start_end: Dict[int, Tuple[int, int]] = dict()
 
         self.log_level = log_level.upper() if isinstance(log_level, str) else log_level
         logging.basicConfig(
@@ -54,31 +55,23 @@ class ICPredictor(ABC):
             std = obs.std(0)
             obs = np.divide(np.subtract(obs, mean[np.newaxis, :]), std[np.newaxis, :])
 
-        if isinstance(obs, pd.DataFrame):
-            self.variables = obs.columns.values
-            target = obs[target_name].to_numpy().flatten()
-            obs = obs.drop(columns=[target_name])
-            self.index_to_varname = pd.Series(obs.columns, index=range(self.p))
-            self.varname_to_index = pd.Series(range(self.p), index=obs.columns)
-            obs = obs.to_numpy()
+        obs = pd.DataFrame(obs)  # force to be a DataFrame
+        obs["ENV"] = envs
+        obs = obs.sort_values(by="ENV")
+        envs = obs["ENV"]
+        obs.drop(columns=["ENV"], inplace=True)
 
-        elif isinstance(obs, np.ndarray):
-            self.index_to_varname = pd.Series(np.arange(self.p))
-            self.variables = self.index_to_varname.values
-            target = obs[:, target_name].flatten()
-            obs = np.delete(obs, target_name, axis=1)
-            itv = self.index_to_varname
-            target_index = itv[itv == target_name].index
-            self.varname_to_index = (itv.loc[target_index + 1 :] - 1).drop(
-                index=target_name
-            )
-        else:
-            raise ValueError(
-                "Observations have to be passed as a pandas DataFrame or numpy ndarray."
-            )
+        self.variables = obs.columns.values
+        target = obs[target_name].to_numpy().flatten()
+        obs.drop(columns=[target_name], inplace=True)
+        self.index_to_varname = pd.Series(obs.columns, index=range(self.p))
+        self.varname_to_index = pd.Series(range(self.p), index=obs.columns)
+        obs = obs.to_numpy()
 
         # dict of env -> env indices.
         environments = {env: np.where(envs == env)[0] for env in np.unique(envs)}
+        for env, indices in environments.items():
+            self.env_start_end[env] = indices[0], indices[-1]
 
         return obs, target, environments
 

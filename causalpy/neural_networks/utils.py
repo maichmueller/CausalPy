@@ -149,7 +149,7 @@ def mmd_multiscale(x: Tensor, y: Tensor, normalize_j=False):
         torch.zeros_like(xx),
     )
 
-    for a in [6e-2, 1e-1, 3e-1, 5e-1, 7e-1, 1, 1.2, 1.5, 1.8, 2, 2.5]:
+    for a in [6e-2, 1e-1, 5e-1, 1, 1.5, 2, 2.5]:
         XX += a ** 2 * (a ** 2 + dxx) ** -1
         YY += a ** 2 * (a ** 2 + dyy) ** -1
         XY += a ** 2 * (a ** 2 + dxy) ** -1
