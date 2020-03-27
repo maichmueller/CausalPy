@@ -129,6 +129,16 @@ def simulate(
     return cn
 
 
+def to_count(sample):
+    rs = np.random.RandomState()
+    return pd.DataFrame(
+        rs.poisson(
+            torch.nn.Softplus(beta=1)(torch.as_tensor(sample.to_numpy())).numpy()
+        ),
+        columns=sample.columns,
+    )
+
+
 def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bins=50):
     if genes is None:
         genes = [g for i, g in enumerate(scm_net.get_variables()) if i < 100]
@@ -166,10 +176,7 @@ def analyze_distributions(scm_net, sample=None, genes=None, figsize=(20, 20), bi
     plt.scatter(mean, var, color="black", alpha=0.1)
     mean_sorted = mean.sort_values()
     plt.plot(
-        mean_sorted,
-        mean_sorted,
-        color="blue",
-        label=r"Poi: Var$(\mu) = \mu$",
+        mean_sorted, mean_sorted, color="blue", label=r"Poi: Var$(\mu) = \mu$",
     )
 
     popt_nb = curve_fit(neg_binomial, mean, var)[0].flatten()

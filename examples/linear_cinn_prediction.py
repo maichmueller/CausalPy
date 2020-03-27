@@ -48,9 +48,9 @@ if __name__ == "__main__":
             # (build_scm_basic, "Y"),
             # (build_scm_basic_discrete, "Y"),
             # (build_scm_exponential, "Y"),
-            (build_scm_medium, "Y"),
-            (build_scm_large, "Y"),
-            # (partial(simulate, nr_genes=15), "G_12"),
+            # (build_scm_medium, "Y"),
+            # (build_scm_large, "Y"),
+            (partial(simulate, nr_genes=100), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
             # (partial(simulate, nr_genes=25), "G_21"),
             # (partial(simulate, nr_genes=30), "G_29"),
@@ -64,7 +64,8 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
-            intervention_style="children",
+            countify=False,
+            intervention_style="markov",
             target_var=target_var,
             sample_size=1024,
             seed=seed,
@@ -74,13 +75,16 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 500
+        nr_runs = 5
 
         epochs = 600
         use_visdom = 0
 
         ap = AgnosticPredictor(
-            epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
+            epochs=epochs,
+            batch_size=100000,
+            visualize_with_visdom=bool(use_visdom),
+            device="cuda:1",
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data, environments, target_var, nr_runs=nr_runs, normalize=True

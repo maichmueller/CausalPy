@@ -45,12 +45,12 @@ if __name__ == "__main__":
 
     for i, (scm_generator, target_var) in enumerate(
         [
-            # (build_scm_minimal, "Y"),
-            # (build_scm_basic, "Y"),
-            # (build_scm_basic_discrete, "Y"),
-            # (build_scm_exponential, "Y"),
+            (build_scm_minimal, "Y"),
+            (build_scm_basic, "Y"),
+            (build_scm_basic_discrete, "Y"),
+            (build_scm_exponential, "Y"),
             (build_scm_medium, "Y"),
-            # (build_scm_large, "Y"),
+            (build_scm_large, "Y"),
             # (partial(simulate, nr_genes=15), "G_12"),
             # (partial(simulate, nr_genes=20), "G_16"),
             # (partial(simulate, nr_genes=25), "G_21"),
@@ -65,31 +65,41 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
-            markovblanket_interv_only=False,
+            intervention_style="children",
             target_var=target_var,
-            sample_size=3000,
+            sample_size=1024,
             seed=seed,
         )
         target_parents_indices = np.array(
             [possible_parents.index(par) for par in target_parents]
         )
         nr_envs = np.unique(environments).max() + 1
-        nr_repetitions = 1
-        results = []
-        epochs = 300
-        use_visdom = 0
-        # for _ in range(nr_repetitions)
-        ap = MultiAgnosticPredictor(
-            epochs=epochs, batch_size=10000, visualize_with_visdom=bool(use_visdom)
-        )
-        results.append(ap.infer(complete_data, environments, target_var,))
-        print(results[-1])
 
-        evaluate(
-            complete_data,
-            ap,
-            environments,
-            ground_truth_assignment=scm[target_var][1][scm.function_key],
-            x_vars=target_parents,
-            targ_var=target_var,
+        nr_runs = 25
+
+        epochs = 600
+        use_visdom = 0
+
+        ap = MultiAgnosticPredictor(
+            epochs=epochs,
+            batch_size=10000,
+            visualize_with_visdom=bool(use_visdom),
+            device="cuda:1",
         )
+        results_mask, results_loss, res_str = ap.infer(
+            complete_data, environments, target_var, nr_runs=nr_runs, normalize=True
+        )
+        last_losses = [
+            {key: results_loss[i][key][-1] for key in results_loss[0].keys()}
+            for i in range(len(results_loss))
+        ]
+        print(res_str)
+
+        # evaluate(
+        #     complete_data,
+        #     ap,
+        #     environments,
+        #     ground_truth_assignment=scm[target_var][1][scm.function_key],
+        #     x_vars=target_parents,
+        #     targ_var=target_var,
+        # )

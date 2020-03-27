@@ -79,7 +79,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
         # to be defined by the subclass
         self.network_list = []
-        self.network_params = []
+        self.network_params = None
 
         self.masker_net = masker_network
         self.masker_net_params = dict(
@@ -90,7 +90,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
         self.optimizer = None
         self.optimizer_type = optimizer_type
-        self.optimizer_params = dict(lr=1e-3, mask_lr=1e-1)
+        self.optimizer_params = dict(lr=1e-3, mask_lr=1e-2)
         if optimizer_params is not None:
             self.optimizer_params.update(optimizer_params)
 
@@ -154,18 +154,31 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         else:
             self.masker_net.reset_parameters()
         self.masker_net.to(self.device).train()
-        for i, network in enumerate(self.network_list):
-            if network is None:
-                self.network_list[i] = cINN(
-                    dim_condition=self.p, **self.network_params[0]
-                )
-            else:
-                network.reset_parameters()
+        self._reset_networks()
         self.network_list = (
             torch.nn.ModuleList(self.network_list).to(self.device).train()
         )
         self._set_optimizer()
         self._set_scheduler()
+
+    def _reset_networks(self):
+        # this handling is for the multi-agnostic case. We will initialize as many network copies as there are
+        # environments.
+        if not self.network_list:
+            if not self.env_start_end:
+                #  If however no environments have been provided yet either, then we are going to abort.
+                raise ValueError(
+                    "No networks have been set yet, and we have no environment information to set them. "
+                    "Aborting."
+                )
+            # a network per environment
+            self.network_list = [None] * len(self.env_start_end)
+
+        for i, network in enumerate(self.network_list):
+            if network is None:
+                self.network_list[i] = cINN(dim_condition=self.p, **self.network_params)
+            else:
+                network.reset_parameters()
 
     def infer(
         self,
@@ -347,6 +360,13 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         mask = torch.as_tensor(mask)
         return mask
 
+    def _l2_regularization(self):
+        loss = torch.zeros(1, device=self.device)
+        for network in self.network_list:
+            for param in network.parameters():
+                loss += (param ** 2).sum()
+        return loss
+
     def get_mask(self, ground_truth_mask: Optional[Tensor] = None, final=False):
         if ground_truth_mask is not None:
             return ground_truth_mask
@@ -493,7 +513,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.05, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.4, residuals=1, inn=1, independence=0.0, l2=0.0)
         )
         super().__init__(
             masker_network_params=dict(monte_carlo_sample_size=1),
@@ -668,10 +688,10 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 )
 
                 batch_losses["residuals"].append(resid_loss.item())
-                # batch_losses["independence"].append(independence_loss.item())
+                batch_losses["independence"].append(independence_loss.item())
                 batch_losses["cinn"].append(inn_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
-                # batch_losses["l2"].append(l2_loss.item())
+                batch_losses["l2"].append(l2_loss.item())
                 batch_losses["total"].append(batch_loss.item())
 
                 batch_loss.backward()
@@ -725,7 +745,6 @@ class AgnosticPredictor(AgnosticPredictorBase):
     def _residuals_loss(
         self,
         env_gaussians: List[Tuple[Tensor, Tensor]],
-        # env_targets: List[Tuple[Tensor, Tensor]],
         target_env_batch: List[Tensor],
     ):
         """
@@ -749,11 +768,6 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 loss_per_mask += wasserstein(estimate_gauss, true_gauss)
                 # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
                 loss_per_mask += moments(estimate_gauss, true_gauss)
-
-                # estimate_target = target_sample[mask_nr]
-                # loss_per_mask += wasserstein(estimate_target, target_env)
-                # loss_per_mask += mmd_multiscale(estimate_target, target_env)
-                # loss_per_mask += moments(estimate_target, target_env)
 
             resid_losses.append(loss_per_mask / nr_masks)
         return resid_losses
@@ -813,15 +827,21 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         networks_params: Optional[Dict] = None,
         **base_kwargs,
     ):
-        super().__init__(**base_kwargs)
-
+        hyperparams = base_kwargs.pop(
+            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
+        )
+        super().__init__(
+            masker_network_params=dict(monte_carlo_sample_size=1),
+            hyperparams=hyperparams,
+            **base_kwargs,
+        )
         if networks is not None:
             for net in networks:
                 self.network_list.append(net)
         self.network_params = (
             networks_params
             if networks_params is not None
-            else dict(nr_blocks=3, dim=1, nr_layers=30, device=self.device)
+            else dict(nr_blocks=2, dim=1, nr_layers=32, device=self.device)
         )
 
     def _set_optimizer(self, force: bool = False):
@@ -882,11 +902,11 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         mask_training_activated = False
 
         epoch_losses = dict(
-            total=[], invariance=[], cinn=[], independence=[], l0_mask=[], l2=[]
+            total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
         )
         for epoch in epoch_pbar:
             batch_losses = dict(
-                total=[], invariance=[], cinn=[], independence=[], l0_mask=[], l2=[]
+                total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
             )
 
             if epoch > 100 and not mask_training_activated:
@@ -908,45 +928,45 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                     nr_masks, -1, self.p
                 )
                 target_batch = target[batch_indices].view(-1, 1)
-                # batch_indices_by_env = self._batch_indices_by_env(
-                #     batch_indices, environments_map
-                # )
+
                 batch_indices_by_env = {}
                 for env in environments_map.keys():
                     batch_indices_by_env[env] = torch.as_tensor(env_info == env)
 
-                network = self.network_list[0]
-
-                env_gaussians = []
-                env_targets = []
-                target_per_env = []
-                masked_batch_per_env = []
+                gaussian_by_net = []
+                target_by_env = []
+                masked_batch_by_env = []
 
                 # gaussians computation
                 gaussians = []
                 for network in self.network_list:
-                    gauss_sample = network.normalizing_flow(
-                        x=target_batch.repeat(nr_masks, 1), condition=masked_batch,
+                    gauss_sample: Tensor = network.normalizing_flow(
+                        x=target_batch.repeat(nr_masks, 1),
+                        condition=masked_batch.view(-1, self.p),
                     ).view(nr_masks, -1, 1)
-                    gauss_jacobian = network.log_jacobian_cache.view(nr_masks, -1, 1)
-                    gaussians.append(gauss_sample, gauss_jacobian)
+                    gauss_jacobian: Tensor = network.log_jacobian_cache.view(
+                        nr_masks, -1, 1
+                    )
+                    gaussians.append((gauss_sample, gauss_jacobian))
 
                 ##############################
                 # Environmental Segmentation #
                 ##############################
-                for env, (gauss_sample, gauss_jacobian) in enumerate(gaussians):
+                for env_to_cutout, (gauss_sample, gauss_jacobian) in enumerate(
+                    gaussians
+                ):
 
                     this_env_gaussians = []
-                    this_masked_batch_per_env = []
-                    this_target_per_env = []
+                    this_masked_batch_by_env = []
+                    this_target_by_env = []
 
-                    for env_to_cutout, indices_env in batch_indices_by_env.items():
+                    for env, indices_env in batch_indices_by_env.items():
 
                         if env == env_to_cutout:
 
                             this_env_gaussians.append(None)
-                            this_masked_batch_per_env.append(None)
-                            this_target_per_env.append(None)
+                            this_masked_batch_by_env.append(None)
+                            this_target_by_env.append(None)
 
                         else:
 
@@ -956,45 +976,32 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                                     gauss_jacobian[:, indices_env],
                                 )
                             )
-                            this_masked_batch_per_env.append(
+                            this_masked_batch_by_env.append(
                                 masked_batch[:, indices_env]
                             )
-                            this_target_per_env.append(target_batch[indices_env])
+                            this_target_by_env.append(target_batch[indices_env])
 
-                    env_gaussians.append(this_env_gaussians)
-                    masked_batch_per_env.append(this_masked_batch_per_env)
-                    target_per_env.append(this_target_per_env)
+                    gaussian_by_net.append(this_env_gaussians)
+                    masked_batch_by_env.append(this_masked_batch_by_env)
+                    target_by_env.append(this_target_by_env)
 
                 ##########
                 # Losses #
                 ##########
-                inn_loss, env_loss, independence_loss, l0_loss, l2_loss = torch.zeros(
+                inn_loss, resid_loss, independence_loss, l0_loss, l2_loss = torch.zeros(
                     5, device=self.device
                 )
 
                 if self.hyperparams.inn != 0:
-                    inn_loss = torch.max(
-                        torch.cat(self._maxlikelihood_loss(env_gaussians))
-                    )
+                    inn_loss = self._maxlikelihood_loss(gaussian_by_net)
 
-                if self.hyperparams.env != 0:
-                    env_loss = torch.max(
-                        torch.cat(
-                            self._environmental_invariance_loss(
-                                env_gaussians, env_targets, target_per_env
-                            )
-                        )
-                    )
+                if self.hyperparams.residuals != 0:
+                    resid_loss = self._residuals_loss(gaussian_by_net)
 
                 if self.hyperparams.independence != 0:
                     independence_loss = self._independence_loss(
-                        env_gaussians, masked_batch_per_env
+                        gaussian_by_net, masked_batch_by_env
                     )
-
-                # inn_loss = inn_loss + self._pooled_gaussian_loss(
-                #     gauss_sample.view(nr_masks, -1, 1),
-                #     gauss_jacobian.view(nr_masks, -1, 1),
-                # )
 
                 if self.hyperparams.l0 != 0 and mask_training_activated:
                     l0_loss = self.masker_net.complexity_loss()
@@ -1004,17 +1011,17 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
 
                 batch_loss = (
                     self.hyperparams.inn * inn_loss
-                    + self.hyperparams.env * env_loss
+                    + self.hyperparams.residuals * resid_loss
                     + self.hyperparams.l0 * l0_loss
                     + self.hyperparams.l2 * l2_loss
                     + self.hyperparams.independence * independence_loss
                 )
 
-                batch_losses["invariance"].append(env_loss.item())
-                # batch_losses["independence"].append(independence_loss.item())
+                batch_losses["residuals"].append(resid_loss.item())
+                batch_losses["independence"].append(independence_loss.item())
                 batch_losses["cinn"].append(inn_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
-                # batch_losses["l2"].append(l2_loss.item())
+                batch_losses["l2"].append(l2_loss.item())
                 batch_losses["total"].append(batch_loss.item())
 
                 batch_loss.backward()
@@ -1072,89 +1079,107 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         )
         return predictions
 
-    def _environmental_invariance_loss(
-        self,
-        obs: Tensor,
-        target: Tensor,
-        batch_indices_by_env: Dict[int, np.ndarray],
-        mask: Tensor,
-        save_samples: bool = False,
+    def _residuals_loss(
+        self, gaussians_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]],
     ):
         """
         Compute the environmental similarity loss of the gauss mapping for each individual environment data only.
         This is done to enforce that the cinn maps every single environment individually to gauss and not just the
         complete data package together.
         """
-        nr_masks = mask.size(0)
-        env_gauss_samples, env_target_samples = [], []
-        env_loss = 0
-        for env_cinn, (env, env_batch_indices) in zip(
-            self.network_list, batch_indices_by_env.items()
+        nr_masks = gaussians_by_env_by_net[0][1][0].size(0)
+        resid_losses_by_net = []
+
+        for net_nr, gaussians_per_env in zip(
+            range(len(self.network_list)), gaussians_by_env_by_net
         ):
-            # split data by environmental affiliation
-            target_env_batch = target[env_batch_indices].view(-1, 1)
-            masked_env_batch = self.masker_net(obs[env_batch_indices], mask)
-            # compute the INN loss per mask
-            true_gauss_sample = torch.randn(
-                len(env_batch_indices), 1, device=self.device
-            )
-            gauss_sample = env_cinn(
-                x=target_env_batch.repeat(nr_masks, 1),
-                condition=masked_env_batch,
-                rev=False,
-            ).view(nr_masks, -1, 1)
-            target_sample = env_cinn(
-                x=true_gauss_sample.repeat(nr_masks, 1),
-                condition=masked_env_batch,
-                rev=True,
-            ).view(nr_masks, -1, 1)
+            resid_losses = []
+            for gauss_and_jacobian in gaussians_per_env:
+                if gauss_and_jacobian is not None:
+                    gauss_sample = gauss_and_jacobian[0]
+                    # all environmental normalized samples should be gaussian,
+                    # all environmental target samples should follow the target marginal distribution,
+                    # thus measure the deviation of these distributions.
+                    loss_per_mask = torch.zeros(1, device=self.device)
+                    true_gauss = torch.randn(
+                        gauss_sample.size(1), 1, device=self.device
+                    )
 
-            for mask_nr in range(nr_masks):
-                for estimate, observation in zip(
-                    (gauss_sample[mask_nr], target_sample[mask_nr]),
-                    (true_gauss_sample, target_env_batch),
-                ):
-                    env_loss += wasserstein(estimate, observation)
-                    # env_loss += mmd_multiscale(estimate, observation)
-                    env_loss += moments(estimate, observation)
+                    # compute the loss in the normalizing direction (gauss).
+                    for mask_nr in range(nr_masks):
+                        estimate_gauss = gauss_sample[mask_nr]
+                        loss_per_mask += wasserstein(estimate_gauss, true_gauss)
+                        # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
+                        loss_per_mask += moments(estimate_gauss, true_gauss)
 
-            if save_samples:
-                env_gauss_samples.append(gauss_sample)
-                env_target_samples.append(target_sample)
-        env_loss = env_loss / nr_masks
-        return env_loss, env_gauss_samples, env_target_samples
+                    resid_losses.append(loss_per_mask / nr_masks)
+            resid_losses_by_net.append(torch.max(torch.cat(resid_losses)).view(1))
+        resid_loss = torch.mean(torch.cat(resid_losses_by_net))
+        return resid_loss
 
-    @abstractmethod
     def _independence_loss(
         self,
-        obs: Tensor,
-        env_gauss_samples: Collection[Tensor],
-        batch_indices_by_env: Dict,
-        mask: Tensor,
+        gaussian_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]],
+        masked_batch_per_env: List[List[Tensor]],
     ):
         """
         Compute the dependence between the estimated gaussian noise and the predictors X of the target Y in each
         environment. This independence is an essential assumption in the construction of SCMs, thus should be enforced.
         """
+        independence_losses_by_net = []
+        nr_masks = gaussian_by_env_by_net[0][0][0].size(0)
+        for gaussian_by_env in gaussian_by_env_by_net:
+            independence_losses_by_env = []
+            for (gauss_sample, _), masked_batch_env in zip(
+                gaussian_by_env, masked_batch_per_env
+            ):
+
+                for mask_nr in range(nr_masks):
+                    # punish dependence between predictors and noise
+                    independence_losses_by_env.append(
+                        hsic(
+                            gauss_sample[mask_nr],
+                            masked_batch_env[mask_nr],
+                            gauss_sample.size(1),
+                        )
+                        / nr_masks
+                    )
+
+            independence_losses_by_net.append(
+                torch.max(torch.cat(independence_losses_by_env))
+            )
+        return torch.mean(torch.cat(independence_losses_by_net))
 
     def _maxlikelihood_loss(
-        self, gaussians_per_env_per_net: List[List[Tuple[Tensor, Tensor]]]
+        self, gaussians_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]]
     ):
         """
         Compute the INN via maximum likelihood loss on the generated gauss samples of the cINN
         per mask, then average loss over the number of masks.
         This is the monte carlo approximation of the loss via multiple mask samples.
         """
-        maxlikelihood_losses = []
-        for gaussians_per_env in gaussians_per_env_per_net:
-            for gauss_sample, gaussian_jacobian in gaussians_per_env:
-                if gauss_sample is not None:
+        maxlikelihood_losses_by_net = []
+        for gaussians_by_env in gaussians_by_env_by_net:
+            maxlikelihood_losses = []
+            for gauss_sample_and_jacobian in gaussians_by_env:
+                if gauss_sample_and_jacobian is not None:
+                    gauss_sample, gaussian_jacobian = gauss_sample_and_jacobian
 
-                    maxlikelihood_losses += torch.mean(
-                        torch.mean(gauss_sample ** 2 / 2 - gaussian_jacobian, dim=1),
-                        dim=0,
+                    maxlikelihood_losses.append(
+                        torch.mean(
+                            torch.mean(
+                                gauss_sample ** 2 / 2 - gaussian_jacobian, dim=1
+                            ),
+                            dim=0,
+                        )
                     )
-        return maxlikelihood_losses
+            # take the maximum over the environmental max likelihood losses
+            maxlikelihood_losses_by_net.append(
+                torch.max(torch.cat(maxlikelihood_losses)).view(1)
+            )
+        # take the mean over the max likelihood losses of all networks
+        ml_loss = torch.mean(torch.cat(maxlikelihood_losses_by_net))
+        return ml_loss
 
 
 def results_statistics(
