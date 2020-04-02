@@ -96,6 +96,7 @@ class CouplingBase(torch.nn.Module, ABC):
         with torch.no_grad():
             for mat in self.mat_like_params:
                 mat.normal_(mean=0, std=1)
+            # vec-like params
             self.bias2.normal_(mean=0, std=1)
             self.eps.fill_(value=-1)
             self.alpha.fill_(value=0)
@@ -335,7 +336,7 @@ class cINN(torch.nn.Module):
         return x
 
     def normalizing_flow(
-        self, x: torch.Tensor, condition: Optional[torch.Tensor] = None,
+        self, target: torch.Tensor, condition: Optional[torch.Tensor] = None,
     ):
         """
         Transport the incoming target samples `x` under condition `condition` to the gauss distribution.
@@ -346,10 +347,10 @@ class cINN(torch.nn.Module):
         Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
         in the parameter `normalize_forward`.
         """
-        return self(x, condition=condition, reverse=not self.normalize_forward)
+        return self(target, condition=condition, reverse=not self.normalize_forward)
 
     def generating_flow(
-        self, z: torch.Tensor, condition: Optional[torch.Tensor] = None,
+        self, normals: torch.Tensor, condition: Optional[torch.Tensor] = None,
     ):
         """
         Transport the incoming gaussian samples `x` under condition `condition` to the target distribution.
@@ -360,7 +361,7 @@ class cINN(torch.nn.Module):
         Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
         in the parameter `normalize_forward`.
         """
-        return self(z, condition=condition, reverse=self.normalize_forward)
+        return self(normals, condition=condition, reverse=self.normalize_forward)
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):
         if x is None:

@@ -44,7 +44,7 @@ if __name__ == "__main__":
     nr_heinze_configs = 100
     for i_heinze_cfg in range(nr_heinze_configs):
 
-        with open(f"./results/heinzeRun_3rd_{i_heinze_cfg}.log", "w") as f:
+        with open(f"./results/heinzeRun_multi_2nd_{i_heinze_cfg}.log", "w") as f:
             data_configurator = HeinzeData(seed=seed + i_heinze_cfg)
             data, target, envs = data_configurator.sample()
             target_parents = list(data_configurator.scm[target][0])
@@ -60,7 +60,7 @@ if __name__ == "__main__":
             epochs = 600
             use_visdom = 0
 
-            ap = AgnosticPredictor(
+            ap = MultiAgnosticPredictor(
                 epochs=epochs,
                 batch_size=10000,
                 visualize_with_visdom=bool(use_visdom),

@@ -15,3 +15,5 @@ plots/
 examples/.ipynb_checkpoints/
 
 examples/Untitled.ipynb
+
+*.png

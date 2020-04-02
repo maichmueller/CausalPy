@@ -35,7 +35,7 @@ class ANMPredictor(ICPredictor):
         variable_independence_metric: str = "hsic",
         optimizer: Optional[Optimizer] = None,
         scheduler: Optional[_LRScheduler] = None,
-        hyperparams: Optional[Hyperparams] = None,
+        hyperparams: Optional[Dict] = None,
         log_level: bool = True,
         **kwargs,
     ):
@@ -45,9 +45,7 @@ class ANMPredictor(ICPredictor):
         self.epochs = epochs
         self.network = network
         self.hyperparams = (
-            Hyperparams(alpha=1, beta=1, gamma=1)
-            if hyperparams is None
-            else hyperparams
+            dict(alpha=1, beta=1, gamma=1) if hyperparams is None else hyperparams
         )
 
         self.optimizer = (

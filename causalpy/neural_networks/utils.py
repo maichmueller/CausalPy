@@ -284,21 +284,6 @@ def get_jacobian(
     return jacobian
 
 
-class Hyperparams:
-    """
-    Data struct holding the hyperparams of a neural network architecture in one place.
-    """
-
-    def __init__(
-        self, **hyperparams,
-    ):
-        self.update(hyperparams)
-
-    def update(self, param_dict: Dict[str, float]):
-        for param_name, param_val in param_dict.items():
-            setattr(self, param_name, param_val)
-
-
 if __name__ == "__main__":
 
     from causalpy.neural_networks import FCNet

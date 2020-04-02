@@ -42,19 +42,21 @@ if __name__ == "__main__":
     ###################
     # Data Generation #
     ###################
-
-    for i, (scm_generator, target_var) in enumerate(
+    pref = "multi"
+    for i, (scm_generator, target_var, fname) in enumerate(
         [
-            (build_scm_minimal, "Y"),
-            (build_scm_basic, "Y"),
-            (build_scm_basic_discrete, "Y"),
-            (build_scm_exponential, "Y"),
-            (build_scm_medium, "Y"),
-            (build_scm_large, "Y"),
-            # (partial(simulate, nr_genes=15), "G_12"),
-            # (partial(simulate, nr_genes=20), "G_16"),
-            # (partial(simulate, nr_genes=25), "G_21"),
-            # (partial(simulate, nr_genes=30), "G_29"),
+            # (build_scm_minimal, "Y", f"{pref}_min"),
+            # (build_scm_minimal2, "Y", f"{pref}_min2"),
+            # (build_scm_basic, "Y", f"{pref}_basic"),
+            # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
+            # (build_scm_exponential, "Y", f"{pref}_exp"),
+            # (build_scm_medium, "Y", f"{pref}_medium"),
+            # (build_scm_large, "Y", f"{pref}_large"),
+            (build_scm_massive, "Y", f"{pref}_massive"),
+            # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
+            # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
+            # (partial(simulate, nr_genes=25), "G_21", f"{pref}_sim25"),
+            # (partial(simulate, nr_genes=30), "G_29", f"{pref}_sim30"),
         ]
     ):
         (
@@ -65,17 +67,24 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
-            intervention_style="children",
+            intervention_style="markov",
             target_var=target_var,
             sample_size=1024,
             seed=seed,
         )
+        # scm.plot(
+        #     alpha=1,
+        #     node_size=1700,
+        #     font_size=25,
+        #     savefig_full_path=f"./{fname.split('_')[-1]}",
+        # )
+        # plt.show()
         target_parents_indices = np.array(
             [possible_parents.index(par) for par in target_parents]
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 25
+        nr_runs = 50
 
         epochs = 600
         use_visdom = 0
@@ -87,7 +96,13 @@ if __name__ == "__main__":
             device="cuda:1",
         )
         results_mask, results_loss, res_str = ap.infer(
-            complete_data, environments, target_var, nr_runs=nr_runs, normalize=True
+            complete_data,
+            environments,
+            target_var,
+            nr_runs=nr_runs,
+            normalize=True,
+            save_results=True,
+            results_filename=fname,
         )
         last_losses = [
             {key: results_loss[i][key][-1] for key in results_loss[0].keys()}

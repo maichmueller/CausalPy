@@ -21,7 +21,10 @@ class MaxAssignment(Assignment):
         return 1
 
     def function_str(self, variable_names=None):
-        return f"max(0, {self.coefficient} * {variable_names[0]}"
+        coeff_s = (
+            str(self.coefficient) if self.coefficient >= 0 else f"({self.coefficient})"
+        )
+        return f"max(0, {coeff_s} * {variable_names[0]}"
 
 
 class IdentityAssignment(Assignment):
@@ -43,7 +46,10 @@ class IdentityAssignment(Assignment):
         return 1
 
     def function_str(self, variable_names=None):
-        return f"{self.coefficient} * {variable_names[0]}"
+        coeff_s = (
+            str(self.coefficient) if self.coefficient >= 0 else f"({self.coefficient})"
+        )
+        return f"{coeff_s} * {variable_names[0]}"
 
 
 class SignSqrtAssignment(Assignment):
@@ -93,5 +99,8 @@ class SinAssignment(Assignment):
         return 1
 
     def function_str(self, variable_names=None):
-        arg = f"{self.coefficient} * {variable_names[0]}"
+        coeff_s = (
+            str(self.coefficient) if self.coefficient >= 0 else f"({self.coefficient})"
+        )
+        arg = f"{coeff_s} * {variable_names[0]}"
         return f"sign(2*pi*{arg})"

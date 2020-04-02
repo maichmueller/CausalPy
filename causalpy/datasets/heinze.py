@@ -1,5 +1,5 @@
 import copy
-from typing import Optional, Collection, Any, Dict
+from typing import Optional, Collection, Any, Dict, Tuple
 
 from causalpy.bayesian_graphs.scm import (
     SCM,
@@ -36,7 +36,7 @@ class SumAssignment(Assignment):
             for assignment, var in zip(self.assignment, variable_names[1:])
         ]
         if var_strs:
-            rep += f"{' + '.join(var_strs)}"
+            rep += f" + {' + '.join(var_strs)}"
         return rep
 
 
@@ -64,7 +64,7 @@ class ProductAssignment(Assignment):
             for assignment, var in zip(self.assignment, variable_names[1:])
         ]
         if var_strs:
-            rep += f"{' * '.join(var_strs)}"
+            rep += f" + {' * '.join(var_strs)}"
         return rep
 
 
@@ -91,6 +91,7 @@ class HeinzeData:
         self, config: Optional[Dict[str, Any]] = None, seed: Optional[int] = None
     ):
         self.seed = seed
+        self.rng = np.random.default_rng(self.seed)
         self.config = (
             self.draw_config() if config is None else self.verify_config(config)
         )
@@ -173,11 +174,12 @@ class HeinzeData:
             target = config["target"]
             meanshift = config["meanshift"]
             scale = config["strength"]
-            rng = np.random.default_rng(self.seed)
+
             if interv_setting == "all":
                 variables = [var for var in self.scm.graph.nodes if var != target]
                 values = (
-                    rng.standard_t(size=len(variables), df=config["noise_df"]) * scale
+                    self.rng.standard_t(size=len(variables), df=config["noise_df"])
+                    * scale
                     + meanshift
                 )
             elif interv_setting == "rand":
@@ -186,21 +188,23 @@ class HeinzeData:
                     nx.algorithms.dag.descendants(self.scm.graph, target)
                 )
 
-                parent = [rng.choice(parents)] if parents else []
-                descendant = [rng.choice(descendants)] if descendants else []
+                parent = [self.rng.choice(parents)] if parents else []
+                descendant = [self.rng.choice(descendants)] if descendants else []
                 variables = parent + descendant
                 values = (
-                    rng.standard_t(size=len(variables), df=config["noise_df"]) * scale
+                    self.rng.standard_t(size=len(variables), df=config["noise_df"])
+                    * scale
                     + meanshift
                 )
             else:
                 parents = list(self.scm[target][0])
                 children = list(self.scm.graph.successors(target))
-                parent = [rng.choice(parents)] if parents else []
-                child = [rng.choice(children)] if children else []
+                parent = [self.rng.choice(parents)] if parents else []
+                child = [self.rng.choice(children)] if children else []
                 variables = parent + child
                 values = (
-                    rng.standard_t(size=len(variables), df=config["noise_df"]) * scale
+                    self.rng.standard_t(size=len(variables), df=config["noise_df"])
+                    * scale
                     + meanshift
                 )
             self.intervention_values[intervention_number] = variables, values
@@ -218,18 +222,19 @@ class HeinzeData:
         else:
             self.scm.do_intervention(variables, values)
 
-    def sample(self):
+    def sample(self) -> Tuple[pd.DataFrame, str, np.ndarray]:
         self.set_intervention_values(1)
         self.set_intervention_values(2)
 
         sample_size = self.config["sample_size"]
         obs = [self.scm.sample(sample_size)]
         envs = [0] * sample_size
+        vars = sorted(self.scm.get_variables())
         for i in range(1, 3):
             self.set_intervention(i)
-            obs.append(self.scm.sample(sample_size))
+            obs.append(self.scm.sample(sample_size)[vars])
             self.scm.undo_intervention()
             envs += [i] * sample_size
-        obs = pd.concat(obs)
+        obs = pd.concat(obs, sort=True)
         envs = np.array(envs)
         return obs, self.config["target"], envs

@@ -22,7 +22,6 @@ from causalpy.neural_networks import (
     cINN,
 )
 from causalpy.neural_networks.utils import (
-    Hyperparams,
     StratifiedSampler,
     mmd_multiscale,
     wasserstein,
@@ -71,9 +70,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             self.device = device
         self.batch_size = batch_size
         self.epochs = epochs
-        self.hyperparams = Hyperparams(
-            l0=0.0, env=0.0, inn=0.0, independence=0.0, l2=0.0
-        )
+        self.hyperparams = dict()
         if hyperparams is not None:
             self.hyperparams.update(hyperparams)
 
@@ -145,6 +142,19 @@ class AgnosticPredictorBase(ICPredictor, ABC):
     def _set_optimizer(self, force: bool = False):
         raise NotImplementedError
 
+    def parameters(self):
+        """
+        Emulate the torch.nn.Module parameters method.
+        """
+        if self.masker_net is None:
+            return None
+        gens = [self.masker_net.parameters()]
+        for net in self.network_list:
+            if net is None:
+                return None
+            gens.append(net.parameters())
+        return itertools.chain(*gens)
+
     def reset(self):
         """
         Reset the neural network components for a fresh learning iteration.
@@ -155,9 +165,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             self.masker_net.reset_parameters()
         self.masker_net.to(self.device).train()
         self._reset_networks()
-        self.network_list = (
-            torch.nn.ModuleList(self.network_list).to(self.device).train()
-        )
         self._set_optimizer()
         self._set_scheduler()
 
@@ -174,11 +181,16 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             # a network per environment
             self.network_list = [None] * len(self.env_start_end)
 
+        cast_to_modulelist = False
         for i, network in enumerate(self.network_list):
             if network is None:
+                cast_to_modulelist = True
                 self.network_list[i] = cINN(dim_condition=self.p, **self.network_params)
             else:
                 network.reset_parameters()
+        if cast_to_modulelist:
+            self.network_list = torch.nn.ModuleList(self.network_list)
+        self.network_list.to(self.device).train()
 
     def infer(
         self,
@@ -186,9 +198,12 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         envs: np.ndarray,
         target_variable: Union[int, str],
         nr_runs: int = 1,
+        normalize: bool = False,
+        show_epoch_progressbar: bool = True,
+        ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
         save_results: bool = False,
-        results_folder: str = ".",
-        results_filename: str = "results",
+        results_folder: str = "./results",
+        results_filename: str = "inference_result",
         **kwargs,
     ):
 
@@ -196,8 +211,27 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
             results_masks = []
             results_losses = []
+            (
+                obs,
+                target,
+                environments_map,
+                data_loader,
+                ground_truth_mask,
+                nr_masks,
+            ) = self._setup_infer(
+                obs, envs, target_variable, normalize, ground_truth_mask,
+            )
+
             for run in range(nr_runs):
-                final_mask, losses = self._infer(obs, envs, target_variable, **kwargs)
+                final_mask, losses = self._infer(
+                    obs=obs,
+                    target=target,
+                    environments_map=environments_map,
+                    data_loader=data_loader,
+                    show_epoch_progressbar=show_epoch_progressbar,
+                    ground_truth_mask=ground_truth_mask,
+                    nr_masks=nr_masks,
+                )
                 results_masks.append(final_mask)
                 results_losses.append(losses)
                 for i, network in enumerate(self.network_list):
@@ -210,14 +244,11 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                     os.path.join(temp_folder, f"run_{run}_masker.pt"),
                 )
 
-            best_run, lowest_loss, res_str = results_statistics(
+            best_run, lowest_loss, res_str, res_df = results_statistics(
                 target_variable,
                 self.get_parent_candidates(),
                 results_losses,
                 results_masks,
-                results_filename,
-                results_folder,
-                save_results,
             )
             for i, network in enumerate(self.network_list):
                 network.load_state_dict(
@@ -228,10 +259,36 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             self.masker_net.load_state_dict(
                 torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
             )
-
+            if save_results:
+                if not os.path.isdir(results_folder):
+                    os.mkdir(results_folder)
+                res_df.to_csv(
+                    os.path.join(results_folder, f"{results_filename}.csv"), index=False
+                )
+                for i, network in enumerate(self.network_list):
+                    torch.save(
+                        network.state_dict(),
+                        os.path.join(
+                            results_folder, f"{results_filename}_network_{i}.pt"
+                        ),
+                    )
+                torch.save(
+                    self.masker_net.state_dict(),
+                    os.path.join(results_folder, f"{results_filename}_masker.pt"),
+                )
         return results_masks, results_losses, res_str
 
-    def _infer(self, obs, envs, target_variable, **kwargs):
+    def _infer(
+        self,
+        obs: Tensor,
+        target: Tensor,
+        environments_map: Dict[int, np.ndarray],
+        data_loader: torch.utils.data.DataLoader,
+        show_epoch_progressbar: bool,
+        ground_truth_mask: Tensor,
+        nr_masks: int,
+        **kwargs,
+    ):
         raise NotImplementedError
 
     def _setup_infer(
@@ -240,7 +297,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         envs: np.ndarray,
         target_variable: Union[int, str],
         normalize: bool = False,
-        show_epoch_progressbar: bool = True,
         ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
     ):
         """
@@ -265,10 +321,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                 batch_size=min(self.batch_size, self.n),
             ),
         )
-        if show_epoch_progressbar:
-            epoch_pbar = tqdm(range(self.epochs))
-        else:
-            epoch_pbar = range(self.epochs)
+
         nr_masks = (
             self.masker_net_params["monte_carlo_sample_size"]
             if "monte_carlo_sample_size" in self.masker_net_params
@@ -285,7 +338,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             target,
             environments_map,
             data_loader,
-            epoch_pbar,
             ground_truth_mask,
             nr_masks,
         )
@@ -422,9 +474,9 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
             for i, network in enumerate(self.network_list):
                 env_gauss_sample = self._subsample_from_sample(
-                    network.normalizing_flow(x=target_env, condition=masked_env).view(
-                        nr_masks, -1, 1
-                    ),
+                    network.normalizing_flow(
+                        target=target_env, condition=masked_env
+                    ).view(nr_masks, -1, 1),
                     nr_masks,
                     subsample_size_per_mask,
                 )
@@ -513,20 +565,22 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.4, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
         )
         super().__init__(
-            masker_network_params=dict(monte_carlo_sample_size=1),
+            masker_network_params=base_kwargs.pop(
+                "masker_network_params", dict(monte_carlo_sample_size=1)
+            ),
             hyperparams=hyperparams,
             **base_kwargs,
         )
 
         self.network_list.append(network)
         if network_params is not None:
-            self.network_params.append(network_params)
+            self.network_params = network_params
         else:
-            self.network_params.append(
-                dict(nr_blocks=2, dim=1, nr_layers=32, device=self.device)
+            self.network_params = dict(
+                nr_blocks=2, dim=1, nr_layers=32, device=self.device
             )
 
     def _set_optimizer(self, force: bool = False):
@@ -553,44 +607,28 @@ class AgnosticPredictor(AgnosticPredictorBase):
         obs *= mask
         gaussian_sample = torch.randn(obs.size(0), 1, device=self.device)
         predictions = self.network_list[0].generating_flow(
-            z=gaussian_sample, condition=obs
+            normals=gaussian_sample, condition=obs
         )
         return predictions
 
     def _infer(
         self,
-        obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
-        target_variable: Union[int, str],
-        normalize: bool = False,
-        show_epoch_progressbar: bool = True,
-        ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
+        obs: Tensor,
+        target: Tensor,
+        environments_map: Dict[int, np.ndarray],
+        data_loader: torch.utils.data.DataLoader,
+        show_epoch_progressbar: bool,
+        ground_truth_mask: Tensor,
+        nr_masks: int,
+        **kwargs,
     ):
+        self.reset()
 
-        #########
-        # Setup #
-        #########
+        if show_epoch_progressbar:
+            epoch_pbar = tqdm(range(self.epochs))
+        else:
+            epoch_pbar = range(self.epochs)
 
-        (
-            obs,
-            target,
-            environments_map,
-            data_loader,
-            epoch_pbar,
-            ground_truth_mask,
-            nr_masks,
-        ) = self._setup_infer(
-            obs,
-            envs,
-            target_variable,
-            normalize,
-            show_epoch_progressbar,
-            ground_truth_mask,
-        )
-
-        ############
-        # Training #
-        ############
         for param in self.masker_net.parameters():
             param.requires_grad = False
         mask_training_activated = False
@@ -629,12 +667,12 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
                 env_gaussians = []
                 target_per_env = []
-                masked_batch_per_env = []
+                masked_batch_by_env = []
 
                 # normalizing computation
 
                 gauss_sample = network.normalizing_flow(
-                    x=target_batch.repeat(nr_masks, 1), condition=masked_batch,
+                    target=target_batch.repeat(nr_masks, 1), condition=masked_batch,
                 ).view(nr_masks, -1, 1)
                 gauss_jacobian = network.log_jacobian_cache.view(nr_masks, -1, 1)
 
@@ -647,7 +685,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                     env_gaussians.append(
                         (gauss_sample[:, indices_env], gauss_jacobian[:, indices_env])
                     )
-                    masked_batch_per_env.append(masked_batch[:, indices_env])
+                    masked_batch_by_env.append(masked_batch[:, indices_env])
                     target_per_env.append(target_batch[indices_env])
 
                 ##########
@@ -657,34 +695,29 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 inn_loss, resid_loss, independence_loss, l0_loss, l2_loss = torch.zeros(
                     5, device=self.device, requires_grad=True
                 )
+                if self.hyperparams["inn"] != 0:
+                    inn_loss = self._maxlikelihood_loss(env_gaussians)
 
-                if self.hyperparams.inn != 0:
-                    inn_loss = torch.max(
-                        torch.cat(self._maxlikelihood_loss(env_gaussians))
-                    )
+                if self.hyperparams["residuals"] != 0:
+                    resid_loss = self._residuals_loss(env_gaussians, target_per_env)
 
-                if self.hyperparams.env != 0:
-                    resid_loss = torch.max(
-                        torch.cat(self._residuals_loss(env_gaussians, target_per_env))
-                    )
-
-                if self.hyperparams.independence != 0:
+                if self.hyperparams["independence"] != 0:
                     independence_loss = self._independence_loss(
-                        env_gaussians, masked_batch_per_env
+                        env_gaussians, masked_batch_by_env
                     )
 
-                if self.hyperparams.l0 != 0 and mask_training_activated:
+                if self.hyperparams["l0"] != 0 and mask_training_activated:
                     l0_loss = self.masker_net.complexity_loss()
 
-                if self.hyperparams.l2 != 0:
+                if self.hyperparams["l2"] != 0:
                     l2_loss = self._l2_regularization()
 
                 batch_loss = (
-                    self.hyperparams.inn * inn_loss
-                    + self.hyperparams.env * resid_loss
-                    + self.hyperparams.l0 * l0_loss
-                    + self.hyperparams.l2 * l2_loss
-                    + self.hyperparams.independence * independence_loss
+                    self.hyperparams["inn"] * inn_loss
+                    + self.hyperparams["residuals"] * resid_loss
+                    + self.hyperparams["l0"] * l0_loss
+                    + self.hyperparams["l2"] * l2_loss
+                    + self.hyperparams["independence"] * independence_loss
                 )
 
                 batch_losses["residuals"].append(resid_loss.item())
@@ -740,7 +773,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 env_gauss_sample ** 2 / 2.0 - env_log_jacobian, dim=1
             )
             inn_losses.append(torch.mean(maxlikelihood_per_mask, dim=0))
-        return inn_losses
+        return torch.max(torch.cat(inn_losses))
 
     def _residuals_loss(
         self,
@@ -770,7 +803,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 loss_per_mask += moments(estimate_gauss, true_gauss)
 
             resid_losses.append(loss_per_mask / nr_masks)
-        return resid_losses
+        return torch.max(torch.cat(resid_losses))
 
     def _independence_loss(
         self,
@@ -831,7 +864,9 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
             "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
         )
         super().__init__(
-            masker_network_params=dict(monte_carlo_sample_size=1),
+            masker_network_params=base_kwargs.pop(
+                "masker_network_params", dict(monte_carlo_sample_size=1)
+            ),
             hyperparams=hyperparams,
             **base_kwargs,
         )
@@ -865,38 +900,21 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
 
     def _infer(
         self,
-        obs: Union[pd.DataFrame, np.ndarray],
-        envs: np.ndarray,
-        target_variable: Union[int, str],
-        normalize: bool = False,
-        show_epoch_progressbar: bool = True,
-        ground_truth_mask: Optional[Union[Tensor, np.ndarray]] = None,
+        obs: Tensor,
+        target: Tensor,
+        environments_map: Dict[int, np.ndarray],
+        data_loader: torch.utils.data.DataLoader,
+        show_epoch_progressbar: bool,
+        ground_truth_mask: Tensor,
+        nr_masks: int,
+        **kwargs,
     ):
+        self.reset()
+        if show_epoch_progressbar:
+            epoch_pbar = tqdm(range(self.epochs))
+        else:
+            epoch_pbar = range(self.epochs)
 
-        #########
-        # Setup #
-        #########
-
-        (
-            obs,
-            target,
-            environments_map,
-            data_loader,
-            epoch_pbar,
-            ground_truth_mask,
-            nr_masks,
-        ) = self._setup_infer(
-            obs,
-            envs,
-            target_variable,
-            normalize,
-            show_epoch_progressbar,
-            ground_truth_mask,
-        )
-
-        ############
-        # Training #
-        ############
         for param in self.masker_net.parameters():
             param.requires_grad = False
         mask_training_activated = False
@@ -941,7 +959,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                 gaussians = []
                 for network in self.network_list:
                     gauss_sample: Tensor = network.normalizing_flow(
-                        x=target_batch.repeat(nr_masks, 1),
+                        target=target_batch.repeat(nr_masks, 1),
                         condition=masked_batch.view(-1, self.p),
                     ).view(nr_masks, -1, 1)
                     gauss_jacobian: Tensor = network.log_jacobian_cache.view(
@@ -992,29 +1010,29 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                     5, device=self.device
                 )
 
-                if self.hyperparams.inn != 0:
+                if self.hyperparams["inn"] != 0:
                     inn_loss = self._maxlikelihood_loss(gaussian_by_net)
 
-                if self.hyperparams.residuals != 0:
+                if self.hyperparams["residuals"] != 0:
                     resid_loss = self._residuals_loss(gaussian_by_net)
 
-                if self.hyperparams.independence != 0:
+                if self.hyperparams["independence"] != 0:
                     independence_loss = self._independence_loss(
                         gaussian_by_net, masked_batch_by_env
                     )
 
-                if self.hyperparams.l0 != 0 and mask_training_activated:
+                if self.hyperparams["l0"] != 0 and mask_training_activated:
                     l0_loss = self.masker_net.complexity_loss()
 
-                if self.hyperparams.l2 != 0:
+                if self.hyperparams["l2"] != 0:
                     l2_loss = self._l2_regularization()
 
                 batch_loss = (
-                    self.hyperparams.inn * inn_loss
-                    + self.hyperparams.residuals * resid_loss
-                    + self.hyperparams.l0 * l0_loss
-                    + self.hyperparams.l2 * l2_loss
-                    + self.hyperparams.independence * independence_loss
+                    self.hyperparams["inn"] * inn_loss
+                    + self.hyperparams["residuals"] * resid_loss
+                    + self.hyperparams["l0"] * l0_loss
+                    + self.hyperparams["l2"] * l2_loss
+                    + self.hyperparams["independence"] * independence_loss
                 )
 
                 batch_losses["residuals"].append(resid_loss.item())
@@ -1068,7 +1086,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
             torch.cat(
                 [
                     network.generating_flow(
-                        z=torch.randn(obs.size(0), 1, device=self.device),
+                        normals=torch.randn(obs.size(0), 1, device=self.device),
                         condition=obs,
                     )
                     for network in self.network_list
@@ -1183,13 +1201,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
 
 
 def results_statistics(
-    target_variable,
-    candidates,
-    results_losses,
-    results_masks,
-    results_filename,
-    results_folder,
-    save_results,
+    target_variable, candidates, results_losses, results_masks,
 ):
     full_results = {
         var: []
@@ -1237,13 +1249,9 @@ def results_statistics(
         [f"{var}: {val}" for var, val in results_masks[best_invariance_result].items()]
     )
     res_str += f"\tMask: {val_str}\n\n"
-    if save_results:
-        if not os.path.isdir(results_folder):
-            os.mkdir(results_folder)
-        results_df = pd.DataFrame.from_dict(statistics, orient="columns")
-        results_df.loc["results_array"] = {
-            var: str(values) for (var, values) in full_results.items()
-        }
-        results_df.to_csv(f"{os.path.join(results_folder, results_filename)}.csv")
 
-    return best_invariance_result, lowest_invariance_loss, res_str
+    results_df = pd.DataFrame.from_dict(
+        {var: values for (var, values) in full_results.items()}, orient="columns"
+    )
+
+    return best_invariance_result, lowest_invariance_loss, res_str, results_df
