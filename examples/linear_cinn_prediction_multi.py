@@ -50,9 +50,10 @@ if __name__ == "__main__":
             # (build_scm_basic, "Y", f"{pref}_basic"),
             # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
             # (build_scm_exponential, "Y", f"{pref}_exp"),
-            # (build_scm_medium, "Y", f"{pref}_medium"),
+            (build_scm_medium, "Y", f"{pref}_medium"),
+            # (build_scm_nonlinear, "Y", f"{pref}_nonlinear"),
             # (build_scm_large, "Y", f"{pref}_large"),
-            (build_scm_massive, "Y", f"{pref}_massive"),
+            # (build_scm_massive, "Y", f"{pref}_massive"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
             # (partial(simulate, nr_genes=25), "G_21", f"{pref}_sim25"),
@@ -84,7 +85,7 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 50
+        nr_runs = 20
 
         epochs = 600
         use_visdom = 0

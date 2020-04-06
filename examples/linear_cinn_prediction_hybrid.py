@@ -17,7 +17,10 @@ from causalpy.neural_networks import cINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.causal_prediction.interventional import ICPredictor, AgnosticPredictor
+from causalpy.causal_prediction.interventional import (
+    ICPredictor,
+    HybridAgnosticPredictor,
+)
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
@@ -28,9 +31,7 @@ from linear_regression_eval import *
 import torch as th
 import math
 from torch.utils.data import Sampler
-import warnings
 
-warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
 
@@ -41,7 +42,7 @@ if __name__ == "__main__":
     ###################
     # Data Generation #
     ###################
-    pref = "single"
+    pref = "hybrid"
     for i, (scm_generator, target_var, fname) in enumerate(
         [
             # (build_scm_minimal, "Y", f"{pref}_min"),
@@ -50,7 +51,6 @@ if __name__ == "__main__":
             # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
             # (build_scm_exponential, "Y", f"{pref}_exp"),
             (build_scm_medium, "Y", f"{pref}_medium"),
-            # (build_scm_nonlinear, "Y", f"{pref}_nonlinear"),
             # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
@@ -67,12 +67,18 @@ if __name__ == "__main__":
             target_parents,
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
-            countify=False,
             intervention_style="markov",
             target_var=target_var,
             sample_size=1024,
             seed=seed,
         )
+        # scm.plot(
+        #     alpha=1,
+        #     node_size=1700,
+        #     font_size=25,
+        #     savefig_full_path=f"./{fname.split('_')[-1]}",
+        # )
+        # plt.show()
         target_parents_indices = np.array(
             [possible_parents.index(par) for par in target_parents]
         )
@@ -83,17 +89,18 @@ if __name__ == "__main__":
         epochs = 600
         use_visdom = 0
 
-        ap = AgnosticPredictor(
+        ap = HybridAgnosticPredictor(
             epochs=epochs,
-            batch_size=100000,
+            batch_size=10000,
             visualize_with_visdom=bool(use_visdom),
-            device="cuda:0",
+            device="cuda:1",
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data,
             environments,
             target_var,
             nr_runs=nr_runs,
+            nr_multiproc_workers=4,
             normalize=True,
             save_results=True,
             results_filename=fname,

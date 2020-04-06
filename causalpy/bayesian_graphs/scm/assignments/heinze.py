@@ -24,7 +24,7 @@ class MaxAssignment(Assignment):
         coeff_s = (
             str(self.coefficient) if self.coefficient >= 0 else f"({self.coefficient})"
         )
-        return f"max(0, {coeff_s} * {variable_names[0]}"
+        return f"max(0, {coeff_s} * {variable_names[0]})"
 
 
 class IdentityAssignment(Assignment):
@@ -103,4 +103,4 @@ class SinAssignment(Assignment):
             str(self.coefficient) if self.coefficient >= 0 else f"({self.coefficient})"
         )
         arg = f"{coeff_s} * {variable_names[0]}"
-        return f"sign(2*pi*{arg})"
+        return f"sin(2*pi*{arg})"

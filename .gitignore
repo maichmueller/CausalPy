@@ -17,3 +17,5 @@ examples/.ipynb_checkpoints/
 examples/Untitled.ipynb
 
 *.png
+
+examples/results/
