@@ -125,40 +125,52 @@ class HeinzeData:
                 return noise_seed + i
             return None
 
-        op_assign = ProductAssignment if config["multiplicative"] else SumAssignment
+        binary_op_assignment = (
+            ProductAssignment if config["multiplicative"] else SumAssignment
+        )
         mechanism = config["mechanism"]
+        coeffs = dict()
+        coeffs[(0, 1)] = 1
+        coeffs[(0, 2)] = 1
+        coeffs[(1, 2)] = -1
+        coeffs[(2, 3)] = -1
+        coeffs[(3, 5)] = -1
+        coeffs[(2, 5)] = 1
+        coeffs[(4, 5)] = 1
         df = config["noise_df"]
         assignment_map["X_0"] = (
             [],
-            op_assign(),
+            binary_op_assignment(),
             NoiseGenerator("standard_t", df=df, seed=get_seed(0)),
         )
         assignment_map["X_1"] = (
             ["X_0"],
-            op_assign(mechanism(coefficient=1)),
+            binary_op_assignment(mechanism(coefficient=coeffs[0, 1])),
             NoiseGenerator("standard_t", df=df, seed=get_seed(1)),
         )
         assignment_map["X_2"] = (
             ["X_0", "X_1"],
-            op_assign(mechanism(coefficient=1), mechanism(coefficient=-1)),
+            binary_op_assignment(
+                mechanism(coefficient=coeffs[0, 2]), mechanism(coefficient=coeffs[1, 2])
+            ),
             NoiseGenerator("standard_t", df=df, seed=get_seed(2)),
         )
         assignment_map["X_3"] = (
             ["X_2"],
-            op_assign(mechanism(coefficient=-1)),
+            binary_op_assignment(mechanism(coefficient=coeffs[2, 3])),
             NoiseGenerator("standard_t", df=df, seed=get_seed(3)),
         )
         assignment_map["X_4"] = (
             [],
-            op_assign(),
+            binary_op_assignment(),
             NoiseGenerator("standard_t", df=df, seed=get_seed(4)),
         )
         assignment_map["X_5"] = (
             ["X_3", "X_2", "X_4"],
-            op_assign(
-                mechanism(coefficient=-1),
-                mechanism(coefficient=1),
-                mechanism(coefficient=1),
+            binary_op_assignment(
+                mechanism(coefficient=coeffs[3, 5]),
+                mechanism(coefficient=coeffs[2, 5]),
+                mechanism(coefficient=coeffs[4, 5]),
             ),
             NoiseGenerator("standard_t", df=df, seed=get_seed(5)),
         )

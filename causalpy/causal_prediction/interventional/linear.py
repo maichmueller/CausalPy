@@ -58,7 +58,9 @@ class LinPredictor(ICPredictor):
         self.ignored_subsets: Optional[Set] = ignored_subsets
         self.nr_parents_limit: Optional[int] = nr_parents_limit
 
-        self.regression_function = self._regression_sklearn if use_sklearn else self._regression_analytically
+        self.regression_function = (
+            self._regression_sklearn if use_sklearn else self._regression_analytically
+        )
 
         self.alpha: float = alpha
         self.accepted_sets: Set = set()
@@ -148,9 +150,13 @@ class LinPredictor(ICPredictor):
             rejected = p_value <= alpha
             if not rejected:
                 self.accepted_sets.add(subset)
-                self.logger.debug(f"Subset: {subset}\t p-value: {p_value} --> accepted.")
+                self.logger.debug(
+                    f"Subset: {subset}\t p-value: {p_value} --> accepted."
+                )
             else:
-                self.logger.debug(f"Subset: {subset}\t p-value: {p_value} --> rejected.")
+                self.logger.debug(
+                    f"Subset: {subset}\t p-value: {p_value} --> rejected."
+                )
 
             subset, finished = subset_iterator.send(rejected)
 
@@ -197,7 +203,9 @@ class LinPredictor(ICPredictor):
         # This might come at the cost of some numerical stability, which might be provided by sklearn, but not by a
         # direct, analytical beta calculation.
         residuals, beta = self.regression_function(obs_S, target)
-        self.logger.debug(f"Subset: {tuple(self.index_to_varname[i] for i in s)}\t regression coefficients: {beta}")
+        self.logger.debug(
+            f"Subset: {tuple(self.index_to_varname[i] for i in s)}\t regression coefficients: {beta}"
+        )
         p_value = 1
         # the paper suggests to test the residual of data in an environment e against the
         # the residuals of the data not in e.

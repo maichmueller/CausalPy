@@ -51,8 +51,10 @@ if __name__ == "__main__":
             # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
             # (build_scm_exponential, "Y", f"{pref}_exp"),
             # (build_scm_medium, "Y", f"{pref}_medium"),
+            # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (build_scm_large, "Y", f"{pref}_large"),
             (build_scm_massive, "Y", f"{pref}_massive"),
+            # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
             # (partial(simulate, nr_genes=25), "G_21", f"{pref}_sim25"),
@@ -84,16 +86,16 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 50
+        nr_runs = 100
 
-        epochs = 600
+        epochs = 800
         use_visdom = 0
 
         ap = MultiAgnosticPredictor(
             epochs=epochs,
             batch_size=10000,
             visualize_with_visdom=bool(use_visdom),
-            device="cuda:1",
+            device="cuda:0",
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data,

@@ -94,7 +94,7 @@ def build_scm_basic(seed=0):
     return cn
 
 
-def build_scm_linandpoly(seed=0):
+def build_scm_polynomial(seed=0):
     cn = SCM(
         assignment_map={
             "X_0": (
@@ -104,12 +104,12 @@ def build_scm_linandpoly(seed=0):
             ),
             "X_1": (
                 ["X_0"],
-                LinearAssignment(1, 1, 2),
+                PolynomialAssignment([0, 1], [0, 1, 0.5, -0.1]),
                 NoiseGenerator("standard_normal", seed=seed + 1),
             ),
             "X_2": (
                 ["X_0", "X_1"],
-                LinearAssignment(1, 1, 0.5, 2),
+                PolynomialAssignment([0, 1], [0, -1, -0.5], [0, 0, 2]),
                 NoiseGenerator("standard_normal", seed=seed + 2),
             ),
             "X_3": (

@@ -1,3 +1,4 @@
+import copy
 import functools
 import itertools
 from abc import ABC, abstractmethod
@@ -95,10 +96,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         self.scheduler_type = scheduler_type
         self.scheduler_params = (
             dict(
-                step_size_mask=100,
-                step_size_model=100,
-                mask_factor=0.99,
-                model_factor=1,
+                step_size_mask=100, step_size_model=100, mask_factor=1, model_factor=1,
             )
             if scheduler_params is None
             else scheduler_params
@@ -231,6 +229,8 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                     show_epoch_progressbar=show_epoch_progressbar,
                     ground_truth_mask=ground_truth_mask,
                     nr_masks=nr_masks,
+                    run=run,
+                    nr_runs=nr_runs,
                 )
                 results_masks.append(final_mask)
                 results_losses.append(losses)
@@ -287,6 +287,8 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         show_epoch_progressbar: bool,
         ground_truth_mask: Tensor,
         nr_masks: int,
+        run: int,
+        nr_runs: int,
         **kwargs,
     ):
         raise NotImplementedError
@@ -620,12 +622,16 @@ class AgnosticPredictor(AgnosticPredictorBase):
         show_epoch_progressbar: bool,
         ground_truth_mask: Tensor,
         nr_masks: int,
+        run: int,
+        nr_runs: int,
+        epochs_without_featuresel: int = 400,
         **kwargs,
     ):
         self.reset()
-
+        hyperparams_backup = copy.deepcopy(self.hyperparams)
         if show_epoch_progressbar:
             epoch_pbar = tqdm(range(self.epochs))
+            epoch_pbar.set_description(f"Run {run}/{nr_runs}")
         else:
             epoch_pbar = range(self.epochs)
 
@@ -634,17 +640,44 @@ class AgnosticPredictor(AgnosticPredictorBase):
         mask_training_activated = False
 
         epoch_losses = dict(
-            total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
+            total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
         )
+        reference_converged_losses = None
+        incr_every_n_epoch = 10
         for epoch in epoch_pbar:
             batch_losses = dict(
-                total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
+                total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
             )
 
-            if epoch > 200 and not mask_training_activated:
+            if epoch > epochs_without_featuresel and not mask_training_activated:
                 for param in self.masker_net.parameters():
                     param.requires_grad = True
                 mask_training_activated = True
+                reference_converged_losses = np.quantile(
+                    np.asarray(epoch_losses["residuals"][-100:])
+                    + np.asarray(epoch_losses["inn"][-100:]),
+                    q=[0.01, 0.99],
+                )
+
+            if mask_training_activated and epoch % incr_every_n_epoch == 0:
+                last_n = sum(
+                    list(
+                        map(
+                            np.array,
+                            (epoch_losses["inn"][-incr_every_n_epoch:]),
+                            epoch_losses["residuals"][-incr_every_n_epoch:],
+                        )
+                    )
+                )
+                if (
+                    reference_converged_losses[0]
+                    < last_n
+                    < reference_converged_losses[1]
+                ).mean() > 0.4:
+                    old = self.hyperparams["l0"]
+                    self.hyperparams["l0"] += 0.02
+                    new = self.hyperparams["l0"]
+                    print(f"Increasing hyperparam from {old} to {new}.")
 
             for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()
@@ -722,7 +755,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
                 batch_losses["residuals"].append(resid_loss.item())
                 batch_losses["independence"].append(independence_loss.item())
-                batch_losses["cinn"].append(inn_loss.item())
+                batch_losses["inn"].append(inn_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
                 batch_losses["l2"].append(l2_loss.item())
                 batch_losses["total"].append(batch_loss.item())
@@ -757,6 +790,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
                 self._plot_data_approximation(obs, target, environments_map)
 
+        self.hyperparams = hyperparams_backup
         results = self._mask_dict()
         return results, epoch_losses
 
@@ -773,7 +807,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 env_gauss_sample ** 2 / 2.0 - env_log_jacobian, dim=1
             )
             inn_losses.append(torch.mean(maxlikelihood_per_mask, dim=0))
-        return torch.max(torch.cat(inn_losses))
+        return torch.mean(torch.cat(inn_losses))
 
     def _residuals_loss(
         self,
@@ -790,12 +824,11 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
         for (gauss_sample, _), target_env in zip(env_gaussians, target_env_batch):
             # all environmental normalized samples should be gaussian,
-            # all environmental target samples should follow the target marginal distribution,
             # thus measure the deviation of these distributions.
             loss_per_mask = torch.zeros(1, device=self.device)
             true_gauss = torch.randn(gauss_sample.size(1), 1, device=self.device)
 
-            # compute the loss in the normalizing direction (gauss) and the generating direction (target).
+            # compute the loss in the normalizing direction.
             for mask_nr in range(nr_masks):
                 estimate_gauss = gauss_sample[mask_nr]
                 loss_per_mask += wasserstein(estimate_gauss, true_gauss)
@@ -803,7 +836,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 loss_per_mask += moments(estimate_gauss, true_gauss)
 
             resid_losses.append(loss_per_mask / nr_masks)
-        return torch.max(torch.cat(resid_losses))
+        return torch.mean(torch.cat(resid_losses))
 
     def _independence_loss(
         self,
@@ -907,11 +940,16 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         show_epoch_progressbar: bool,
         ground_truth_mask: Tensor,
         nr_masks: int,
+        run: int,
+        nr_runs: int,
+        epochs_without_featuresel: int = 400,
         **kwargs,
     ):
         self.reset()
+        hyperparams_backup = copy.deepcopy(self.hyperparams)
         if show_epoch_progressbar:
             epoch_pbar = tqdm(range(self.epochs))
+            epoch_pbar.set_description(f"Run {run}/{nr_runs}")
         else:
             epoch_pbar = range(self.epochs)
 
@@ -920,17 +958,44 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         mask_training_activated = False
 
         epoch_losses = dict(
-            total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
+            total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
         )
+        reference_converged_losses = None
+        incr_every_n_epoch = 10
         for epoch in epoch_pbar:
             batch_losses = dict(
-                total=[], residuals=[], cinn=[], independence=[], l0_mask=[], l2=[]
+                total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
             )
 
-            if epoch > 100 and not mask_training_activated:
+            if epoch > epochs_without_featuresel and not mask_training_activated:
                 for param in self.masker_net.parameters():
                     param.requires_grad = True
                 mask_training_activated = True
+                reference_converged_losses = np.quantile(
+                    np.asarray(epoch_losses["residuals"][-100:])
+                    + np.asarray(epoch_losses["inn"][-100:]),
+                    q=[0.01, 0.99],
+                )
+
+            if mask_training_activated and epoch % incr_every_n_epoch == 0:
+                last_n = sum(
+                    list(
+                        map(
+                            np.array,
+                            (epoch_losses["inn"][-incr_every_n_epoch:]),
+                            epoch_losses["residuals"][-incr_every_n_epoch:],
+                        )
+                    )
+                )
+                if (
+                    reference_converged_losses[0]
+                    < last_n
+                    < reference_converged_losses[1]
+                ).mean() > 0.4:
+                    old = self.hyperparams["l0"]
+                    self.hyperparams["l0"] += 0.02
+                    new = self.hyperparams["l0"]
+                    print(f"Increasing hyperparam from {old} to {new}.")
 
             for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()
@@ -1037,7 +1102,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
 
                 batch_losses["residuals"].append(resid_loss.item())
                 batch_losses["independence"].append(independence_loss.item())
-                batch_losses["cinn"].append(inn_loss.item())
+                batch_losses["inn"].append(inn_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
                 batch_losses["l2"].append(l2_loss.item())
                 batch_losses["total"].append(batch_loss.item())
@@ -1072,6 +1137,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
 
                 self._plot_data_approximation(obs, target, environments_map)
 
+        self.hyperparams = hyperparams_backup
         results = self._mask_dict()
         return results, epoch_losses
 
@@ -1164,7 +1230,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                     )
 
             independence_losses_by_net.append(
-                torch.max(torch.cat(independence_losses_by_env))
+                torch.mean(torch.cat(independence_losses_by_env))
             )
         return torch.mean(torch.cat(independence_losses_by_net))
 
@@ -1193,7 +1259,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                     )
             # take the maximum over the environmental max likelihood losses
             maxlikelihood_losses_by_net.append(
-                torch.max(torch.cat(maxlikelihood_losses)).view(1)
+                torch.mean(torch.cat(maxlikelihood_losses)).view(1)
             )
         # take the mean over the max likelihood losses of all networks
         ml_loss = torch.mean(torch.cat(maxlikelihood_losses_by_net))
@@ -1214,8 +1280,13 @@ def results_statistics(
     for i, (result_mask, result_loss) in enumerate(zip(results_masks, results_losses)):
         for var, mask in result_mask.items():
             full_results[var].append(mask)
-            if result_loss["residuals"][-1] < lowest_invariance_loss:
-                lowest_invariance_loss = result_loss["residuals"][-1]
+            if (
+                result_loss["residuals"][-1] + result_loss["inn"][-1]
+                < lowest_invariance_loss
+            ):
+                lowest_invariance_loss = (
+                    result_loss["residuals"][-1] + result_loss["inn"][-1]
+                )
                 best_invariance_result = i
     statistics = dict()
     for var, values in full_results.items():
