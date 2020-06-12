@@ -205,7 +205,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         **kwargs,
     ):
 
-        with TempFolder("./temp_model_folder") as temp_folder:
+        with TempFolder("./temp_model_folder", **kwargs) as temp_folder:
 
             results_masks = []
             results_losses = []
@@ -567,7 +567,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.7, residuals=1, inn=1, independence=0.0, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -624,14 +624,14 @@ class AgnosticPredictor(AgnosticPredictorBase):
         nr_masks: int,
         run: int,
         nr_runs: int,
-        epochs_without_featuresel: int = 400,
+        epochs_without_featuresel: int = 500,
         **kwargs,
     ):
         self.reset()
         hyperparams_backup = copy.deepcopy(self.hyperparams)
         if show_epoch_progressbar:
             epoch_pbar = tqdm(range(self.epochs))
-            epoch_pbar.set_description(f"Run {run}/{nr_runs}")
+            epoch_pbar.set_description(f"Run {run + 1}/{nr_runs}")
         else:
             epoch_pbar = range(self.epochs)
 
@@ -643,20 +643,25 @@ class AgnosticPredictor(AgnosticPredictorBase):
             total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
         )
         reference_converged_losses = None
-        incr_every_n_epoch = 10
+        incr_every_n_epoch = 20
         for epoch in epoch_pbar:
-            batch_losses = dict(
-                total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
-            )
+
+            batch_losses = {key: [] for key in epoch_losses.keys()}
 
             if epoch > epochs_without_featuresel and not mask_training_activated:
+                # now we activate the mask training, but keep the CINN parameters fixed (assuming they converged)
+                # This hopefully gets us the appropriate mask.
                 for param in self.masker_net.parameters():
                     param.requires_grad = True
+                # for network in self.network_list:
+                #     for param in network.parameters():
+                #         param.requires_grad = False
                 mask_training_activated = True
+
                 reference_converged_losses = np.quantile(
                     np.asarray(epoch_losses["residuals"][-100:])
                     + np.asarray(epoch_losses["inn"][-100:]),
-                    q=[0.01, 0.99],
+                    q=[0.001, 0.999],
                 )
 
             if mask_training_activated and epoch % incr_every_n_epoch == 0:
@@ -669,11 +674,12 @@ class AgnosticPredictor(AgnosticPredictorBase):
                         )
                     )
                 )
-                if (
+                nr_in_bounds = (
                     reference_converged_losses[0]
                     < last_n
                     < reference_converged_losses[1]
-                ).mean() > 0.4:
+                ).mean()
+                if nr_in_bounds >= 0.5:
                     old = self.hyperparams["l0"]
                     self.hyperparams["l0"] += 0.02
                     new = self.hyperparams["l0"]
@@ -765,7 +771,8 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
             # update learning rates after last batch has finished
             self.scheduler.step()
-
+            # if epoch > 1:
+            #     print(epoch_losses["residuals"][-1] + epoch_losses["residuals"][-1])
             # store the various losses per batch into the epoch by averaging over batches
             for loss_acc, loss_list in epoch_losses.items():
                 loss_list.append(np.mean(batch_losses[loss_acc]))
@@ -801,7 +808,6 @@ class AgnosticPredictor(AgnosticPredictorBase):
         """
         inn_losses = []
         for env_gauss_sample, env_log_jacobian in env_gaussians:
-
             # maximum likelihood of a standard gaussian
             maxlikelihood_per_mask = torch.mean(
                 env_gauss_sample ** 2 / 2.0 - env_log_jacobian, dim=1
@@ -836,7 +842,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 loss_per_mask += moments(estimate_gauss, true_gauss)
 
             resid_losses.append(loss_per_mask / nr_masks)
-        return torch.mean(torch.cat(resid_losses))
+        return torch.max(torch.cat(resid_losses))
 
     def _independence_loss(
         self,
@@ -845,24 +851,25 @@ class AgnosticPredictor(AgnosticPredictorBase):
     ):
         """
         Compute the dependence between the estimated gaussian noise and the predictors X of the target Y in each
-        environment. This independence is an essential assumption in the construction of SCMs, thus should be enforced.
+        environment.
         """
         independence_loss = torch.zeros(1, device=self.device)
-
+        independence_losses = []
         nr_masks = env_gaussians[0][0].size(0)
         for (gauss_sample, _), masked_batch_env in zip(
             env_gaussians, masked_batch_per_env
         ):
-
+            loss = torch.zeros(1, device=self.device)
             for mask_nr in range(nr_masks):
                 # punish dependence between predictors and noise
-                independence_loss += hsic(
+                loss += hsic(
                     gauss_sample[mask_nr],
                     masked_batch_env[mask_nr],
                     gauss_sample.size(1),
                 )
+            independence_losses.append(loss / nr_masks)
 
-        independence_loss = independence_loss / nr_masks
+        independence_loss = torch.max(torch.cat(independence_losses))
         return independence_loss
 
     @staticmethod
@@ -949,7 +956,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         hyperparams_backup = copy.deepcopy(self.hyperparams)
         if show_epoch_progressbar:
             epoch_pbar = tqdm(range(self.epochs))
-            epoch_pbar.set_description(f"Run {run}/{nr_runs}")
+            epoch_pbar.set_description(f"Run {run + 1}/{nr_runs}")
         else:
             epoch_pbar = range(self.epochs)
 
@@ -963,9 +970,8 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         reference_converged_losses = None
         incr_every_n_epoch = 10
         for epoch in epoch_pbar:
-            batch_losses = dict(
-                total=[], residuals=[], inn=[], independence=[], l0_mask=[], l2=[]
-            )
+
+            batch_losses = {key: [] for key in epoch_losses.keys()}
 
             if epoch > epochs_without_featuresel and not mask_training_activated:
                 for param in self.masker_net.parameters():
@@ -1326,3 +1332,361 @@ def results_statistics(
     )
 
     return best_invariance_result, lowest_invariance_loss, res_str, results_df
+
+
+class DensityBasedPredictor(AgnosticPredictorBase):
+    """
+    Single inferential network model.
+    """
+
+    def __init__(
+        self,
+        network: Optional[Module] = None,
+        network_params: Optional[Dict] = None,
+        **base_kwargs,
+    ):
+        hyperparams = base_kwargs.pop(
+            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
+        )
+        super().__init__(
+            masker_network_params=base_kwargs.pop(
+                "masker_network_params", dict(monte_carlo_sample_size=1)
+            ),
+            hyperparams=hyperparams,
+            **base_kwargs,
+        )
+
+        self.network_list.append(network)
+        self.network_list.append(copy.deepcopy(network))
+        if network_params is not None:
+            self.network_params = network_params
+        else:
+            self.network_params = dict(
+                nr_blocks=2, dim=1, nr_layers=32, device=self.device
+            )
+
+    def _set_optimizer(self, force: bool = False):
+        if self.optimizer is None or force:
+            self.optimizer = self.optimizer_type(
+                [
+                    {
+                        "params": self.masker_net.parameters(),
+                        "lr": self.optimizer_params.pop("mask_lr", 1e-2),
+                    },
+                    {"params": self.network_list[0].parameters()},
+                ],
+                lr=self.optimizer_params.pop("lr", 1e-3),
+                **self.optimizer_params,
+            )
+        return self.optimizer
+
+    @AgnosticPredictorBase.predict_input_validator
+    def predict(
+        self,
+        obs: Union[pd.DataFrame, Tensor],
+        mask: Optional[Union[pd.DataFrame, np.ndarray, Tensor]] = None,
+    ):
+        obs *= mask
+        gaussian_sample = torch.randn(obs.size(0), 1, device=self.device)
+        predictions = self.network_list[0].generating_flow(
+            normals=gaussian_sample, condition=obs
+        )
+        return predictions
+
+    def _infer(
+        self,
+        obs: Tensor,
+        target: Tensor,
+        environments_map: Dict[int, np.ndarray],
+        data_loader: torch.utils.data.DataLoader,
+        show_epoch_progressbar: bool,
+        ground_truth_mask: Tensor,
+        nr_masks: int,
+        run: int,
+        nr_runs: int,
+        epochs_without_featuresel: int = 100,
+        epoch_switch: int = 30,
+        **kwargs,
+    ):
+        self.reset()
+        nr_envs = len(environments_map)
+        hyperparams_backup = copy.deepcopy(self.hyperparams)
+        if show_epoch_progressbar:
+            epoch_pbar = tqdm(range(self.epochs))
+            epoch_pbar.set_description(f"Run {run + 1}/{nr_runs}")
+        else:
+            epoch_pbar = range(self.epochs)
+
+        for param in self.masker_net.parameters():
+            param.requires_grad = False
+        mask_training_activated = False
+
+        epoch_losses = dict(
+            total=[], inn=[], inn_e=[], independence=[], l0_mask=[], l2=[]
+        )
+        reference_losses = None
+        incr_every_n_epoch = 10
+        for epoch in epoch_pbar:
+            batch_losses = {key: [] for key in epoch_losses.keys()}
+
+            # this flips the mask training status after epoch_switch many epochs
+            change = int(not bool(epoch % epoch_switch))
+
+            if epoch > epochs_without_featuresel:
+                if bool(change):
+                    mask_training_activated = bool(
+                        (mask_training_activated + change) % 2
+                    )
+
+                    for param in self.masker_net.parameters():
+                        param.requires_grad = mask_training_activated
+                    for network in self.network_list:
+                        for param in network.parameters():
+                            param.requires_grad = not mask_training_activated
+
+                if reference_losses is None:
+                    reference_losses = np.quantile(
+                        np.asarray(epoch_losses["residuals"][-100:])
+                        + np.asarray(epoch_losses["inn"][-100:]),
+                        q=[0.01, 0.99],
+                    )
+
+                if epoch % incr_every_n_epoch == 0:
+                    last_n = sum(
+                        list(
+                            map(
+                                np.array,
+                                (epoch_losses["inn"][-incr_every_n_epoch:]),
+                                epoch_losses["residuals"][-incr_every_n_epoch:],
+                            )
+                        )
+                    )
+                    if (
+                        reference_losses[0] < last_n < reference_losses[1]
+                    ).mean() > 0.4:
+                        old = self.hyperparams["l0"]
+                        self.hyperparams["l0"] += 0.02
+                        new = self.hyperparams["l0"]
+                        msg = f"Increasing hyperparam from {old} to {new}."
+                        self.logger.info(msg)
+
+            for batch_indices, env_info in data_loader:
+                self.optimizer.zero_grad()
+
+                mask = self.get_mask(
+                    ground_truth_mask, final=not mask_training_activated
+                ).expand(nr_masks, 1, -1)
+
+                batch_indices, sort_indices = torch.sort(batch_indices)
+                env_info = env_info[sort_indices]
+
+                obs_batch = obs[batch_indices]
+                obs_batch_e = torch.cat([obs_batch, env_info], 0)
+                masked_batch = self.masker_net(obs_batch, mask)
+                masked_batch_e = self.masker_net(obs_batch_e, mask)
+                target_batch = target[batch_indices].view(-1, 1)
+
+                batch_indices_by_env = {}
+                for env in environments_map.keys():
+                    batch_indices_by_env[env] = torch.as_tensor(env_info == env)
+
+                network = self.network_list[0]
+                network_e = self.network_list[1]
+
+                env_gaussians = []
+                target_per_env = []
+                masked_batch_by_env = []
+
+                env_gaussians_e = []
+                masked_batch_by_env_e = []
+
+                # normalizing computation
+
+                gauss_sample = network.normalizing_flow(
+                    target=target_batch.repeat(nr_masks, 1), condition=masked_batch,
+                ).view(nr_masks, -1, 1)
+                gauss_sample_e = network.normalizing_flow(
+                    target=target_batch.repeat(nr_masks, 1), condition=masked_batch_e,
+                ).view(nr_masks, -1, 1)
+                gauss_jacobian = network.log_jacobian_cache.view(nr_masks, -1, 1)
+                gauss_jacobian_e = network_e.log_jacobian_cache.view(nr_masks, -1, 1)
+
+                ##############################
+                # Environmental Segmentation #
+                ##############################
+
+                masked_batch = masked_batch.view(nr_masks, -1, self.p)
+                for env, indices_env in batch_indices_by_env.items():
+                    env_gaussians.append(
+                        (gauss_sample[:, indices_env], gauss_jacobian[:, indices_env])
+                    )
+                    masked_batch_by_env.append(masked_batch[:, indices_env])
+                    env_gaussians_e.append(
+                        (
+                            gauss_sample_e[:, indices_env],
+                            gauss_jacobian_e[:, indices_env],
+                        )
+                    )
+                    masked_batch_by_env_e.append(masked_batch_e[:, indices_env])
+                    target_per_env.append(target_batch[indices_env])
+
+                ##########
+                # Losses #
+                ##########
+
+                (
+                    inn_loss,
+                    inn_loss_e,
+                    density_loss,
+                    independence_loss,
+                    l0_loss,
+                    l2_loss,
+                ) = torch.zeros(5, device=self.device, requires_grad=True)
+                if self.hyperparams["inn"] != 0:
+                    inn_loss = self._maxlikelihood_loss(env_gaussians)
+                    inn_loss_e = self._maxlikelihood_loss(env_gaussians_e)
+
+                if self.hyperparams["independence"] != 0:
+                    independence_loss = self._independence_loss(
+                        env_gaussians, masked_batch_by_env
+                    )
+
+                if mask_training_activated:
+                    if self.hyperparams["l0"] != 0:
+                        l0_loss = self.masker_net.complexity_loss()
+                    # we get the mean over all envs from maxlikelihood_loss, but we want the sum here
+                    density_loss = self._density_loss(env_gaussians, env_gaussians_e)
+
+                if self.hyperparams["l2"] != 0:
+                    l2_loss = self._l2_regularization()
+
+                batch_loss = (
+                    self.hyperparams["inn"] * inn_loss
+                    + self.hyperparams["inn_e"] * inn_loss_e
+                    + self.hyperparams["l0"] * l0_loss
+                    + self.hyperparams["l2"] * l2_loss
+                    + self.hyperparams["independence"] * independence_loss
+                )
+
+                batch_losses["independence"].append(independence_loss.item())
+                batch_losses["inn"].append(torch.mean(inn_loss).item())
+                batch_losses["inn_e"].append(torch.mean(inn_loss_e).item())
+                batch_losses["density_diff"].append(density_loss.item())
+                batch_losses["l0_mask"].append(l0_loss.item())
+                batch_losses["l2"].append(l2_loss.item())
+                batch_losses["total"].append(batch_loss.item())
+
+                batch_loss.backward()
+                self.optimizer.step()
+
+            # update learning rates after last batch has finished
+            self.scheduler.step()
+
+            # store the various losses per batch into the epoch by averaging over batches
+            for loss_acc, loss_list in epoch_losses.items():
+                loss_list.append(np.mean(batch_losses[loss_acc]))
+
+            ##################
+            # Visualizations #
+            ##################
+
+            if self.use_visdom:
+                self._plot_mask(
+                    self.get_mask(final=True).detach().cpu().numpy(),
+                    self.get_parent_candidates(),
+                    "mask_0",
+                )
+
+                self._plot_gaussian_histograms(obs, target, environments_map)
+
+                for loss_name, losses in epoch_losses.items():
+                    self._plot_loss(
+                        losses, f"{loss_name}_loss", f"{loss_name.capitalize()} Loss",
+                    )
+
+                self._plot_data_approximation(obs, target, environments_map)
+
+        self.hyperparams = hyperparams_backup
+        results = self._mask_dict()
+        return results, epoch_losses
+
+    def _maxlikelihood_loss(self, env_gaussians: List[Tuple[Tensor, Tensor]]):
+        """
+        Compute the Maximum Likelihood Loss per environment per mask, then average loss over the number of masks.
+        This is the monte carlo approximation of the loss via multiple mask samples.
+        """
+        inn_losses = []
+        for env_gauss_sample, env_log_jacobian in env_gaussians:
+            # maximum likelihood of a standard gaussian
+            maxlikelihood_per_mask = torch.mean(
+                env_gauss_sample ** 2 / 2.0 - env_log_jacobian, dim=1
+            )
+            inn_losses.append(torch.mean(maxlikelihood_per_mask, dim=0))
+        return torch.mean(torch.cat(inn_losses))
+
+    def _density_loss(
+        self,
+        env_gaussians: List[Tuple[Tensor, Tensor]],
+        env_gaussians_e: List[Tuple[Tensor, Tensor]],
+    ):
+        """
+        Compute the Density Loss per environment per mask, then average loss over the number of masks.
+        This is the monte carlo approximation of the loss via multiple mask samples.
+        """
+        inn_losses = []
+        for (
+            (env_gauss_sample, env_log_jacobian),
+            (env_gauss_sample_e, env_log_jacobian_e),
+        ) in zip(env_gaussians, env_gaussians_e):
+            # log density difference between the two network targets via change of variables formula
+            density_diff_per_mask = torch.sum(
+                (env_gauss_sample_e ** 2 / 2.0 - env_log_jacobian_e)
+                - (env_gauss_sample ** 2 / 2.0 - env_log_jacobian),
+                dim=1,
+            )
+            # overage over all masks to get the correct estimate of the sum of differences
+            inn_losses.append(torch.mean(density_diff_per_mask, dim=0))
+        return torch.sum(torch.cat(inn_losses))  # sum up over all environments too
+
+    def _independence_loss(
+        self,
+        env_gaussians: List[Tuple[Tensor, Tensor]],
+        masked_batch_per_env: List[Tensor],
+    ):
+        """
+        Compute the dependence between the estimated gaussian noise and the predictors X of the target Y in each
+        environment. This independence is an essential assumption in the construction of SCMs, thus should be enforced.
+        """
+        independence_loss = torch.zeros(1, device=self.device)
+
+        nr_masks = env_gaussians[0][0].size(0)
+        for (gauss_sample, _), masked_batch_env in zip(
+            env_gaussians, masked_batch_per_env
+        ):
+
+            for mask_nr in range(nr_masks):
+                # punish dependence between predictors and noise
+                independence_loss += hsic(
+                    gauss_sample[mask_nr],
+                    masked_batch_env[mask_nr],
+                    gauss_sample.size(1),
+                )
+
+        independence_loss = independence_loss / nr_masks
+        return independence_loss
+
+    @staticmethod
+    def _pooled_maxlikelihood_loss(gauss_sample: Tensor, log_jacobian: Tensor):
+        """
+        Compute the environmental similarity loss of the gauss mapping for all environment data together.
+        This is done to enforce that the cinn maps all environments combined to gauss. This seems redundant
+        to the cINN maximum likelihood loss which enforces the same, yet this extra loss has proven to be
+        necessary for stable training.
+        """
+        maxlikelihood_per_mask = torch.mean(
+            gauss_sample ** 2 / 2.0 - log_jacobian, dim=1
+        )
+        maxlikelihood_loss = torch.mean(maxlikelihood_per_mask, dim=0)
+
+        # max for making scalar out of 1-dim tensor
+        return torch.max(maxlikelihood_loss)

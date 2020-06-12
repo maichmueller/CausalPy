@@ -16,14 +16,14 @@ if __name__ == "__main__":
     pref = "single"
     for i, (scm_generator, target_var, fname) in enumerate(
         [
-            (build_scm_minimal, "Y", f"{pref}_min"),
-            (build_scm_minimal2, "Y", f"{pref}_min2"),
-            (build_scm_basic, "Y", f"{pref}_basic"),
-            (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
-            (build_scm_exponential, "Y", f"{pref}_exp"),
+            # (build_scm_minimal, "Y", f"{pref}_min"),
+            # (build_scm_minimal2, "Y", f"{pref}_min2"),
+            # (build_scm_basic, "Y", f"{pref}_basic"),
+            # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
+            # (build_scm_exponential, "Y", f"{pref}_exp"),
             (build_scm_medium, "Y", f"{pref}_medium"),
-            (build_scm_large, "Y", f"{pref}_large"),
-            (build_scm_massive, "Y", f"{pref}_massive"),
+            # (build_scm_large, "Y", f"{pref}_large"),
+            # (build_scm_massive, "Y", f"{pref}_massive"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
             # (partial(simulate, nr_genes=25), "G_21", f"{pref}_sim25"),

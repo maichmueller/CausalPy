@@ -19,3 +19,7 @@ examples/Untitled.ipynb
 *.png
 
 examples/results/
+
+*.log
+
+*.pt

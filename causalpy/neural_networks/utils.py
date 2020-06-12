@@ -101,26 +101,57 @@ def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
     return gaussian_rbf
 
 
-def hsic(X, Y, batch_size):
-    """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
+# def hsic(X, Y, batch_size):
+#     """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
+#
+#     def centering(
+#         K: Tensor,
+#         device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
+#     ):
+#         n = K.shape[0]
+#         unit = torch.ones(n, n, device=device)
+#         I = torch.eye(n, device=device)
+#         Q = I - unit / n
+#         return torch.mm(torch.mm(Q, K), Q)
+#
+#     out = (
+#         torch.sum(
+#             centering(rbf(X, X), device=X.device)
+#             * centering(rbf(Y, Y), device=Y.device)
+#         )
+#         / batch_size
+#     )
+#     return out
 
-    def centering(
-        K: Tensor,
-        device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
-    ):
-        n = K.shape[0]
-        unit = torch.ones(n, n, device=device)
-        I = torch.eye(n, device=device)
-        Q = I - unit / n
-        return torch.mm(torch.mm(Q, K), Q)
 
-    out = (
-        torch.sum(
-            centering(rbf(X, X), device=X.device)
-            * centering(rbf(Y, Y), device=Y.device)
+def kernel_matrix(x: torch.Tensor, sigma):
+    dim = len(x.size())
+    x1 = torch.unsqueeze(x, 0)
+    x2 = torch.unsqueeze(x, 1)
+    axis = tuple(range(2, dim + 1))
+    if dim > 1:
+        return torch.exp(
+            -0.5 * torch.sum(torch.pow(x1 - x2, 2), axis=axis) / sigma ** 2
         )
-        / batch_size
-    )
+    else:
+        return torch.exp(-0.5 * torch.pow(x1 - x2, 2) / sigma ** 2)
+
+
+def centering(
+    K, device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu"
+):
+    n = K.shape[0]
+    unit = torch.ones(n, n).to(device)
+    I = torch.eye(n).to(device)
+    Q = I - unit / n
+
+    return torch.mm(torch.mm(Q, K), Q)
+
+
+def hsic(x, y, sigma=1.0):
+    Kx = kernel_matrix(x, sigma)
+    Ky = kernel_matrix(y, sigma)
+    out = torch.sum(centering(Kx) * centering(Ky)) / Kx.shape[0]
     return out
 
 

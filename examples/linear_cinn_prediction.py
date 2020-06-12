@@ -22,6 +22,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
+from study_cases import study_scm
 from linear_regression_eval import *
 
 
@@ -51,7 +52,8 @@ if __name__ == "__main__":
             # (build_scm_exponential, "Y", f"{pref}_exp"),
             (build_scm_medium, "Y", f"{pref}_medium"),
             (build_scm_large, "Y", f"{pref}_large"),
-            (build_scm_massive, "Y", f"{pref}_massive"),
+            # (build_scm_massive, "Y", f"{pref}_massive"),
+            # (study_scm, "Y", f"{pref}_study"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -70,7 +72,7 @@ if __name__ == "__main__":
             countify=False,
             intervention_style="markov",
             target_var=target_var,
-            sample_size=1024,
+            sample_size=2048,
             seed=seed,
         )
         target_parents_indices = np.array(
@@ -80,14 +82,14 @@ if __name__ == "__main__":
 
         nr_runs = 15
 
-        epochs = 800
+        epochs = 1000
         use_visdom = 0
 
         ap = AgnosticPredictor(
             epochs=epochs,
             batch_size=100000,
             visualize_with_visdom=bool(use_visdom),
-            device="cuda:1",
+            device="cuda:0",
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data,
