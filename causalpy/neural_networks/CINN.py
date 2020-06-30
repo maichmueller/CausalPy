@@ -1,29 +1,8 @@
-import logging
-import multiprocessing
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Optional, List, Collection
-
-from causalpy import Assignment
-from causalpy.causal_prediction.interventional import (
-    AgnosticPredictor,
-    MultiAgnosticPredictor,
-)
-from examples.study_cases import study_scm, generate_data_from_scm
-import numpy as np
-import torch
-from plotly import graph_objs as go
-from time import gmtime, strftime
-import os
-
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-
-
 import itertools
 from typing import Optional, Callable, Type, Tuple, List, Union
 
 import torch
-from causalpy.neural_networks.utils import get_jacobian
+from .utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
 
@@ -50,14 +29,14 @@ class CouplingBase(torch.nn.Module, ABC):
         # dummy buffers which become filled with parameters for the non conditional case.
         # otherwise these will hold the values given by the conditional net.
         self.mat_like_params = [
-            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
-            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
-            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
+            torch.empty(1, self.dim, self.nr_layers, device=device),
+            torch.empty(1, self.dim, self.nr_layers, device=device),
+            torch.empty(1, self.dim, self.nr_layers, device=device),
         ]
         self.vec_like_params = [
-            torch.empty(1, self.dim, device=device).to(device),  # bias2
-            torch.empty(1, self.dim, device=device).to(device),  # eps
-            torch.empty(1, self.dim, device=device).to(device),  # alpha
+            torch.empty(1, self.dim, device=device),  # bias2
+            torch.empty(1, self.dim, device=device),  # eps
+            torch.empty(1, self.dim, device=device),  # alpha
         ]
 
         self.is_conditional = dim_condition > 0
@@ -91,13 +70,13 @@ class CouplingBase(torch.nn.Module, ABC):
                     torch.nn.Parameter(tensor, requires_grad=True)
                     for tensor in self.mat_like_params
                 ]
-            ).to(device)
+            )
             self.vec_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
                     for tensor in self.vec_like_params
                 ]
-            ).to(device)
+            )
 
     def reset_parameters(self):
         if self.is_conditional:
@@ -114,13 +93,12 @@ class CouplingBase(torch.nn.Module, ABC):
             self._reset_conditional_parameters()
 
     def _reset_conditional_parameters(self):
-        torch.manual_seed(5)
         with torch.no_grad():
             for mat in self.mat_like_params:
                 mat.normal_(mean=0, std=1)
             # vec-like params
             self.bias2.normal_(mean=0, std=1)
-            self.eps.fill_(value=1)
+            self.eps.fill_(value=-1)
             self.alpha.fill_(value=0)
 
     @property
@@ -398,285 +376,163 @@ class CINN(torch.nn.Module):
             block.reset_parameters()
 
 
-class CINNFC(torch.nn.Module, Assignment):
-    def __init__(
-        self,
-        dim_in: int,
-        nr_layers: int = 0,
-        nr_blocks: int = 1,
-        strength: float = 0.0,
-        device=None,
-        **kwargs,
-    ):
+class CN(torch.nn.Module):
+    def __init__(self, n_blocks=1, n_dim=1, ls=16, n_condim=0, subnet_constructor=None):
         super().__init__()
-        Assignment.__init__(self)
-        self.nr_layers = nr_layers
-        self.dim_in = dim_in - 1
-        self.strength = strength
-        self.device = device
-        # -1 bc additive noise
-        self.cinn = CINN(
-            dim=dim_in - 1,
-            dim_condition=0,
-            nr_layers=nr_layers,
-            nr_blocks=nr_blocks,
-            device="cuda",
-        )
-
-    def forward(self, *args, **kwargs):
-        with torch.no_grad():
-            noise = (
-                torch.from_numpy(np.array(list(args), dtype=np.float32).T)
-                .to(self.device)
-                .reshape(-1, 1)
-            )
-            variables = (
-                torch.from_numpy(np.array(list(kwargs.values()), dtype=np.float32).T)
-                .squeeze(0)
-                .to(self.device)
-                .reshape(noise.shape[0], -1)
-            )
-
-            x = variables
-            #             print(noise.shape)
-            if self.dim_in > 0:
-                base = torch.cat((noise, variables), dim=1).to(self.device)
-            else:
-                base = noise
-
-            #             print("Baseshape", base.shape)
-
-            if self.dim_in == 0:
-                nonlin_part = noise
-            else:
-                ev = self.cinn(x)[:, 0].reshape(-1, 1)
-                #                 print("EV", ev.shape)
-                #                 print("NOise", noise.shape)
-                nonlin_part = ev + noise
-
-            #             print("nonlin", nonlin_part.shape)
-
-            base_sum = torch.sum(base, dim=1).view(-1, 1)
-
-            x = nonlin_part * self.strength + (1 - self.strength) * base_sum
-
-            return x.cpu().numpy().reshape(-1)
-
-    def __len__(self):
-        raise 2
-
-    def function_str(self, variable_names: Optional[Collection[str]] = None):
-        return f"CINN({', '.join(variable_names)})"
-
-
-def run_scenario(
-    Predictor,
-    params,
-    sample_size,
-    nr_runs,
-    epochs,
-    scenario,
-    step,
-    device=None,
-    **kwargs,
-):
-    seed = 0
-    np.random.seed(seed)
-    # print(coeffs)
-    scm = study_scm(seed=seed)
-    # standard_sample = scm.sample(sample_size)
-
-    nets = fc_net(**params, device=device)
-    nonlinearities = {
-        "X_0": (None, nets["X_0"], None),
-        "X_1": (None, nets["X_1"], None),
-        "X_2": (None, nets["X_2"], None),
-        "X_3": (None, nets["X_3"], None),
-        "X_4": (None, nets["X_4"], None),
-        "X_5": (None, nets["X_5"], None),
-        "X_6": (None, nets["X_6"], None),
-        "X_7": (None, nets["X_7"], None),
-        "X_8": (None, nets["X_8"], None),
-        "Y": (None, nets["Y"], None),
-    }
-    if scenario == "parents":
-        nonlinearities = {key: nonlinearities[key] for key in ["X_1", "X_2"]}
-    elif scenario == "children":
-        nonlinearities = {key: nonlinearities[key] for key in ["X_3", "X_6"]}
-    elif scenario == "target":
-        nonlinearities = {key: nonlinearities[key] for key in ["Y"]}
-    elif scenario == "all":
-        pass
-    scm.intervention(nonlinearities)
-    scm.clear_intervention_backup()  # make the current intervention the standard
-    # scm.plot(alpha=1)
-    # plt.show()
-    (
-        data,
-        environments,
-        scm,
-        possible_parents,
-        target_parents,
-    ) = generate_data_from_scm(scm, target_var="Y", sample_size=sample_size, seed=seed)
-
-    data2 = data.copy()
-    data2["env"] = environments
-    if not os.path.isdir("./data"):
-        os.mkdir("./data")
-    data2.to_csv(f"./data/nonlin_scenario_{scenario}_step_{step}.csv", index=False)
-
-    # plt.hist(
-    #     standard_sample["Y"],
-    #     color="green",
-    #     label="Standard Linear",
-    #     density=True,
-    #     bins=100,
-    #     alpha=0.5,
-    # )
-    # plt.hist(
-    #     data["Y"],te
-    #     color="red",
-    #     label=f"FC (layers: {params['nr_layers']} applied",
-    #     density=True,
-    #     bins=100,
-    #     alpha=0.5,
-    # )
-    #
-    # plt.legend()
-    # plt.show()
-
-    nr_envs = np.unique(environments).max() + 1
-    use_visdom = 0
-
-    ap = Predictor(
-        epochs=epochs,
-        batch_size=10000,
-        visualize_with_visdom=bool(use_visdom),
-        masker_network_params=dict(monte_carlo_sample_size=1),
-        device=device,
-    )
-
-    results_mask, results_loss, res_str = ap.infer(
-        data,
-        environments,
-        "Y",
-        nr_runs=nr_runs,
-        normalize=True,
-        save_results=True,
-        results_filename=f"{test_name}_scenario-{scenario}_step-{step+1}",
-        **kwargs,
-    )
-    s = f"{res_str}\n"
-    return {
-        "res_str": s,
-        "params": params,
-        "sample_size": sample_size,
-        "step": step,
-        "scenario": scenario,
-        "nr_runs": nr_runs,
-        "epochs": epochs,
-        "scm": scm,
-    }
-
-
-def fc_net(nr_layers: int, nr_hidden, strength: float, nr_blocks=1, device=None):
-    network_params = {
-        "nr_layers": nr_layers,
-        "nr_blocks": nr_blocks,
-        "nr_hidden": nr_hidden,
-        "strength": strength,
-        "device": device,
-    }
-    nets = {
-        "X_0": CINNFC(dim_in=1, **network_params).to(device),
-        "X_1": CINNFC(dim_in=2, **network_params).to(device),
-        "X_2": CINNFC(dim_in=2, **network_params).to(device),
-        "X_3": CINNFC(dim_in=1, **network_params).to(device),
-        "X_4": CINNFC(dim_in=3, **network_params).to(device),
-        "X_5": CINNFC(dim_in=1, **network_params).to(device),
-        "X_6": CINNFC(dim_in=3, **network_params).to(device),
-        "X_7": CINNFC(dim_in=2, **network_params).to(device),
-        "X_8": CINNFC(dim_in=1, **network_params).to(device),
-        "Y": CINNFC(dim_in=4, **network_params).to(device),
-    }
-    return nets
-
-
-def init(l):
-    global LOCK
-    LOCK = l
-
-
-test_name = "nonlinearitytest"
-
-if __name__ == "__main__":
-
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-
-    if not os.path.isdir("./log"):
-        os.mkdir("./log")
-    log_fname = f'{test_name}_{strftime("%Y-%m-%d_%H-%M-%S", gmtime())}'
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s",
-        filename=f"./log/{log_fname}.log",
-    )  # pass explicit filename here
-    logger = logging.getLogger()  # get the root logger
-
-    PredictorClass = AgnosticPredictor
-    multiprocessing.set_start_method("spawn")
-    man = multiprocessing.Manager()
-    steps = 20
-    sample_size = 4096
-    nr_runs = 30
-    epochs = 1000
-    results = []
-    scenarios = ["target", "all", "children", "parents"]
-    # we test 4 scenarios:
-    # 1. increasing nonlinearity in the parents,
-    # 2. increasing nonlinearity in the children,
-    # 3. increasing nonlinearity on the target,
-    # 4. increasing nonlinearity on all
-    for scenario in scenarios:
-        lock = man.Lock()
-        with ProcessPoolExecutor(max_workers=min(5, steps)) as executor:
-            futures = list(
-                (
-                    executor.submit(
-                        run_scenario,
-                        PredictorClass,
-                        {
-                            "nr_layers": layers,
-                            "nr_blocks": 10,
-                            "nr_hidden": 128,
-                            "strength": (strength + 1) / steps,
-                        },
-                        nr_epochs=epochs,
-                        nr_runs=nr_runs,
-                        scenario=scenario,
-                        epochs=epochs,
-                        step=step,
-                        sample_size=sample_size,
-                        LOCK=lock,
-                        device=device,
-                    )
-                    for step, (layers, strength) in enumerate(
-                        zip(range(steps), range(steps))
-                    )
+        self.n_blocks = n_blocks
+        mods = []
+        for i in range(n_blocks):
+            # mods.append(GlowLikeCouplingBlock(dims_in=n_dim, subnet_constructor=subnet_constructor, net=PfndTanh))
+            mods.append(
+                GlowLikeCouplingBlock(
+                    dims_in=n_dim,
+                    subnet_constructor=subnet_constructor,
+                    net=CouplingMonotone,
                 )
             )
-            for future in as_completed(futures):
-                lock.acquire()
-                results.append(future.result())
-                lock.release()
+        self.blocks = torch.nn.ModuleList(mods)
+        self.log_jacobian = torch.zeros(n_dim)
 
-    results = sorted(
-        results,
-        key=lambda x: -(
-            (len(scenarios) - scenarios.index(x["scenario"])) * 1000 - x["step"]
-        ),
-    )
+    def forward(self, x, y=None, rev=False):
+        self.log_jacobian = 0.0
+        if not rev:
+            for block in self.blocks:
+                x = block.forward(x, y)
+                self.log_jacobian += block.jacobian(x)
+            return x
+        else:
+            for block in self.blocks[::-1]:
+                x = block.forward(x, y, reverse=True)
+                self.log_jacobian += block.jacobian(x)
+            return x
 
-    for res in results:
-        for key, value in res.items():
-            logger.info(f"{key}={value}")
+    def jacobian(self, x):
+        return self.log_jacobian
+
+
+class GlowLikeCouplingBlock(torch.nn.Module):
+    def __init__(
+        self,
+        dims_in,
+        dims_c=[],
+        subnet_constructor=None,
+        clamp=5.0,
+        net=CouplingMonotone,
+    ):
+        super().__init__()
+        # channels = dims_in[0][0]
+        # self.ndims = len(dims_in[0])
+        channels = dims_in
+        self.split_len1 = channels // 2
+        self.split_len2 = channels - channels // 2
+        self.log_jacobian = torch.tensor([0])
+        self.clamp = clamp
+
+        self.conditional = len(dims_c) > 0
+        condition_length = sum([dims_c[i][0] for i in range(len(dims_c))])
+
+        self.s1 = net(
+            dim=self.split_len2,
+            ls=100,
+            subnet_constructor=subnet_constructor,
+            n_condim=self.split_len1 + condition_length,
+        )
+        self.s2 = net(
+            dim=self.split_len1,
+            ls=100,
+            subnet_constructor=subnet_constructor,
+            n_condim=self.split_len2 + condition_length,
+        )
+
+    def forward(self, x, c=[], rev=False):
+        x1, x2 = (x[:, : self.split_len1], x[:, self.split_len1 :])
+
+        if not rev:
+            y1 = self.s1(x1, torch.cat([x2, *c], 1) if self.conditional else x2)
+            y2 = self.s2.forward(
+                x2, torch.cat([y1.detach(), *c], 1) if self.conditional else y1.detach()
+            )
+            self.log_jacobian = torch.cat(
+                (self.s1.log_jacobian, self.s2.log_jacobian), dim=1
+            )
+
+        else:  # names of x and y are swapped!
+            y2 = self.s2.forward(
+                x2, torch.cat([x1, *c], 1) if self.conditional else x1, rev=True
+            )
+            y1 = self.s1(
+                x1, torch.cat([y2, *c], 1) if self.conditional else y2, rev=True
+            )
+
+            self.log_jacobian = torch.cat(
+                (self.s1.log_jacobian, self.s2.log_jacobian), dim=1
+            )
+        return torch.cat((y1, y2), 1)
+
+    def jacobian(self, x, c=[], rev=False):
+        return self.log_jacobian
+
+    def output_dims(self, input_dims):
+        return input_dims
+
+
+class bignet(torch.nn.Module):
+    def __init__(
+        self, n_dim=3, n_dimcon=0, n_blocks=1, ls=32, net=CINN, subnet_constructor=None
+    ):
+        super(bignet, self).__init__()
+        self.con = n_dimcon > 0
+        self.nets = []
+        self.n_dim = n_dim
+        self.n_dimcon = n_dimcon
+        self.log_jacobian = 0
+        for i in range(n_dim):
+            self.nets.append(
+                net(
+                    n_dim=1,
+                    ls=ls,
+                    n_condim=i + n_dimcon,
+                    n_blocks=n_blocks,
+                    subnet_constructor=subnet_constructor,
+                )
+            )
+        self.nets = torch.nn.ModuleList(self.nets)
+
+    def forward(self, x, y=None, rev=False):
+        z = torch.zeros_like(x)
+        # baaaaad
+        if y is None:
+            y = torch.zeros_like(x[:, :1])
+        if self.con:
+            data = torch.cat((y, x), dim=1)
+        else:
+            data = x
+        self.log_jacobian = 0
+        z[:, 0] = (
+            self.nets[0]
+            .forward(x=data[:, self.n_dimcon].unsqueeze(1), y=y, rev=rev)
+            .squeeze()
+        )
+        self.log_jacobian += self.nets[0].log_jacobian
+        for i in range(1, self.n_dim):
+            if rev:
+                if self.con:
+                    data[:, : self.n_dimcon + i] = torch.cat((y, z[:, :i]), dim=1)
+                else:
+                    data[:, :i] = z[:, :i]
+            z[:, i] = (
+                self.nets[i]
+                .forward(
+                    x=data[:, self.n_dimcon + i].unsqueeze(1),
+                    y=data[:, : self.n_dimcon + i],
+                    rev=rev,
+                )
+                .squeeze()
+            )
+            self.log_jacobian = torch.cat(
+                (self.log_jacobian, self.nets[i].log_jacobian), dim=1
+            )
+        return z
+
+    def jacobian(self, x):
+        return torch.sum(self.log_jacobian, dim=1)

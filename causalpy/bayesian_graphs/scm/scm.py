@@ -137,7 +137,7 @@ class SCM:
         # any node will be given the attributes of function and noise to later sample from and also an incoming edge
         # from its causal parent. We will store the causal root nodes separately.
         self.graph = nx.DiGraph()
-        self._build_graph(assignment_map)
+        self.add_variables(assignment_map)
 
     def __getitem__(self, node):
         return self.graph.pred[node], self.graph.nodes[node]
@@ -379,6 +379,10 @@ class SCM:
             for parent in parents:
                 self.graph.add_edge(parent, var)
 
+    def clear_intervention_backup(self):
+        self.interventions_backup_attr = dict()
+        self.interventions_backup_parent = dict()
+
     def reseed(self, seed: int):
         """
         Seeds the noise functions of each variable to a fixed (but different!) seed, deterministically computed from the
@@ -501,7 +505,7 @@ class SCM:
         else:
             return self.graph.nodes
 
-    def _build_graph(self, assignment_map):
+    def add_variables(self, assignment_map):
         for node_name, (parents_list, function, noise_model) in assignment_map.items():
             function.set_names_for_args(parents_list)
             self.graph.add_node(

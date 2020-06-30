@@ -4,6 +4,7 @@ from causalpy import (
     NoiseGenerator,
     DiscreteNoise,
     PolynomialAssignment,
+    LinkerAssignment,
 )
 import pandas as pd
 import numpy as np
@@ -15,11 +16,13 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
         "X_0": [],
         "X_1": [[0, 1]],
         "X_2": [[0, 1]],
-        "X_3": [[0, 1]],
+        "X_3": [],
         "X_4": [[0, 1]],
         "X_5": [],
         "X_6": [[0, 1], [0, 1]],
-        "Y": [[0, 1], [0, 1]],
+        "X_7": [[0, 1]],
+        "X_8": [],
+        "Y": [[0, 1], [0, 1], [0, 1]],
     }
     if coeffs_by_var is not None:
         coeffs.update(coeffs_by_var)
@@ -31,6 +34,8 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
         "X_4": {"dist": "standard_normal", "kwargs": {}},
         "X_5": {"dist": "standard_normal", "kwargs": {}},
         "X_6": {"dist": "standard_normal", "kwargs": {}},
+        "X_7": {"dist": "standard_normal", "kwargs": {}},
+        "X_8": {"dist": "standard_normal", "kwargs": {}},
         "Y": {"dist": "standard_normal", "kwargs": {}},
     }
     if noise_dists is not None:
@@ -58,18 +63,18 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
                     noises["X_2"]["dist"], **noises["X_2"]["kwargs"], seed=seed + 3
                 ),
             ),
-            "Y": (  # target
-                ["X_1", "X_2"],
-                PolynomialAssignment([0, 1], *coeffs["Y"]),
-                NoiseGenerator(
-                    noises["Y"]["dist"], **noises["Y"]["kwargs"], seed=seed + 4
-                ),
-            ),
             "X_3": (  # child of target
-                ["Y"],
+                [],
                 PolynomialAssignment([0, 1], *coeffs["X_3"]),
                 NoiseGenerator(
                     noises["X_3"]["dist"], **noises["X_3"]["kwargs"], seed=seed + 5
+                ),
+            ),
+            "Y": (  # target
+                ["X_1", "X_2", "X_3"],
+                PolynomialAssignment([0, 1], *coeffs["Y"]),
+                NoiseGenerator(
+                    noises["Y"]["dist"], **noises["Y"]["kwargs"], seed=seed + 4
                 ),
             ),
             "X_4": (  # descendant of target
@@ -93,6 +98,20 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
                     noises["X_6"]["dist"], **noises["X_6"]["kwargs"], seed=seed + 8
                 ),
             ),
+            "X_7": (  # descendant of target
+                ["X_4"],
+                PolynomialAssignment([0, 1], *coeffs["X_7"]),
+                NoiseGenerator(
+                    noises["X_7"]["dist"], **noises["X_7"]["kwargs"], seed=seed + 7
+                ),
+            ),
+            "X_8": (  # dummy
+                [],
+                PolynomialAssignment([0, 1], *coeffs["X_8"]),
+                NoiseGenerator(
+                    noises["X_8"]["dist"], **noises["X_8"]["kwargs"], seed=seed + 7
+                ),
+            ),
         },
         variable_tex_names={
             "X_0": "$X_0$",
@@ -102,6 +121,7 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
             "X_4": "$X_4$",
             "X_5": "$X_5$",
             "X_6": "$X_6$",
+            "X_7": "$X_7$",
         },
     )
     return cn
@@ -110,7 +130,9 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
 def generate_data_from_scm(
     scm,
     target_var=None,
-    intervention_style="markov",
+    intervention_reach="markov",
+    intervention_style="do",
+    strength=5,
     countify=False,
     sample_size=100,
     seed=None,
@@ -134,14 +156,14 @@ def generate_data_from_scm(
     sample = scm.sample(sample_size_per_env)
     sample_data = [sample[variables]]
     environments += [0] * sample_size_per_env
-    if intervention_style == "markov":
+    if intervention_reach == "markov":
         interv_variables = set(target_parents)
         for child in scm.graph.successors(target_var):
             child_pars = set(scm.graph.predecessors(child))
             child_pars = child_pars.union([child])
             child_pars.remove(target_var)
             interv_variables = interv_variables.union(child_pars)
-    elif intervention_style == "children":
+    elif intervention_reach == "children":
         interv_variables = set([])
         for child in scm.graph.successors(target_var):
             child_pars = set(scm.graph.predecessors(child))
@@ -152,13 +174,41 @@ def generate_data_from_scm(
         interv_variables = other_variables
 
     # perform interventions on selected variables
-    for parent in interv_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 3
-        # interv_value = 0
-        scm.do_intervention([parent], [interv_value])
-        print(
-            f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."
-        )
+    for var in interv_variables:
+
+        interv_value = rng.choice([-1, 1]) * rng.random(1) * strength
+
+        if intervention_style == "do":
+
+            scm.do_intervention([var], [interv_value])
+            print(
+                f"Environment {environments[-1] + 1}: Do-Intervention on variable {var} for value {interv_value}."
+            )
+
+        elif intervention_style == "meanshift":
+            old_assignment = scm[var][1][scm.function_key]
+            new_assignment = LinkerAssignment(
+                lambda x: x + interv_value, old_assignment
+            )
+            scm.intervention({var: (None, new_assignment, None)})
+            print(
+                f"Environment {environments[-1] + 1}: Shift-Intervention on variable {var} for value {interv_value}."
+            )
+
+        elif intervention_style == "scaling":
+            old_assignment = scm[var][1][scm.function_key]
+            new_assignment = LinkerAssignment(
+                lambda x: x * interv_value, old_assignment
+            )
+            scm.intervention({var: (None, new_assignment, None)})
+            print(
+                f"Environment {environments[-1] + 1}: Scale-Intervention on variable {var} for value {interv_value}."
+            )
+        else:
+            raise ValueError(
+                f"intervention style '{intervention_style}' not recognized "
+            )
+
         sample_data.append(scm.sample(sample_size_per_env))
         environments += [environments[-1] + 1] * sample_size_per_env
         scm.undo_intervention()

@@ -13,7 +13,7 @@ import math
 from tqdm.auto import tqdm
 
 from causalpy import SCM, LinearAssignment, NoiseGenerator, DiscreteNoise
-from causalpy.neural_networks import cINN, L0InputGate
+from causalpy.neural_networks import CINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
@@ -50,10 +50,10 @@ if __name__ == "__main__":
             # (build_scm_basic, "Y", f"{pref}_basic"),
             # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
             # (build_scm_exponential, "Y", f"{pref}_exp"),
-            (build_scm_medium, "Y", f"{pref}_medium"),
-            (build_scm_large, "Y", f"{pref}_large"),
+            # (build_scm_medium, "Y", f"{pref}_medium"),
+            # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
-            # (study_scm, "Y", f"{pref}_study"),
+            (study_scm, "Y", f"{pref}_study"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -80,7 +80,7 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 15
+        nr_runs = 20
 
         epochs = 1000
         use_visdom = 0

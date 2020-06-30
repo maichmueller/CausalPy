@@ -91,8 +91,7 @@ class Assignment(ABC):
                 variable_names = list(
                     name
                     for name, position in sorted(
-                        self._named_arg_position.items(),
-                        key=lambda x: x[1],
+                        self._named_arg_position.items(), key=lambda x: x[1],
                     )
                 )
             else:
@@ -138,7 +137,9 @@ class Assignment(ABC):
                     val
                     for key, val in sorted(
                         kwargs.items(),
-                        key=lambda key_val_pair: self._named_arg_position[key_val_pair[0]],
+                        key=lambda key_val_pair: self._named_arg_position[
+                            key_val_pair[0]
+                        ],
                     )
                 )
 

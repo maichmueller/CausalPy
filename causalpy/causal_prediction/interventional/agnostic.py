@@ -20,7 +20,7 @@ import warnings
 
 from causalpy.neural_networks import (
     L0InputGate,
-    cINN,
+    CINN,
 )
 from causalpy.neural_networks.utils import (
     StratifiedSampler,
@@ -183,7 +183,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         for i, network in enumerate(self.network_list):
             if network is None:
                 cast_to_modulelist = True
-                self.network_list[i] = cINN(dim_condition=self.p, **self.network_params)
+                self.network_list[i] = CINN(dim_condition=self.p, **self.network_params)
             else:
                 network.reset_parameters()
         if cast_to_modulelist:
@@ -567,7 +567,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.7, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.7, residuals=1, inn=1, independence=1, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -901,7 +901,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=1, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1169,6 +1169,37 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         )
         return predictions
 
+    def _maxlikelihood_loss(
+        self, gaussians_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]]
+    ):
+        """
+        Compute the INN via maximum likelihood loss on the generated gauss samples of the cINN
+        per mask, then average loss over the number of masks.
+        This is the monte carlo approximation of the loss via multiple mask samples.
+        """
+        maxlikelihood_losses_by_net = []
+        for gaussians_by_env in gaussians_by_env_by_net:
+            maxlikelihood_losses = []
+            for gauss_sample_and_jacobian in gaussians_by_env:
+                if gauss_sample_and_jacobian is not None:
+                    gauss_sample, gaussian_jacobian = gauss_sample_and_jacobian
+
+                    maxlikelihood_losses.append(
+                        torch.mean(
+                            torch.mean(
+                                gauss_sample ** 2 / 2 - gaussian_jacobian, dim=1
+                            ),
+                            dim=0,
+                        )
+                    )
+            # take the mean over the environmental max-likelihood losses
+            maxlikelihood_losses_by_net.append(
+                torch.mean(torch.cat(maxlikelihood_losses)).view(1)
+            )
+        # take the mean over the max likelihood losses of all networks
+        ml_loss = torch.mean(torch.cat(maxlikelihood_losses_by_net))
+        return ml_loss
+
     def _residuals_loss(
         self, gaussians_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]],
     ):
@@ -1239,37 +1270,6 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                 torch.mean(torch.cat(independence_losses_by_env))
             )
         return torch.mean(torch.cat(independence_losses_by_net))
-
-    def _maxlikelihood_loss(
-        self, gaussians_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]]
-    ):
-        """
-        Compute the INN via maximum likelihood loss on the generated gauss samples of the cINN
-        per mask, then average loss over the number of masks.
-        This is the monte carlo approximation of the loss via multiple mask samples.
-        """
-        maxlikelihood_losses_by_net = []
-        for gaussians_by_env in gaussians_by_env_by_net:
-            maxlikelihood_losses = []
-            for gauss_sample_and_jacobian in gaussians_by_env:
-                if gauss_sample_and_jacobian is not None:
-                    gauss_sample, gaussian_jacobian = gauss_sample_and_jacobian
-
-                    maxlikelihood_losses.append(
-                        torch.mean(
-                            torch.mean(
-                                gauss_sample ** 2 / 2 - gaussian_jacobian, dim=1
-                            ),
-                            dim=0,
-                        )
-                    )
-            # take the maximum over the environmental max likelihood losses
-            maxlikelihood_losses_by_net.append(
-                torch.mean(torch.cat(maxlikelihood_losses)).view(1)
-            )
-        # take the mean over the max likelihood losses of all networks
-        ml_loss = torch.mean(torch.cat(maxlikelihood_losses_by_net))
-        return ml_loss
 
 
 def results_statistics(
@@ -1346,7 +1346,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0.0, l2=0.0)
+            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(

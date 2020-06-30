@@ -18,13 +18,13 @@ import matplotlib.pyplot as plt
 
 
 def run_scenario(
-    Predictor, coeffs, sample_size, nr_runs, epochs, scenario, step, **kwargs
+    Predictor, dists, sample_size, nr_runs, epochs, scenario, step, **kwargs
 ):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
     np.random.seed(seed)
     # print(coeffs)
-    scm = study_scm(seed=seed, coeffs_by_var=coeffs)
+    scm = study_scm(seed=seed, noise_dists=dists)
     scm.plot()
     plt.show()
     (
@@ -53,13 +53,13 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"scenario-{scenario}_step-{step+1}",
+        results_filename=f"{test_name}_scenario-{scenario}_step-{step+1}",
         **kwargs,
     )
     s = f"{res_str}\n"
     return {
         "res_str": s,
-        "coeffs": coeffs,
+        "noise": dists,
         "sample_size": sample_size,
         "step": step,
         "scenario": scenario,
@@ -69,47 +69,20 @@ def run_scenario(
     }
 
 
-def return_coeffs_by_var(coeffs, scenario):
-    if scenario == "st_gaussian":
-        coeffs_by_var = {"X_1": [coeffs], "X_2": [coeffs]}
-    elif scenario == "gaussian":
-        coeffs_by_var = {"X_3": [coeffs], "X_6": [coeffs, coeffs]}
-    elif scenario == "exponential":
-        coeffs_by_var = {"Y": [coeffs, coeffs]}
-    elif scenario == "cauchy":
-        coeffs_by_var = {
-            "X_1": [coeffs],
-            "X_2": [coeffs],
-            "X_3": [coeffs],
-            "X_4": [coeffs],
-            "X_6": [coeffs, coeffs],
-            "Y": [coeffs, coeffs],
-        }
-    elif scenario == "studentt":
-        pass
-    elif scenario == "beta":
-        pass
-    elif scenario == "lognormal":
-        pass
-    elif scenario == "uniform":
-        pass
-    elif scenario == "gamma":
-        pass
-    elif scenario == "weibull":
-        pass
-    return coeffs_by_var
-
-
 def init(l):
     global LOCK
     LOCK = l
 
 
+test_name = "noisetest"
+
 if __name__ == "__main__":
+
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
-    log_fname = f'{strftime("%Y-%m-%d_%H-%M-%S", gmtime())}'
+    log_fname = f'{test_name}_{strftime("%Y-%m-%d_%H-%M-%S", gmtime())}'
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s",
@@ -120,9 +93,9 @@ if __name__ == "__main__":
     PredictorClass = AgnosticPredictor
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
-    steps = 40
+    steps = None
     sample_size = 4096
-    nr_runs = 20
+    nr_runs = 30
     epochs = 1000
     results = []
     dists = [
@@ -130,116 +103,37 @@ if __name__ == "__main__":
             "normal",
             [
                 dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
+                dict(loc=0, scale=2),
+                dict(loc=0, scale=5),
+                dict(loc=5, scale=1),
+                dict(loc=-5, scale=1),
             ],
             "numpy",
         ),
         (
             "exponential",
-            [
-                dict(scale=1),
-                dict(scale=1),
-                dict(scale=1),
-                dict(scale=1),
-                dict(scale=1),
-                dict(scale=1),
-            ],
+            [dict(scale=1), dict(scale=5), dict(scale=10), dict(scale=30),],
             "numpy",
         ),
         (
             "cauchy",
             [
                 dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
+                dict(loc=0, scale=2),
+                dict(loc=0, scale=5),
+                dict(loc=5, scale=1),
+                dict(loc=-5, scale=1),
             ],
             "scipy",
         ),
         (
-            "noncentral_chisquare",
+            "beta",
             [
-                dict(df=1, nonc=1),
-                dict(df=1, nonc=1),
-                dict(df=1, nonc=1),
-                dict(df=1, nonc=1),
-                dict(df=1, nonc=1),
-                dict(df=1, nonc=1),
-            ],
-            "numpy",
-        ),
-        (
-            "t",
-            [
-                dict(df=1, loc=0, scale=1),
-                dict(df=1, loc=0, scale=1),
-                dict(df=1, loc=0, scale=1),
-                dict(df=1, loc=0, scale=1),
-                dict(df=1, loc=0, scale=1),
-            ],
-            "scipy",
-        ),
-        "beta",
-        (
-            "lognormal",
-            dict(mean=0, sigma=1),
-            dict(mean=0, sigma=1),
-            dict(mean=0, sigma=1),
-            dict(mean=0, sigma=1),
-            dict(mean=0, sigma=1),
-        ),
-        (
-            "gumbel",
-            [
-                dict(loc=0, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-            ],
-            "numpy",
-        ),
-        (
-            "uniform",
-            [
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=1),
-            ],
-            "numpy",
-        ),
-        (
-            "gamma",
-            [
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-                dict(shape=1, scale=1),
-            ],
-            "numpy",
-        ),
-        (
-            "weibull",
-            [
-                dict(a=1.0),
-                dict(a=1.0),
-                dict(a=1.0),
-                dict(a=1.0),
-                dict(a=1.0),
-                dict(a=1.0),
-                dict(a=1.0),
+                dict(a=1, b=1),
+                dict(a=0.5, b=1),
+                dict(a=0.25, b=1),
+                dict(a=1, b=0.5),
+                dict(a=1, b=0.25),
             ],
             "numpy",
         ),
@@ -249,38 +143,36 @@ if __name__ == "__main__":
     # 2. increasing nonlinearity in the children,
     # 3. increasing nonlinearity on the target,
     # 4. increasing nonlinearity on all
+    scenarios = ["parents", "children", "target", "all"]
+
     for scenario in scenarios:
-        lock = man.Lock()
-        with ProcessPoolExecutor(max_workers=20) as executor:
-            futures = list(
-                (
-                    executor.submit(
-                        run_scenario,
-                        PredictorClass,
-                        return_coeffs_by_var(coeffs, scenario),
-                        nr_epochs=epochs,
-                        nr_runs=nr_runs,
-                        scenario=scenario,
-                        epochs=epochs,
-                        step=step,
-                        sample_size=sample_size,
-                        LOCK=lock,
-                    )
-                    for step, coeffs in enumerate(
-                        zip(
-                            [0] * steps,
-                            [1] * steps,
-                            np.linspace(0.1, 4, steps),
-                            np.linspace(-0.01, -0.4, steps),
-                            np.linspace(0.001, 0.04, steps),
+        for package in dists:
+            dist, params, source = package
+            for param in params:
+                param["source"] = source
+            lock = man.Lock()
+            with ProcessPoolExecutor(max_workers=5) as executor:
+                futures = list(
+                    (
+                        executor.submit(
+                            run_scenario,
+                            PredictorClass,
+                            {"dist": dist, "kwargs": params},
+                            nr_epochs=epochs,
+                            nr_runs=nr_runs,
+                            scenario=scenario,
+                            epochs=epochs,
+                            step=step,
+                            sample_size=sample_size,
+                            LOCK=lock,
                         )
+                        for step, param in enumerate(params)
                     )
                 )
-            )
-            for future in as_completed(futures):
-                lock.acquire()
-                results.append(future.result())
-                lock.release()
+                for future in as_completed(futures):
+                    lock.acquire()
+                    results.append(future.result())
+                    lock.release()
 
     results = sorted(
         results,
@@ -290,11 +182,5 @@ if __name__ == "__main__":
     )
 
     for res in results:
-        logger.info(f"scenario={res['scenario']}")
-        logger.info(f"step={res['step']}")
-        logger.info(f"epochs={res['epochs']}")
-        logger.info(f"nr_runs={res['nr_runs']}")
-        logger.info(f"sample_size={res['sample_size']}")
-        logger.info(f"coefficients={res['coeffs']}")
-        logger.info(f"scm=\n{res['scm']}")
-        logger.info(f"outcome=\n{res['res_str']}\n")
+        for key, value in res.items():
+            logger.info(f"{key}={value}")

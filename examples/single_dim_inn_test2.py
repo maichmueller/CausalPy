@@ -42,21 +42,20 @@ win3 = viz.line(
 )
 optimizer = t.optim.Adam(net.parameters(), lr=0.01, weight_decay=1e-5)
 
-for i in range(1000):
-    z = net(x=data, condition=con, reverse=False)
-    log_grad = net.log_jacobian_cache
-    loss = (z ** 2 / 2 - log_grad).mean()
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    if i % 10 == 0:
-        print(loss)
-        z = net(x=xV, condition=t.zeros(len(xV), n_conDim).to(dev), reverse=False)
+z = net(x=data, condition=con, reverse=False)
+log_grad = net.log_jacobian_cache
+loss = (z ** 2 / 2 - log_grad).mean()
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+if i % 10 == 0:
+    print(loss)
+    z = net(x=xV, condition=t.zeros(len(xV), n_conDim).to(dev), reverse=False)
 
-        viz.line(X=s(xV), Y=s(z), win=win2, opts=dict(title="flow"))
-        viz.line(
-            X=s(xV),
-            Y=s(std(z) * t.exp(net.log_jacobian_cache)),
-            win=win3,
-            opts=dict(title="estimated density"),
-        )
+    viz.line(X=s(xV), Y=s(z), win=win2, opts=dict(title="flow"))
+    viz.line(
+        X=s(xV),
+        Y=s(std(z) * t.exp(net.log_jacobian_cache)),
+        win=win3,
+        opts=dict(title="estimated density"),
+    )

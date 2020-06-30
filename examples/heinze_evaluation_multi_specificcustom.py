@@ -19,7 +19,7 @@ from causalpy import (
     DiscreteNoise,
     SignSqrtAssignment,
 )
-from causalpy.neural_networks import cINN, L0InputGate
+from causalpy.neural_networks import CINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate

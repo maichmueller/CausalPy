@@ -4,3 +4,4 @@ from .polynomial import PolynomialAssignment
 from .linker import *
 from .composition import CompositionAssignment
 from .heinze import IdentityAssignment, MaxAssignment, SignSqrtAssignment, SinAssignment
+from .arbitrary import ArbitraryAssignment
