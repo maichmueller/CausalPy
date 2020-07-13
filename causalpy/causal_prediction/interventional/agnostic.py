@@ -31,6 +31,7 @@ from causalpy.neural_networks.utils import (
 )
 from causalpy.utils import TempFolder
 from collections import namedtuple
+import csv
 
 import os
 import re
@@ -220,6 +221,21 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                 obs, envs, target_variable, normalize, ground_truth_mask,
             )
 
+            if save_results:
+                if not os.path.isdir(results_folder):
+                    os.mkdir(results_folder)
+
+                with open(
+                    os.path.join(results_folder, f"{results_filename}.csv"),
+                    "w",
+                    newline="",
+                ) as csvfile:
+                    writer = csv.writer(
+                        csvfile, delimiter=",", quoting=csv.QUOTE_MINIMAL
+                    )
+                    mask = self._mask_dict()
+                    writer.writerow(list(mask.keys()))
+
             for run in range(nr_runs):
                 final_mask, losses = self._infer(
                     obs=obs,
@@ -232,17 +248,28 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                     run=run,
                     nr_runs=nr_runs,
                 )
+                if save_results:
+                    with open(
+                        os.path.join(results_folder, f"{results_filename}.csv"),
+                        "a",
+                        newline="",
+                    ) as csvfile:
+                        writer = csv.writer(
+                            csvfile, delimiter=",", quoting=csv.QUOTE_MINIMAL
+                        )
+                        writer.writerow(list(final_mask.values()))
+
                 results_masks.append(final_mask)
                 results_losses.append(losses)
-                for i, network in enumerate(self.network_list):
-                    torch.save(
-                        network.state_dict(),
-                        os.path.join(temp_folder, f"run_{run}_network_{i}.pt"),
-                    )
-                torch.save(
-                    self.masker_net.state_dict(),
-                    os.path.join(temp_folder, f"run_{run}_masker.pt"),
-                )
+                # for i, network in enumerate(self.network_list):
+                #     torch.save(
+                #         network.state_dict(),
+                #         os.path.join(temp_folder, f"run_{run}_network_{i}.pt"),
+                #     )
+                # torch.save(
+                #     self.masker_net.state_dict(),
+                #     os.path.join(temp_folder, f"run_{run}_masker.pt"),
+                # )
 
             best_run, lowest_loss, res_str, res_df = results_statistics(
                 target_variable,
@@ -250,32 +277,30 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                 results_losses,
                 results_masks,
             )
-            for i, network in enumerate(self.network_list):
-                network.load_state_dict(
-                    torch.load(
-                        os.path.join(temp_folder, f"run_{best_run}_network_{i}.pt")
-                    )
-                )
-            self.masker_net.load_state_dict(
-                torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
-            )
+            # for i, network in enumerate(self.network_list):
+            #     network.load_state_dict(
+            #         torch.load(
+            #             os.path.join(temp_folder, f"run_{best_run}_network_{i}.pt")
+            #         )
+            #     )
+            # self.masker_net.load_state_dict(
+            #     torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
+            # )
             if save_results:
-                if not os.path.isdir(results_folder):
-                    os.mkdir(results_folder)
                 res_df.to_csv(
                     os.path.join(results_folder, f"{results_filename}.csv"), index=False
                 )
-                for i, network in enumerate(self.network_list):
-                    torch.save(
-                        network.state_dict(),
-                        os.path.join(
-                            results_folder, f"{results_filename}_network_{i}.pt"
-                        ),
-                    )
-                torch.save(
-                    self.masker_net.state_dict(),
-                    os.path.join(results_folder, f"{results_filename}_masker.pt"),
-                )
+                # for i, network in enumerate(self.network_list):
+                #     torch.save(
+                #         network.state_dict(),
+                #         os.path.join(
+                #             results_folder, f"{results_filename}_network_{i}.pt"
+                #         ),
+                #     )
+                # torch.save(
+                #     self.masker_net.state_dict(),
+                #     os.path.join(results_folder, f"{results_filename}_masker.pt"),
+                # )
         return results_masks, results_losses, res_str
 
     def _infer(
@@ -567,7 +592,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.7, residuals=1, inn=1, independence=1, l2=0.0)
+            "hyperparams", dict(l0=0.68, residuals=1, inn=1, independence=1, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -799,6 +824,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
 
         self.hyperparams = hyperparams_backup
         results = self._mask_dict()
+        print(results)
         return results, epoch_losses
 
     def _maxlikelihood_loss(self, env_gaussians: List[Tuple[Tensor, Tensor]]):
@@ -1241,33 +1267,37 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
     def _independence_loss(
         self,
         gaussian_by_env_by_net: List[List[Optional[Tuple[Tensor, Tensor]]]],
-        masked_batch_per_env: List[List[Tensor]],
+        masked_batch_by_env_by_net: List[List[Tensor]],
     ):
         """
         Compute the dependence between the estimated gaussian noise and the predictors X of the target Y in each
         environment. This independence is an essential assumption in the construction of SCMs, thus should be enforced.
         """
         independence_losses_by_net = []
-        nr_masks = gaussian_by_env_by_net[0][0][0].size(0)
-        for gaussian_by_env in gaussian_by_env_by_net:
+        nr_masks = gaussian_by_env_by_net[0][1][0].size(0)
+        for gaussian_by_env, masked_batch_by_env in zip(
+            gaussian_by_env_by_net, masked_batch_by_env_by_net
+        ):
             independence_losses_by_env = []
-            for (gauss_sample, _), masked_batch_env in zip(
-                gaussian_by_env, masked_batch_per_env
-            ):
-
+            for gauss_pack, masked_batch in zip(gaussian_by_env, masked_batch_by_env):
+                if gauss_pack is None:
+                    continue
+                gauss_sample, _ = gauss_pack
                 for mask_nr in range(nr_masks):
                     # punish dependence between predictors and noise
-                    independence_losses_by_env.append(
+                    loss_per_mask = torch.zeros(1, device=self.device)
+                    loss_per_mask += (
                         hsic(
                             gauss_sample[mask_nr],
-                            masked_batch_env[mask_nr],
+                            masked_batch[mask_nr],
                             gauss_sample.size(1),
                         )
                         / nr_masks
                     )
+                    independence_losses_by_env.append(loss_per_mask)
 
             independence_losses_by_net.append(
-                torch.mean(torch.cat(independence_losses_by_env))
+                torch.mean(torch.cat(independence_losses_by_env)).view(1)
             )
         return torch.mean(torch.cat(independence_losses_by_net))
 
@@ -1281,19 +1311,19 @@ def results_statistics(
             candidates, key=lambda x: int(x.split("_")[-1]) if "_" in x else x,
         )
     }
-    best_invariance_result = -1
-    lowest_invariance_loss = float("infinity")
+    # best_invariance_result = -1
+    # lowest_invariance_loss = float("infinity")
     for i, (result_mask, result_loss) in enumerate(zip(results_masks, results_losses)):
         for var, mask in result_mask.items():
             full_results[var].append(mask)
-            if (
-                result_loss["residuals"][-1] + result_loss["inn"][-1]
-                < lowest_invariance_loss
-            ):
-                lowest_invariance_loss = (
-                    result_loss["residuals"][-1] + result_loss["inn"][-1]
-                )
-                best_invariance_result = i
+            # if (
+            #     result_loss["residuals"][-1] + result_loss["inn"][-1]
+            #     < lowest_invariance_loss
+            # ):
+            #     lowest_invariance_loss = (
+            #         result_loss["residuals"][-1] + result_loss["inn"][-1]
+            #     )
+            #     best_invariance_result = i
     statistics = dict()
     for var, values in full_results.items():
         stats_dict = dict()
@@ -1319,19 +1349,20 @@ def results_statistics(
         for func_str, value in stat_dict.items():
             res_str += f"\t{func_str}: {value}\n"
         res_str += f"\tresults: {full_results[var]}\n"
-    res_str += "Best individual run by residuals loss:\n"
-    res_str += f"\tRun: {best_invariance_result}\n"
-    res_str += f"\tLoss: {lowest_invariance_loss}\n"
-    val_str = ", ".join(
-        [f"{var}: {val}" for var, val in results_masks[best_invariance_result].items()]
-    )
-    res_str += f"\tMask: {val_str}\n\n"
+    # res_str += "Best individual run by residuals loss:\n"
+    # res_str += f"\tRun: {best_invariance_result}\n"
+    # res_str += f"\tLoss: {lowest_invariance_loss}\n"
+    # val_str = ", ".join(
+    #     [f"{var}: {val}" for var, val in results_masks[best_invariance_result].items()]
+    # )
+    # res_str += f"\tMask: {val_str}\n\n"
 
     results_df = pd.DataFrame.from_dict(
         {var: values for (var, values) in full_results.items()}, orient="columns"
     )
 
-    return best_invariance_result, lowest_invariance_loss, res_str, results_df
+    # return best_invariance_result, lowest_invariance_loss, res_str, results_df
+    return None, None, res_str, results_df
 
 
 class DensityBasedPredictor(AgnosticPredictorBase):
@@ -1346,7 +1377,8 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.3, residuals=1, inn=1, independence=0, l2=0.0)
+            "hyperparams",
+            dict(l0=0.3, residuals=1, inn=1, inn_e=1, independence=0, l2=0.0),
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1379,6 +1411,35 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                 **self.optimizer_params,
             )
         return self.optimizer
+
+    def _reset_networks(self):
+        # this handling is for the multi-agnostic case. We will initialize as many network copies as there are
+        # environments.
+        if not self.network_list:
+            if not self.env_start_end:
+                #  If however no environments have been provided yet either, then we are going to abort.
+                raise ValueError(
+                    "No networks have been set yet, and we have no environment information to set them. "
+                    "Aborting."
+                )
+            # a network per environment
+            self.network_list = [None, None]
+
+        cast_to_modulelist = False
+        for i, network in enumerate(self.network_list):
+            if network is None:
+                dim_cond = self.p
+                cast_to_modulelist = True
+                if i == 1:
+                    dim_cond += 1
+                self.network_list[i] = CINN(
+                    dim_condition=dim_cond, **self.network_params
+                )
+            else:
+                network.reset_parameters()
+        if cast_to_modulelist:
+            self.network_list = torch.nn.ModuleList(self.network_list)
+        self.network_list.to(self.device).train()
 
     @AgnosticPredictorBase.predict_input_validator
     def predict(
@@ -1422,7 +1483,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         mask_training_activated = False
 
         epoch_losses = dict(
-            total=[], inn=[], inn_e=[], independence=[], l0_mask=[], l2=[]
+            total=[], inn=[], inn_e=[], independence=[], l0_mask=[], density_diff=[]
         )
         reference_losses = None
         incr_every_n_epoch = 10
@@ -1444,31 +1505,31 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                         for param in network.parameters():
                             param.requires_grad = not mask_training_activated
 
-                if reference_losses is None:
-                    reference_losses = np.quantile(
-                        np.asarray(epoch_losses["residuals"][-100:])
-                        + np.asarray(epoch_losses["inn"][-100:]),
-                        q=[0.01, 0.99],
-                    )
-
-                if epoch % incr_every_n_epoch == 0:
-                    last_n = sum(
-                        list(
-                            map(
-                                np.array,
-                                (epoch_losses["inn"][-incr_every_n_epoch:]),
-                                epoch_losses["residuals"][-incr_every_n_epoch:],
-                            )
-                        )
-                    )
-                    if (
-                        reference_losses[0] < last_n < reference_losses[1]
-                    ).mean() > 0.4:
-                        old = self.hyperparams["l0"]
-                        self.hyperparams["l0"] += 0.02
-                        new = self.hyperparams["l0"]
-                        msg = f"Increasing hyperparam from {old} to {new}."
-                        self.logger.info(msg)
+                # if reference_losses is None:
+                #     reference_losses = np.quantile(
+                #         np.asarray(epoch_losses["residuals"][-100:])
+                #         + np.asarray(epoch_losses["inn"][-100:]),
+                #         q=[0.01, 0.99],
+                #     )
+                #
+                # if epoch % incr_every_n_epoch == 0:
+                #     last_n = sum(
+                #         list(
+                #             map(
+                #                 np.array,
+                #                 (epoch_losses["inn"][-incr_every_n_epoch:]),
+                #                 epoch_losses["residuals"][-incr_every_n_epoch:],
+                #             )
+                #         )
+                #     )
+                #     if (
+                #         reference_losses[0] < last_n < reference_losses[1]
+                #     ).mean() > 0.4:
+                #         old = self.hyperparams["l0"]
+                #         self.hyperparams["l0"] += 0.02
+                #         new = self.hyperparams["l0"]
+                #         msg = f"Increasing hyperparam from {old} to {new}."
+                #         self.logger.info(msg)
 
             for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()
@@ -1480,15 +1541,16 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                 batch_indices, sort_indices = torch.sort(batch_indices)
                 env_info = env_info[sort_indices]
 
-                obs_batch = obs[batch_indices]
-                obs_batch_e = torch.cat([obs_batch, env_info], 0)
-                masked_batch = self.masker_net(obs_batch, mask)
-                masked_batch_e = self.masker_net(obs_batch_e, mask)
-                target_batch = target[batch_indices].view(-1, 1)
-
                 batch_indices_by_env = {}
                 for env in environments_map.keys():
                     batch_indices_by_env[env] = torch.as_tensor(env_info == env)
+
+                obs_batch = obs[batch_indices]
+                masked_batch = self.masker_net(obs_batch, mask)
+                masked_batch_e = torch.cat(
+                    [env_info.float().to(self.device).view(-1, 1), masked_batch], 1
+                )
+                target_batch = target[batch_indices].view(-1, 1)
 
                 network = self.network_list[0]
                 network_e = self.network_list[1]
@@ -1505,7 +1567,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                 gauss_sample = network.normalizing_flow(
                     target=target_batch.repeat(nr_masks, 1), condition=masked_batch,
                 ).view(nr_masks, -1, 1)
-                gauss_sample_e = network.normalizing_flow(
+                gauss_sample_e = network_e.normalizing_flow(
                     target=target_batch.repeat(nr_masks, 1), condition=masked_batch_e,
                 ).view(nr_masks, -1, 1)
                 gauss_jacobian = network.log_jacobian_cache.view(nr_masks, -1, 1)
@@ -1516,6 +1578,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                 ##############################
 
                 masked_batch = masked_batch.view(nr_masks, -1, self.p)
+                masked_batch_e = masked_batch_e.view(nr_masks, -1, self.p + 1)
                 for env, indices_env in batch_indices_by_env.items():
                     env_gaussians.append(
                         (gauss_sample[:, indices_env], gauss_jacobian[:, indices_env])
@@ -1541,7 +1604,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                     independence_loss,
                     l0_loss,
                     l2_loss,
-                ) = torch.zeros(5, device=self.device, requires_grad=True)
+                ) = torch.zeros(6, device=self.device, requires_grad=True)
                 if self.hyperparams["inn"] != 0:
                     inn_loss = self._maxlikelihood_loss(env_gaussians)
                     inn_loss_e = self._maxlikelihood_loss(env_gaussians_e)
@@ -1557,14 +1620,10 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                     # we get the mean over all envs from maxlikelihood_loss, but we want the sum here
                     density_loss = self._density_loss(env_gaussians, env_gaussians_e)
 
-                if self.hyperparams["l2"] != 0:
-                    l2_loss = self._l2_regularization()
-
                 batch_loss = (
                     self.hyperparams["inn"] * inn_loss
                     + self.hyperparams["inn_e"] * inn_loss_e
                     + self.hyperparams["l0"] * l0_loss
-                    + self.hyperparams["l2"] * l2_loss
                     + self.hyperparams["independence"] * independence_loss
                 )
 
@@ -1573,7 +1632,6 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                 batch_losses["inn_e"].append(torch.mean(inn_loss_e).item())
                 batch_losses["density_diff"].append(density_loss.item())
                 batch_losses["l0_mask"].append(l0_loss.item())
-                batch_losses["l2"].append(l2_loss.item())
                 batch_losses["total"].append(batch_loss.item())
 
                 batch_loss.backward()

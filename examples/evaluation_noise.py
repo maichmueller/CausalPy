@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
+    DensityBasedPredictor,
 )
 from examples.study_cases import study_scm, generate_data_from_scm
 import numpy as np
@@ -15,18 +16,19 @@ import os
 
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import argparse
 
 
 def run_scenario(
-    Predictor, dists, sample_size, nr_runs, epochs, scenario, step, **kwargs
+    Predictor, modelclass, dists, sample_size, nr_runs, epochs, scenario, step, **kwargs
 ):
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
     np.random.seed(seed)
     # print(coeffs)
     scm = study_scm(seed=seed, noise_dists=dists)
-    scm.plot()
-    plt.show()
+    # scm.plot()
+    # plt.show()
     (
         data,
         environments,
@@ -53,7 +55,7 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"{test_name}_scenario-{scenario}_step-{step+1}",
+        results_filename=f"{modelclass}_{test_name}_dist-{dists['dist']}_args-{','.join([k + '=' + str(v) for k,v in dists['kwargs'].items()])}_scenario-{scenario}_step-{step+1}",
         **kwargs,
     )
     s = f"{res_str}\n"
@@ -75,7 +77,7 @@ def init(l):
 
 
 test_name = "noisetest"
-
+modelclass = None
 if __name__ == "__main__":
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -90,7 +92,29 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    PredictorClass = AgnosticPredictor
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "modelclass",
+        metavar="modelclass",
+        type=str,
+        nargs=1,
+        help="The model to evaluate",
+    )
+
+    args = parser.parse_args()
+    modelclass = args.modelclass[0]
+    nr_work = 5
+    if modelclass == "single":
+        PredictorClass = AgnosticPredictor
+    elif modelclass == "multi":
+        PredictorClass = MultiAgnosticPredictor
+        nr_work = 3
+    elif modelclass == "density":
+        PredictorClass = DensityBasedPredictor
+    else:
+        raise ValueError(
+            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
+        )
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = None
@@ -112,7 +136,7 @@ if __name__ == "__main__":
         ),
         (
             "exponential",
-            [dict(scale=1), dict(scale=5), dict(scale=10), dict(scale=30),],
+            [dict(scale=1), dict(scale=5), dict(scale=10), dict(scale=30)],
             "numpy",
         ),
         (
@@ -151,13 +175,14 @@ if __name__ == "__main__":
             for param in params:
                 param["source"] = source
             lock = man.Lock()
-            with ProcessPoolExecutor(max_workers=5) as executor:
+            with ProcessPoolExecutor(max_workers=nr_work) as executor:
                 futures = list(
                     (
                         executor.submit(
                             run_scenario,
                             PredictorClass,
-                            {"dist": dist, "kwargs": params},
+                            modelclass,
+                            {"dist": dist, "kwargs": param},
                             nr_epochs=epochs,
                             nr_runs=nr_runs,
                             scenario=scenario,
@@ -170,6 +195,8 @@ if __name__ == "__main__":
                     )
                 )
                 for future in as_completed(futures):
+                    if isinstance(future.exception(), Exception):
+                        raise future.exception()
                     lock.acquire()
                     results.append(future.result())
                     lock.release()

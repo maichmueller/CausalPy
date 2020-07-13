@@ -7,6 +7,7 @@ from causalpy import Assignment
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
+    DensityBasedPredictor,
 )
 from examples.study_cases import study_scm, generate_data_from_scm
 import numpy as np
@@ -26,6 +27,7 @@ import torch
 from causalpy.neural_networks.utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
+import argparse
 
 
 class CouplingBase(torch.nn.Module, ABC):
@@ -471,6 +473,7 @@ class CINNFC(torch.nn.Module, Assignment):
 
 def run_scenario(
     Predictor,
+    modelclass,
     params,
     sample_size,
     nr_runs,
@@ -522,27 +525,10 @@ def run_scenario(
     data2["env"] = environments
     if not os.path.isdir("./data"):
         os.mkdir("./data")
-    data2.to_csv(f"./data/nonlin_scenario_{scenario}_step_{step}.csv", index=False)
-
-    # plt.hist(
-    #     standard_sample["Y"],
-    #     color="green",
-    #     label="Standard Linear",
-    #     density=True,
-    #     bins=100,
-    #     alpha=0.5,
-    # )
-    # plt.hist(
-    #     data["Y"],te
-    #     color="red",
-    #     label=f"FC (layers: {params['nr_layers']} applied",
-    #     density=True,
-    #     bins=100,
-    #     alpha=0.5,
-    # )
-    #
-    # plt.legend()
-    # plt.show()
+    data2.to_csv(
+        f"./data/{modelclass}_{test_name}_scenario_{scenario}_step_{step}.csv",
+        index=False,
+    )
 
     nr_envs = np.unique(environments).max() + 1
     use_visdom = 0
@@ -562,9 +548,10 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"{test_name}_scenario-{scenario}_step-{step+1}_ss_{sample_size}",
+        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}_step-{step+1}_ss_{sample_size}",
         **kwargs,
     )
+
     s = f"{res_str}\n"
     return {
         "res_str": s,
@@ -607,7 +594,7 @@ def init(l):
 
 
 test_name = "samplesizetest"
-
+modelclass = None
 if __name__ == "__main__":
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -621,11 +608,33 @@ if __name__ == "__main__":
         filename=f"./log/{log_fname}.log",
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "modelclass",
+        metavar="modelclass",
+        type=str,
+        nargs=1,
+        help="The model to evaluate",
+    )
 
-    PredictorClass = AgnosticPredictor
+    args = parser.parse_args()
+    modelclass = args.modelclass[0]
+    nr_work = 5
+    if modelclass == "single":
+        PredictorClass = AgnosticPredictor
+    elif modelclass == "multi":
+        PredictorClass = MultiAgnosticPredictor
+        nr_work = 3
+    elif modelclass == "density":
+        PredictorClass = DensityBasedPredictor
+    else:
+        raise ValueError(
+            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
+        )
+
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
-    steps = 10
+    steps = 9
     sample_size = lambda x: 2 ** (x + 5)
     nr_runs = 30
     epochs = 1000
@@ -645,12 +654,13 @@ if __name__ == "__main__":
     # 4. increasing nonlinearity on all
     for scenario, params in zip(scenarios, linearity_settings):
         lock = man.Lock()
-        with ProcessPoolExecutor(max_workers=min(5, steps)) as executor:
+        with ProcessPoolExecutor(max_workers=nr_work) as executor:
             futures = list(
                 (
                     executor.submit(
                         run_scenario,
                         PredictorClass,
+                        modelclass,
                         params,
                         nr_epochs=epochs,
                         nr_runs=nr_runs,
@@ -661,10 +671,12 @@ if __name__ == "__main__":
                         LOCK=lock,
                         device=device,
                     )
-                    for step in range(steps)
+                    for step in range(0, steps)
                 )
             )
             for future in as_completed(futures):
+                if isinstance(future.exception(), Exception):
+                    raise future.exception()
                 lock.acquire()
                 results.append(future.result())
                 lock.release()

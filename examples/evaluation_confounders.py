@@ -7,6 +7,7 @@ from causalpy import Assignment, LinearAssignment, NoiseGenerator
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
+    DensityBasedPredictor,
 )
 from examples.study_cases import study_scm, generate_data_from_scm
 import numpy as np
@@ -17,7 +18,7 @@ import os
 
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-
+import argparse
 
 import itertools
 from typing import Optional, Callable, Type, Tuple, List, Union
@@ -28,8 +29,20 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 
+test_name = "confoundertest"
+modelclass = None
+
+
 def run_scenario(
-    Predictor, sample_size, nr_runs, epochs, scenario, step, device=None, **kwargs,
+    Predictor,
+    modelclass,
+    sample_size,
+    nr_runs,
+    epochs,
+    scenario,
+    step,
+    device=None,
+    **kwargs,
 ):
     seed = 0
     np.random.seed(seed)
@@ -56,8 +69,8 @@ def run_scenario(
             }
         )
         scm.clear_intervention_backup()
-        scm.plot(alpha=1)
-        plt.show()
+        # scm.plot(alpha=1)
+        # plt.show()
     elif scenario == 2:
         vars = {"X_9": ([], LinearAssignment(1, 0), NoiseGenerator("standard_normal"))}
 
@@ -77,8 +90,8 @@ def run_scenario(
             }
         )
         scm.clear_intervention_backup()
-        scm.plot(alpha=1)
-        plt.show()
+        # scm.plot(alpha=1)
+        # plt.show()
     elif scenario == 3:
         vars = {
             "X_9": ([], LinearAssignment(1, 0), NoiseGenerator("standard_normal")),
@@ -99,8 +112,8 @@ def run_scenario(
             }
         )
         scm.clear_intervention_backup()
-        scm.plot(alpha=1)
-        plt.show()
+        # scm.plot(alpha=1)
+        # plt.show()
     (
         data,
         environments,
@@ -115,7 +128,9 @@ def run_scenario(
     data["env"] = environments
     if not os.path.isdir("./data"):
         os.mkdir("./data")
-    data.to_csv(f"./data/confounders_scenario_{scenario}_.csv", index=False)
+    data.to_csv(
+        f"./data/{modelclass}_confounders_scenario_{scenario}_.csv", index=False
+    )
     data.drop(columns=["env"], inplace=True)
 
     nr_envs = np.unique(environments).max() + 1
@@ -136,7 +151,7 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"{test_name}_scenario-{scenario}",
+        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}",
         **kwargs,
     )
     s = f"{res_str}\n"
@@ -156,10 +171,7 @@ def init(l):
     LOCK = l
 
 
-test_name = "confoundertest"
-
 if __name__ == "__main__":
-
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
@@ -172,7 +184,30 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    PredictorClass = AgnosticPredictor
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "modelclass",
+        metavar="modelclass",
+        type=str,
+        nargs=1,
+        help="The model to evaluate",
+    )
+
+    args = parser.parse_args()
+    modelclass = args.modelclass[0]
+    nr_work = 5
+    if modelclass == "single":
+        PredictorClass = AgnosticPredictor
+    elif modelclass == "multi":
+        PredictorClass = MultiAgnosticPredictor
+        nr_work = 3
+    elif modelclass == "density":
+        PredictorClass = DensityBasedPredictor
+    else:
+        raise ValueError(
+            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
+        )
+
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = 1
@@ -180,38 +215,38 @@ if __name__ == "__main__":
     nr_runs = 30
     epochs = 1000
     results = []
-    scenarios = [1, 2, 3]
     # we test 4 scenarios:
     # 1. increasing nonlinearity in the parents,
     # 2. increasing nonlinearity in the children,
     # 3. increasing nonlinearity on the target,
     # 4. increasing nonlinearity on all
-    for scenario in scenarios:
-        lock = man.Lock()
-        with ProcessPoolExecutor(max_workers=min(5, steps)) as executor:
-            futures = list(
-                (
-                    executor.submit(
-                        run_scenario,
-                        PredictorClass,
-                        nr_epochs=epochs,
-                        nr_runs=nr_runs,
-                        scenario=scenario,
-                        epochs=epochs,
-                        step=step,
-                        sample_size=sample_size,
-                        LOCK=lock,
-                        device=device,
-                    )
-                    for step, (layers, strength) in enumerate(
-                        zip(range(steps), range(steps))
-                    )
+    lock = man.Lock()
+    scenarios = [1, 2, 3]
+    with ProcessPoolExecutor(max_workers=nr_work) as executor:
+        futures = list(
+            (
+                executor.submit(
+                    run_scenario,
+                    PredictorClass,
+                    modelclass,
+                    nr_epochs=epochs,
+                    nr_runs=nr_runs,
+                    scenario=scenario,
+                    epochs=epochs,
+                    step=0,
+                    sample_size=sample_size,
+                    LOCK=lock,
+                    device=device,
                 )
+                for scenario in scenarios
             )
-            for future in as_completed(futures):
-                lock.acquire()
-                results.append(future.result())
-                lock.release()
+        )
+        for future in as_completed(futures):
+            if isinstance(future.exception(), Exception):
+                raise future.exception()
+            lock.acquire()
+            results.append(future.result())
+            lock.release()
 
     results = sorted(
         results,

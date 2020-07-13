@@ -7,6 +7,7 @@ from causalpy import Assignment
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
+    DensityBasedPredictor,
 )
 from examples.study_cases import study_scm, generate_data_from_scm
 import numpy as np
@@ -26,6 +27,7 @@ import torch
 from causalpy.neural_networks.utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
+import argparse
 
 
 class CouplingBase(torch.nn.Module, ABC):
@@ -471,6 +473,7 @@ class CINNFC(torch.nn.Module, Assignment):
 
 def run_scenario(
     Predictor,
+    modelclass,
     params,
     sample_size,
     nr_runs,
@@ -519,11 +522,11 @@ def run_scenario(
         target_parents,
     ) = generate_data_from_scm(scm, target_var="Y", sample_size=sample_size, seed=seed)
 
-    data2 = data.copy()
-    data2["env"] = environments
-    if not os.path.isdir("./data"):
-        os.mkdir("./data")
-    data2.to_csv(f"./data/nonlin_scenario_{scenario}_step_{step}.csv", index=False)
+    # data2 = data.copy()
+    # data2["env"] = environments
+    # if not os.path.isdir("./data"):
+    #     os.mkdir("./data")
+    # data2.to_csv(f"./data/{test_name}_scenario_{scenario}_step_{step}.csv", index=False)
 
     # plt.hist(
     #     standard_sample["Y"],
@@ -563,7 +566,7 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"{test_name}_scenario-{scenario}_step-{step+1}",
+        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}_step-{step+1}",
         **kwargs,
     )
     s = f"{res_str}\n"
@@ -608,7 +611,7 @@ def init(l):
 
 
 test_name = "nonlinearitytest"
-
+modelclass = None
 if __name__ == "__main__":
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -623,7 +626,30 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    PredictorClass = AgnosticPredictor
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "modelclass",
+        metavar="modelclass",
+        type=str,
+        nargs=1,
+        help="The model to evaluate",
+    )
+
+    args = parser.parse_args()
+    modelclass = args.modelclass[0]
+    nr_work = 5
+    if modelclass == "single":
+        PredictorClass = AgnosticPredictor
+    elif modelclass == "multi":
+        PredictorClass = MultiAgnosticPredictor
+        nr_work = 3
+    elif modelclass == "density":
+        PredictorClass = DensityBasedPredictor
+    else:
+        raise ValueError(
+            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
+        )
+
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = 20
@@ -639,14 +665,15 @@ if __name__ == "__main__":
     # 4. increasing nonlinearity on all
     for scenario in scenarios:
         lock = man.Lock()
-        with ProcessPoolExecutor(max_workers=min(5, steps)) as executor:
+        with ProcessPoolExecutor(max_workers=nr_work) as executor:
             futures = list(
                 (
                     executor.submit(
                         run_scenario,
                         PredictorClass,
+                        modelclass,
                         {
-                            "nr_layers": layers,
+                            "nr_layers": 1,
                             "nr_blocks": 10,
                             "nr_hidden": 128,
                             "strength": (strength + 1) / steps,
@@ -666,6 +693,8 @@ if __name__ == "__main__":
                 )
             )
             for future in as_completed(futures):
+                if isinstance(future.exception(), Exception):
+                    raise future.exception()
                 lock.acquire()
                 results.append(future.result())
                 lock.release()
