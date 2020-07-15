@@ -3,7 +3,7 @@ import os
 from functools import partial
 from typing import Union, Collection, Optional
 
-import visdom
+# import visdom
 import torch
 from torch.nn import Parameter, Module
 from torch import Tensor
@@ -26,6 +26,7 @@ from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
 from linear_regression_eval import *
+from study_cases import study_scm
 
 
 import torch as th
@@ -53,7 +54,8 @@ if __name__ == "__main__":
             # (build_scm_medium, "Y", f"{pref}_medium"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (build_scm_large, "Y", f"{pref}_large"),
-            (build_scm_massive, "Y", f"{pref}_massive"),
+            # (build_scm_massive, "Y", f"{pref}_massive"),
+            (study_scm, "Y", f"{pref}_study"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -86,9 +88,9 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 100
+        nr_runs = 20
 
-        epochs = 800
+        epochs = 1000
         use_visdom = 0
 
         ap = MultiAgnosticPredictor(
