@@ -927,7 +927,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.68, residuals=1, inn=1, independence=1, l2=0.0)
+            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=1, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1378,7 +1378,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
     ):
         hyperparams = base_kwargs.pop(
             "hyperparams",
-            dict(l0=0.3, residuals=1, inn=1, inn_e=1, independence=0, l2=0.0),
+            dict(l0=0.4, residuals=1, inn=1, inn_e=1, independence=0, l2=0.0),
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(

@@ -3,7 +3,7 @@ import os
 from functools import partial
 from typing import Union, Collection, Optional
 
-import visdom
+# import visdom
 import torch
 from torch.nn import Parameter, Module
 from torch import Tensor
@@ -72,7 +72,7 @@ if __name__ == "__main__":
             countify=False,
             intervention_style="markov",
             target_var=target_var,
-            sample_size=2048,
+            sample_size=4096,
             seed=seed,
         )
         target_parents_indices = np.array(
@@ -87,9 +87,10 @@ if __name__ == "__main__":
 
         ap = AgnosticPredictor(
             epochs=epochs,
-            batch_size=100000,
+            batch_size=5000,
             visualize_with_visdom=bool(use_visdom),
             device="cuda:0",
+            masker_network_params=dict(monte_carlo_sample_size=50),
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data,

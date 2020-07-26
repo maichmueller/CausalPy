@@ -101,14 +101,63 @@ if __name__ == "__main__":
         help="The model to evaluate",
     )
 
+    parser.add_argument(
+        "nr_workers",
+        metavar="nr_workers",
+        type=int,
+        nargs=1,
+        default=5,
+        help="The number of multiprocessing workers",
+    )
+
+    parser.add_argument(
+        "dist",
+        metavar="dist",
+        type=str,
+        nargs=1,
+        default="all",
+        help="Distribution to compute",
+    )
+
+    parser.add_argument(
+        "start_step",
+        metavar="start_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step from which to start",
+    )
+
+    parser.add_argument(
+        "end_step",
+        metavar="end_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step until which to compute",
+    )
+
+    parser.add_argument(
+        "scenario",
+        metavar="scenario",
+        type=str,
+        nargs=1,
+        default=None,
+        help="Step from which to start",
+    )
+
     args = parser.parse_args()
     modelclass = args.modelclass[0]
-    nr_work = 5
+    nr_work = args.nr_workers[0]
+    dist = args.dist[0]
+    start_step = args.start_step[0]
+    end_step = args.end_step[0]
+    scenario = args.scenario[0]
     if modelclass == "single":
         PredictorClass = AgnosticPredictor
     elif modelclass == "multi":
         PredictorClass = MultiAgnosticPredictor
-        nr_work = 3
+        nr_work = min(nr_work, 3)
     elif modelclass == "density":
         PredictorClass = DensityBasedPredictor
     else:
@@ -122,9 +171,8 @@ if __name__ == "__main__":
     nr_runs = 30
     epochs = 1000
     results = []
-    dists = [
-        (
-            "normal",
+    dists = {
+        "normal": (
             [
                 dict(loc=0, scale=1),
                 dict(loc=0, scale=2),
@@ -134,13 +182,11 @@ if __name__ == "__main__":
             ],
             "numpy",
         ),
-        (
-            "exponential",
+        "exponential": (
             [dict(scale=1), dict(scale=5), dict(scale=10), dict(scale=30)],
             "numpy",
         ),
-        (
-            "cauchy",
+        "cauchy": (
             [
                 dict(loc=0, scale=1),
                 dict(loc=0, scale=2),
@@ -150,8 +196,7 @@ if __name__ == "__main__":
             ],
             "scipy",
         ),
-        (
-            "beta",
+        "beta": (
             [
                 dict(a=1, b=1),
                 dict(a=0.5, b=1),
@@ -161,17 +206,27 @@ if __name__ == "__main__":
             ],
             "numpy",
         ),
-    ]
+    }
+    if dist != "all":
+        dists = {dist: dists[dist]}
+        if end_step != 0:
+            print(dists)
+            dists[dist] = dists[dist][0][start_step:end_step], dists[dist][1]
+        else:
+            dists[dist] = dists[dist][0][start_step:], dists[dist][1]
+
+    scenarios = ["parents", "children", "target", "all"]
+    if scenario is not None:
+        scenarios = [scenario]
     # we test 4 scenarios:
     # 1. increasing nonlinearity in the parents,
     # 2. increasing nonlinearity in the children,
     # 3. increasing nonlinearity on the target,
     # 4. increasing nonlinearity on all
-    scenarios = ["parents", "children", "target", "all"]
 
     for scenario in scenarios:
-        for package in dists:
-            dist, params, source = package
+        for dist, package in dists.items():
+            params, source = package
             for param in params:
                 param["source"] = source
             lock = man.Lock()

@@ -106,6 +106,14 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
+    steps = 11
+    sample_size = 4096
+    nr_runs = 30
+    epochs = 1000
+    results = []
+
+    scenarios = ["do", "meanshift", "scaling"]
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "modelclass",
@@ -115,14 +123,57 @@ if __name__ == "__main__":
         help="The model to evaluate",
     )
 
+    parser.add_argument(
+        "nr_workers",
+        metavar="nr_workers",
+        type=int,
+        nargs=1,
+        default=5,
+        help="The number of multiprocessing workers",
+    )
+
+    parser.add_argument(
+        "start_step",
+        metavar="start_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step from which to start",
+    )
+
+    parser.add_argument(
+        "end_step",
+        metavar="end_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step until which to compute",
+    )
+
+    parser.add_argument(
+        "scenario",
+        metavar="scenario",
+        type=str,
+        nargs=1,
+        default=None,
+        help="Step from which to start",
+    )
+
     args = parser.parse_args()
     modelclass = args.modelclass[0]
-    nr_work = 5
+    nr_work = args.nr_workers[0]
+    start_step = args.start_step[0]
+    end_step = args.end_step[0]
+    scenario = args.scenario[0]
+
+    if scenario is not None:
+        scenarios = [scenario]
+
     if modelclass == "single":
         PredictorClass = AgnosticPredictor
     elif modelclass == "multi":
         PredictorClass = MultiAgnosticPredictor
-        nr_work = 3
+        nr_work = min(nr_work, 3)
     elif modelclass == "density":
         PredictorClass = DensityBasedPredictor
     else:
@@ -131,13 +182,6 @@ if __name__ == "__main__":
         )
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
-    steps = 11
-    sample_size = 4096
-    nr_runs = 30
-    epochs = 1000
-    results = []
-
-    scenarios = ["do", "meanshift", "scaling"]
 
     for scenario in scenarios:
         lock = man.Lock()
@@ -157,7 +201,9 @@ if __name__ == "__main__":
                         sample_size=sample_size,
                         LOCK=lock,
                     )
-                    for step, strength in enumerate([i / 2 for i in range(steps + 1)])
+                    for step, strength in enumerate(
+                        [i for i in range(start_step, end_step)], start_step
+                    )
                 )
             )
             for future in as_completed(futures):

@@ -73,7 +73,7 @@ if __name__ == "__main__":
             scm=scm_generator(seed=seed),
             intervention_style="markov",
             target_var=target_var,
-            sample_size=1024,
+            sample_size=4096,
             seed=seed,
         )
         # scm.plot(
