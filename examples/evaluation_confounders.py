@@ -211,7 +211,7 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = 1
-    sample_size = 4096
+    sample_size = 2048
     nr_runs = 30
     epochs = 1000
     results = []

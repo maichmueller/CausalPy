@@ -617,6 +617,49 @@ if __name__ == "__main__":
         help="The model to evaluate",
     )
 
+    parser.add_argument(
+        "nr_workers",
+        metavar="nr_workers",
+        type=int,
+        nargs=1,
+        default=5,
+        help="The number of multiprocessing workers",
+    )
+
+    parser.add_argument(
+        "start_step",
+        metavar="start_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step from which to start",
+    )
+
+    parser.add_argument(
+        "end_step",
+        metavar="end_step",
+        type=int,
+        nargs=1,
+        default=0,
+        help="Step until which to compute",
+    )
+
+    parser.add_argument(
+        "scenario",
+        metavar="scenario",
+        type=str,
+        nargs=1,
+        default=None,
+        help="Step from which to start",
+    )
+
+    args = parser.parse_args()
+    modelclass = args.modelclass[0]
+    nr_work = args.nr_workers[0]
+    start_step = args.start_step[0]
+    end_step = args.end_step[0]
+    scenario = args.scenario[0]
+
     args = parser.parse_args()
     modelclass = args.modelclass[0]
     nr_work = 5
@@ -637,7 +680,7 @@ if __name__ == "__main__":
     steps = 9
     sample_size = lambda x: 2 ** (x + 5)
     nr_runs = 30
-    epochs = 1000
+    epochs = 5000
     results = []
 
     linearity_settings = [
@@ -646,6 +689,8 @@ if __name__ == "__main__":
         {"nr_layers": 1, "nr_blocks": 10, "nr_hidden": 128, "strength": 1},
     ]
     scenarios = ["linear", "halflinear", "nonlinear"]
+    if scenario is not None:
+        scenarios = [scenario]
 
     # we test 4 scenarios:
     # 1. increasing nonlinearity in the parents,
@@ -671,7 +716,7 @@ if __name__ == "__main__":
                         LOCK=lock,
                         device=device,
                     )
-                    for step in range(0, steps)
+                    for step in range(start_step, end_step)
                 )
             )
             for future in as_completed(futures):

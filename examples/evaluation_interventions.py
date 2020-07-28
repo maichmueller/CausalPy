@@ -107,9 +107,9 @@ if __name__ == "__main__":
     logger = logging.getLogger()  # get the root logger
 
     steps = 11
-    sample_size = 4096
+    sample_size = 2048
     nr_runs = 30
-    epochs = 1000
+    epochs = 2000
     results = []
 
     scenarios = ["do", "meanshift", "scaling"]

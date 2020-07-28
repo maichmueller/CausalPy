@@ -167,45 +167,17 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = None
-    sample_size = 4096
+    sample_size = 2048
     nr_runs = 30
-    epochs = 1000
+    epochs = 2000
     results = []
     dists = {
-        "normal": (
-            [
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=2),
-                dict(loc=0, scale=5),
-                dict(loc=5, scale=1),
-                dict(loc=-5, scale=1),
-            ],
-            "numpy",
-        ),
+        "normal": ([dict(scale=i) for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], "numpy",),
         "exponential": (
-            [dict(scale=1), dict(scale=5), dict(scale=10), dict(scale=30)],
+            [dict(scale=i) for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
             "numpy",
         ),
-        "cauchy": (
-            [
-                dict(loc=0, scale=1),
-                dict(loc=0, scale=2),
-                dict(loc=0, scale=5),
-                dict(loc=5, scale=1),
-                dict(loc=-5, scale=1),
-            ],
-            "scipy",
-        ),
-        "beta": (
-            [
-                dict(a=1, b=1),
-                dict(a=0.5, b=1),
-                dict(a=0.25, b=1),
-                dict(a=1, b=0.5),
-                dict(a=1, b=0.25),
-            ],
-            "numpy",
-        ),
+        "cauchy": ([dict(scale=i) for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], "scipy",),
     }
     if dist != "all":
         dists = {dist: dists[dist]}
@@ -215,7 +187,7 @@ if __name__ == "__main__":
         else:
             dists[dist] = dists[dist][0][start_step:], dists[dist][1]
 
-    scenarios = ["parents", "children", "target", "all"]
+    scenarios = ["target", "all"]
     if scenario is not None:
         scenarios = [scenario]
     # we test 4 scenarios:

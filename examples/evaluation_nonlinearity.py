@@ -626,10 +626,10 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    steps = 20
-    sample_size = 4096
+    steps = 10
+    sample_size = 2048
     nr_runs = 30
-    epochs = 1000
+    epochs = 2000
     results = []
     scenarios = ["target", "all", "children", "parents"]
 
