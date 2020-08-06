@@ -1,3 +1,5 @@
+from typing import Callable
+
 from causalpy import (
     SCM,
     LinearAssignment,
@@ -17,7 +19,7 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
         "X_1": [[0, 1]],
         "X_2": [[0, 1]],
         "X_3": [],
-        "X_4": [[0, 1]],
+        "X_4": [[0, 1], [0, 1]],
         "X_5": [],
         "X_6": [[0, 1], [0, 1]],
         "X_7": [[0, 1]],
@@ -78,7 +80,7 @@ def study_scm(seed=0, coeffs_by_var=None, noise_dists=None):
                 ),
             ),
             "X_4": (  # descendant of target
-                ["X_3"],
+                ["Y", "X_3"],
                 PolynomialAssignment([0, 1], *coeffs["X_4"]),
                 NoiseGenerator(
                     noises["X_4"]["dist"], **noises["X_4"]["kwargs"], seed=seed + 6
@@ -133,6 +135,7 @@ def generate_data_from_scm(
     intervention_reach="markov",
     intervention_style="do",
     strength=5,
+    fix_strength=False,
     countify=False,
     sample_size=100,
     seed=None,
@@ -163,6 +166,10 @@ def generate_data_from_scm(
             child_pars = child_pars.union([child])
             child_pars.remove(target_var)
             interv_variables = interv_variables.union(child_pars)
+
+    elif intervention_reach == "parents":
+        interv_variables = set(target_parents)
+
     elif intervention_reach == "children":
         interv_variables = set([])
         for child in scm.graph.successors(target_var):
@@ -175,8 +182,10 @@ def generate_data_from_scm(
 
     # perform interventions on selected variables
     for var in interv_variables:
-
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * strength
+        if fix_strength:
+            interv_value = rng.choice([-1, 1]) * strength
+        else:
+            interv_value = rng.choice([-1, 1]) * rng.random(1) * strength
 
         if intervention_style == "do":
 

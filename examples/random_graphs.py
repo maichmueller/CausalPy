@@ -3,7 +3,7 @@ from typing import Optional, Callable, Type, Tuple, List, Union, Collection
 
 import torch
 
-from causalpy import Assignment
+from causalpy import Assignment, NoiseGenerator, SCM
 from causalpy.neural_networks.utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
@@ -16,6 +16,7 @@ class CouplingBase(torch.nn.Module, ABC):
         dim_condition: int,
         nr_layers: int = 16,
         conditional_net: Optional[torch.nn.Module] = None,
+        seed: int = None,
         device: torch.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         ),
@@ -66,7 +67,7 @@ class CouplingBase(torch.nn.Module, ABC):
         else:
             # only in the case of no conditional neural network are these trainable parameters.
             # Otherwise their data will be provided by the condition generating network.
-            self.reset_parameters()
+            self.reset_parameters(seed)
             self.mat_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
@@ -80,7 +81,7 @@ class CouplingBase(torch.nn.Module, ABC):
                 ]
             ).to(device)
 
-    def reset_parameters(self):
+    def reset_parameters(self, seed=None):
         if self.is_conditional:
             with torch.no_grad():
                 if isinstance(self.conditional_net, torch.nn.Sequential):
@@ -92,10 +93,11 @@ class CouplingBase(torch.nn.Module, ABC):
                     # in case the net is external we expect it to have a reset parameters method.
                     self.conditional_net.reset_parameters()
         else:
-            self._reset_conditional_parameters()
+            self._reset_conditional_parameters(seed)
 
-    def _reset_conditional_parameters(self):
-
+    def _reset_conditional_parameters(self, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
         with torch.no_grad():
             for mat in self.mat_like_params:
                 mat.normal_(mean=0, std=1)
@@ -288,6 +290,7 @@ class CINN(torch.nn.Module):
         nr_layers: int = 16,
         normalize_forward: bool = True,
         conditional_net: Optional[torch.nn.Module] = None,
+        seed=None,
         device: Union[str, torch.device] = "cuda"
         if torch.cuda.is_available()
         else "cpu",
@@ -309,6 +312,7 @@ class CINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    seed=seed,
                     device=device,
                 )
             )
@@ -318,6 +322,7 @@ class CINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    seed=seed,
                     device=device,
                 )
             )
@@ -386,21 +391,23 @@ class CINNFC(torch.nn.Module, Assignment):
         nr_layers: int = 0,
         nr_blocks: int = 1,
         strength: float = 0.0,
+        seed=None,
         device=None,
         **kwargs,
     ):
         super().__init__()
         Assignment.__init__(self)
         self.nr_layers = nr_layers
-        self.dim_in = max(dim_in - 1, 0)
+        self.dim_in = dim_in - 1
         self.strength = strength
         self.device = device
         # -1 bc additive noise
         self.cinn = CINN(
-            dim=max(dim_in - 1, 0),
+            dim=dim_in - 1,
             dim_condition=0,
             nr_layers=nr_layers,
             nr_blocks=nr_blocks,
+            seed=seed,
             device="cuda",
         )
 
@@ -419,16 +426,23 @@ class CINNFC(torch.nn.Module, Assignment):
             )
 
             x = variables
+            #             print(noise.shape)
             if self.dim_in > 0:
                 base = torch.cat((noise, variables), dim=1).to(self.device)
             else:
                 base = noise
 
+            #             print("Baseshape", base.shape)
+
             if self.dim_in == 0:
                 nonlin_part = noise
             else:
                 ev = self.cinn(x)[:, 0].reshape(-1, 1)
+                #                 print("EV", ev.shape)
+                #                 print("NOise", noise.shape)
                 nonlin_part = ev + noise
+
+            #             print("nonlin", nonlin_part.shape)
 
             base_sum = torch.sum(base, dim=1).view(-1, 1)
 
@@ -444,13 +458,102 @@ class CINNFC(torch.nn.Module, Assignment):
 
 
 def fc_net(
-    dim_in: int, nr_layers: int, nr_hidden, strength: float, nr_blocks=1, device=None
+    dim_in: int,
+    nr_layers: int,
+    nr_hidden,
+    strength: float,
+    nr_blocks=1,
+    seed=None,
+    device=None,
 ):
     network_params = {
         "nr_layers": nr_layers,
         "nr_blocks": nr_blocks,
         "nr_hidden": nr_hidden,
         "strength": strength,
+        "seed": seed,
         "device": device,
     }
     return CINNFC(dim_in=dim_in, **network_params).to(device)
+
+
+def random_graphs(
+    nr_variables: int = None,
+    seed: int = None,
+    p_con: float = 0.5,
+    p_con_down: Callable = None,
+    device=None,
+):
+    rng = np.random.default_rng(seed=seed)
+    torch.manual_seed(seed)
+    if nr_variables is None:
+        nr_variables = rng.integers(2, 15)
+    elif nr_variables < 2:
+        raise ValueError("At least 2 variables needed to build a graph.")
+
+    if p_con_down is None:
+
+        def p_con_down(this_level, other_level):
+            if this_level == other_level:
+                return rng.random()
+            else:
+                return 1 / (other_level - this_level)
+
+    variables = list(range(nr_variables))
+    vars_copy = list(range(nr_variables))
+    target = rng.choice(variables)
+
+    parents = {v: [] for v in variables}
+    var_names = (
+        [f"X_{i}" for i in variables[0:target]]
+        + ["Y"]
+        + [f"X_{i - 1}" for i in variables[target + 1 :]]
+    )
+
+    nr_levels = rng.integers(1, nr_variables)
+    var_to_level = dict()
+    level_to_vars = dict()
+    for level in range(nr_levels):
+        if len(vars_copy) > 0:
+            vars_in_level = rng.choice(np.arange(len(vars_copy)), size=1, replace=False)
+            vars_in_level = vars_copy[: int(vars_in_level)]
+            level_to_vars[level] = vars_in_level
+            for v in vars_in_level:
+                var_to_level[v] = level
+                vars_copy.remove(v)
+
+    for level in range(nr_levels):
+        vars_in_level = level_to_vars[level]
+
+        for next_level in range(level, nr_levels):
+            for i, v in enumerate(vars_in_level):
+                vars_in_next_level = level_to_vars[next_level]
+                if level == next_level:
+                    vars_in_next_level = vars_in_next_level[i + 1 :]
+
+                for other_v in vars_in_next_level:
+                    p = p_con * p_con_down(level, next_level)
+                    is_child = rng.choice([0, 1], p=[1 - p, p])
+                    if is_child:
+                        parents[other_v].append(var_names[v])
+
+    assignment_map = {}
+
+    for var, name in zip(variables, var_names):
+
+        assignment_map[name] = (
+            parents[var],
+            fc_net(
+                dim_in=len(parents[var]) + 1,  # +1 because of noise variable
+                **{
+                    "nr_layers": 1,
+                    "nr_blocks": rng.integers(10, 11),
+                    "nr_hidden": 128,
+                    "strength": rng.random() * (1 - 0.8) + 0.8,
+                    "device": device,
+                },
+            ),
+            NoiseGenerator("normal", scale=rng.random() * 5),
+        )
+
+    return SCM(assignment_map=assignment_map)
