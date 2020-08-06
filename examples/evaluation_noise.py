@@ -42,7 +42,7 @@ def run_scenario(
 
     ap = Predictor(
         epochs=epochs,
-        batch_size=10000,
+        batch_size=5000,
         visualize_with_visdom=bool(use_visdom),
         masker_network_params=dict(monte_carlo_sample_size=1),
         device="cuda:0",
@@ -80,7 +80,7 @@ test_name = "noisetest"
 modelclass = None
 if __name__ == "__main__":
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         "scenario",
         metavar="scenario",
         type=str,
-        nargs=1,
+        nargs="?",
         default=None,
         help="Step from which to start",
     )
@@ -152,12 +152,11 @@ if __name__ == "__main__":
     dist = args.dist[0]
     start_step = args.start_step[0]
     end_step = args.end_step[0]
-    scenario = args.scenario[0]
+    scenario = args.scenario
     if modelclass == "single":
         PredictorClass = AgnosticPredictor
     elif modelclass == "multi":
         PredictorClass = MultiAgnosticPredictor
-        nr_work = min(nr_work, 3)
     elif modelclass == "density":
         PredictorClass = DensityBasedPredictor
     else:
@@ -168,8 +167,8 @@ if __name__ == "__main__":
     man = multiprocessing.Manager()
     steps = None
     sample_size = 2048
-    nr_runs = 30
-    epochs = 2000
+    nr_runs = 20
+    epochs = 1500
     results = []
     dists = {
         "normal": ([dict(scale=i) for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], "numpy",),

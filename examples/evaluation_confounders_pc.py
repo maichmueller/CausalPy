@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 from typing import Optional, List, Collection
 
 from causalpy import Assignment, LinearAssignment, NoiseGenerator
+from causalpy.causal_prediction import ICPredictor, LinPredictor
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
@@ -16,6 +17,7 @@ from plotly import graph_objs as go
 from time import gmtime, strftime
 import os
 
+import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import argparse
@@ -27,22 +29,17 @@ import torch
 from causalpy.neural_networks.utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
-
+import cdt
+from cdt import SETTINGS
+import networkx as nx
 
 test_name = "confoundertest"
-modelclass = None
+modelclass = "pc"
+# modelclass = "gies"
 
 
 def run_scenario(
-    Predictor,
-    modelclass,
-    sample_size,
-    nr_runs,
-    epochs,
-    scenario,
-    step,
-    device=None,
-    **kwargs,
+    sample_size, scenario, **kwargs,
 ):
     seed = 0
     np.random.seed(seed)
@@ -125,45 +122,31 @@ def run_scenario(
     data.drop(columns=["X_9"], inplace=True)
     possible_parents.remove("X_9")
 
-    data["env"] = environments
-    if not os.path.isdir("./data"):
-        os.mkdir("./data")
-    data.to_csv(
-        f"./data/{modelclass}_confounders_scenario_{scenario}_.csv", index=False
-    )
-    data.drop(columns=["env"], inplace=True)
-
-    nr_envs = np.unique(environments).max() + 1
-    use_visdom = 0
-
-    ap = Predictor(
-        epochs=epochs,
-        batch_size=5000,
-        visualize_with_visdom=bool(use_visdom),
-        masker_network_params=dict(monte_carlo_sample_size=1),
-        device=device,
-    )
-
-    results_mask, results_loss, res_str = ap.infer(
-        data,
-        environments,
-        "Y",
-        nr_runs=nr_runs,
-        normalize=True,
-        save_results=True,
-        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}",
-        **kwargs,
-    )
-    s = f"{res_str}\n"
-    return {
-        "res_str": s,
-        "sample_size": sample_size,
-        "step": step,
-        "scenario": scenario,
-        "nr_runs": nr_runs,
-        "epochs": epochs,
-        "scm": scm,
-    }
+    # data["env"] = environments
+    # if not os.path.isdir("./data"):
+    #     os.mkdir("./data")
+    # data.to_csv(
+    #     f"./data/{modelclass}_confounders_scenario_{scenario}_.csv", index=False
+    # )
+    # data.drop(columns=["env"], inplace=True)
+    data["ENV"] = environments
+    res = []
+    for _ in range(1):
+        if modelclass == "pc":
+            graph = cdt.causality.graph.PC().create_graph_from_data(data)
+        elif modelclass == "gies":
+            graph = cdt.causality.graph.GIES().create_graph_from_data(data)
+        else:
+            raise ValueError("Wrong modelclass")
+        parents = set(graph.predecessors("Y"))
+        children = set(graph["Y"])
+        ps = pd.Series(0, index=sorted(possible_parents, key=lambda x: int(x[2:])))
+        for var in possible_parents:
+            if var in parents and var not in children:
+                ps[var] = 1
+        res.append(ps.to_frame())
+    res = pd.concat(res, ignore_index=True, axis=1).T
+    return res
 
 
 def init(l):
@@ -172,8 +155,9 @@ def init(l):
 
 
 if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
+    # SETTINGS.rpath = "/usr/bin/Rscript"
     if not os.path.isdir("./log"):
         os.mkdir("./log")
     log_fname = f'{test_name}_{strftime("%Y-%m-%d_%H-%M-%S", gmtime())}'
@@ -184,99 +168,19 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "modelclass",
-        metavar="modelclass",
-        type=str,
-        nargs=1,
-        help="The model to evaluate",
-    )
-
-    parser.add_argument(
-        "nr_workers",
-        metavar="nr_workers",
-        type=int,
-        nargs=1,
-        default=2,
-        help="The number of multiprocessing workers",
-    )
-
-    parser.add_argument(
-        "scenario",
-        metavar="scenario",
-        type=int,
-        nargs="?",
-        default=-1,
-        help="Step from which to start",
-    )
-
-    args = parser.parse_args()
-    modelclass = args.modelclass[0]
-    nr_work = args.nr_workers[0]
-    scenario = args.scenario
-
-    if modelclass == "single":
-        PredictorClass = AgnosticPredictor
-    elif modelclass == "multi":
-        PredictorClass = MultiAgnosticPredictor
-
-    elif modelclass == "density":
-        PredictorClass = DensityBasedPredictor
-    else:
-        raise ValueError(
-            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
-        )
-
-    multiprocessing.set_start_method("spawn")
-    man = multiprocessing.Manager()
-    steps = 1
     sample_size = 2048
-    nr_runs = 30
-    epochs = 2000
-    results = []
-    # we test 4 scenarios:
-    # 1. increasing nonlinearity in the parents,
-    # 2. increasing nonlinearity in the children,
-    # 3. increasing nonlinearity on the target,
-    # 4. increasing nonlinearity on all
-    lock = man.Lock()
+
     scenarios = [1, 2, 3]
-    if scenario in scenarios:
-        scenarios = [scenario]
-    with ProcessPoolExecutor(max_workers=nr_work) as executor:
-        futures = list(
-            (
-                executor.submit(
-                    run_scenario,
-                    PredictorClass,
-                    modelclass,
-                    nr_epochs=epochs,
-                    nr_runs=nr_runs,
-                    scenario=scenario,
-                    epochs=epochs,
-                    step=0,
-                    sample_size=sample_size,
-                    LOCK=lock,
-                    device=device,
-                )
-                for scenario in scenarios
-            )
+
+    results = {}
+    for scenario in scenarios:
+        results[f"{modelclass}_{test_name}_scenario-{scenario}"] = run_scenario(
+            sample_size, scenario
         )
-        for future in as_completed(futures):
-            if isinstance(future.exception(), Exception):
-                raise future.exception()
-            lock.acquire()
-            results.append(future.result())
-            lock.release()
 
-    results = sorted(
-        results,
-        key=lambda x: -(
-            (len(scenarios) - scenarios.index(x["scenario"])) * 1000 - x["step"]
-        ),
-    )
-
-    for res in results:
-        for key, value in res.items():
-            logger.info(f"{key}={value}")
+    for i, (title, res) in zip(scenarios, results.items()):
+        print("scenario:", i, ", result:\n", res)
+        if os.path.isfile(f"./results/{title}.csv"):
+            prev_res = pd.read_csv(f"./results/{title}.csv", index_col=None)
+            res = pd.concat([prev_res, res])
+        res.to_csv(f"./results/{title}.csv", index=False)

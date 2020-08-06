@@ -123,7 +123,7 @@ class SCM:
             # the variable names as they can be used by the plot function to draw the names in TeX mode.
             self.var_names_draw_dict: Dict = variable_tex_names
         else:
-            self.var_names_draw_dict = dict()
+            self.var_names_draw_dict = {var: f"${var}$" for var in self.var_names}
 
         # the attribute list that any given node in the graph has.
         self.function_key, self.noise_key = "assignment", "noise"

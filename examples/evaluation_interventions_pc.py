@@ -2,6 +2,8 @@ import logging
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
+import networkx as nx
+
 from causalpy.causal_prediction import LinPredictor
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
@@ -18,6 +20,8 @@ import argparse
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import pandas as pd
+import cdt
+from networkx.drawing.nx_agraph import graphviz_layout
 
 
 def run_scenario(
@@ -46,14 +50,25 @@ def run_scenario(
         seed=seed,
     )
 
-    ap = LinPredictor(filter_variables=False)
+    data["ENV"] = environments
 
-    parents, _ = ap.infer(data, "Y", environments, **kwargs,)
-    ps = pd.Series(0, index=sorted(possible_parents, key=lambda x: int(x[2:])))
-    for var in possible_parents:
-        if var in parents:
-            ps[var] = 1
-    return ps
+    res = []
+    for _ in range(1):
+        if modelclass == "pc":
+            graph = cdt.causality.graph.PC().create_graph_from_data(data)
+        elif modelclass == "gies":
+            graph = cdt.causality.graph.GIES().create_graph_from_data(data)
+        else:
+            raise ValueError("Wrong modelclass")
+        parents = set(graph.predecessors("Y"))
+        children = set(graph["Y"])
+        ps = pd.Series(0, index=sorted(possible_parents, key=lambda x: int(x[2:])))
+        for var in possible_parents:
+            if var in parents and var not in children:
+                ps[var] = 1
+        res.append(ps.to_frame())
+    res = pd.concat(res, ignore_index=True, axis=1).T
+    return res
 
 
 def init(l):
@@ -62,11 +77,12 @@ def init(l):
 
 
 test_name = "interventionstest"
-modelclass = None
+# modelclass = "pc"
+modelclass = "gies"
 
 if __name__ == "__main__":
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    # device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -80,7 +96,6 @@ if __name__ == "__main__":
 
     sample_size = 2048
     scenarios = ["do", "meanshift", "scaling"]
-
     reach = ["markov", "children", "parents"]
     steps = 11
 
@@ -89,9 +104,11 @@ if __name__ == "__main__":
         for r in reach:
             for step, strength in enumerate([i for i in range(0, steps)]):
                 results[
-                    f"interventionstest_scenario-{scenario}_reach-{r}_step-{step}"
-                ] = (run_scenario(strength, sample_size, r, scenario).to_frame().T)
+                    f"{modelclass}_{test_name}_scenario-{scenario}_reach-{r}_step-{step}"
+                ] = run_scenario(strength / 2, sample_size, r, scenario)
 
-    for title, res in results.items():
-        print(title, res, sep="\n")
-        res.to_csv(f"./results/icp_{title}.csv", index=False)
+    for (title, res) in results.items():
+        if os.path.isfile(f"./results/{title}.csv"):
+            prev_res = pd.read_csv(f"./results/{title}.csv", index_col=None)
+            res = pd.concat([prev_res, res])
+        res.to_csv(f"./results/{title}.csv", index=False)

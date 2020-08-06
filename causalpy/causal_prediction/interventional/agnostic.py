@@ -63,11 +63,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
     ):
         super().__init__(log_level=log_level)
         if device is None:
-            self.device = (
-                torch.device("cuda")
-                if torch.cuda.is_available()
-                else torch.device("cpu")
-            )
+            self.device = torch.device("cpu")
         else:
             self.device = device
         self.batch_size = batch_size
@@ -158,6 +154,8 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         """
         Reset the neural network components for a fresh learning iteration.
         """
+
+        # self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
         if self.masker_net is None:
             self.masker_net = L0InputGate(dim_input=self.p, **self.masker_net_params)
         else:
@@ -182,6 +180,8 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
         cast_to_modulelist = False
         for i, network in enumerate(self.network_list):
+            cast_to_modulelist = True
+            # self.network_list[i] = CINN(dim_condition=self.p, **self.network_params)
             if network is None:
                 cast_to_modulelist = True
                 self.network_list[i] = CINN(dim_condition=self.p, **self.network_params)
@@ -210,6 +210,15 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
             results_masks = []
             results_losses = []
+
+            batch_size = self.batch_size
+            if len(obs) < self.batch_size:
+                self.batch_size = len(obs)
+                self.logger.warn(
+                    f"Chosen batch size was {batch_size}, but data given has only {len(obs)} many samples. "
+                    f"Temporarily setting batch size to sample size."
+                )
+
             (
                 obs,
                 target,
@@ -301,6 +310,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                 #     self.masker_net.state_dict(),
                 #     os.path.join(results_folder, f"{results_filename}_masker.pt"),
                 # )
+            self.batch_size = batch_size
         return results_masks, results_losses, res_str
 
     def _infer(
@@ -347,6 +357,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
                 class_vector=torch.as_tensor(envs),
                 batch_size=min(self.batch_size, self.n),
             ),
+            drop_last=True,
         )
 
         nr_masks = (
@@ -592,7 +603,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.68, residuals=1, inn=1, independence=1, l2=0.0)
+            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=10, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -927,7 +938,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=1, l2=0.0)
+            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=10, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -975,7 +986,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         nr_masks: int,
         run: int,
         nr_runs: int,
-        epochs_without_featuresel: int = 400,
+        epochs_without_featuresel: int = 500,
         **kwargs,
     ):
         self.reset()
@@ -1377,7 +1388,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.4, inn=1, inn_e=1, independence=0, l2=0.0),
+            "hyperparams", dict(l0=0.45, inn=1, inn_e=1, independence=0, l2=0.0),
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1464,8 +1475,8 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         nr_masks: int,
         run: int,
         nr_runs: int,
-        epochs_without_featuresel: int = 100,
-        epoch_switch: int = 30,
+        epochs_without_featuresel: int = 200,
+        epoch_switch: int = 60,
         **kwargs,
     ):
         self.reset()

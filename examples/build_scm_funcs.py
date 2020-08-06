@@ -414,76 +414,77 @@ def build_scm_massive(seed=0):
     return cn
 
 
-def generate_data_from_scm(
-    scm,
-    target_var=None,
-    intervention_style="markov",
-    countify=False,
-    sample_size=100,
-    seed=None,
-):
-    # scm = simulate(nr_genes, 2, seed=seed)
-    rng = np.random.default_rng(seed + 10)
-    # scm = build_scm_minimal(seed)
-    variables = sorted(scm.get_variables())
-    if target_var is None:
-        target_var = rng.choice(variables[len(variables) // 2 :])
-    other_variables = sorted(scm.get_variables())
-    other_variables.remove(target_var)
-    target_parents = sorted(scm.graph.predecessors(target_var))
-
-    possible_parents = sorted(scm.get_variables())
-    possible_parents.remove(target_var)
-
-    scm.reseed(seed)
-    environments = []
-    sample_size_per_env = sample_size
-    sample = scm.sample(sample_size_per_env)
-    sample_data = [sample[variables]]
-    environments += [0] * sample_size_per_env
-    if intervention_style == "markov":
-        interv_variables = set(target_parents)
-        for child in scm.graph.successors(target_var):
-            child_pars = set(scm.graph.predecessors(child))
-            child_pars = child_pars.union([child])
-            child_pars.remove(target_var)
-            interv_variables = interv_variables.union(child_pars)
-    elif intervention_style == "children":
-        interv_variables = set([])
-        for child in scm.graph.successors(target_var):
-            child_pars = set(scm.graph.predecessors(child))
-            child_pars = child_pars.union([child])
-            child_pars.remove(target_var)
-            interv_variables = interv_variables.union(child_pars)
-    else:
-        interv_variables = other_variables
-
-    # perform interventions on selected variables
-    for parent in interv_variables:
-        interv_value = rng.choice([-1, 1]) * rng.random(1) * 3
-        # interv_value = 0
-        scm.do_intervention([parent], [interv_value])
-        print(
-            f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."
-        )
-        sample_data.append(scm.sample(sample_size_per_env))
-        environments += [environments[-1] + 1] * sample_size_per_env
-        scm.undo_intervention()
-    data = pd.concat(sample_data, sort=True)[variables].reset_index(drop=True)
-
-    if countify:
-        data = pd.DataFrame(
-            np.random.poisson(
-                torch.nn.Softplus(beta=1)(torch.as_tensor(data.to_numpy())).numpy()
-            ),
-            columns=data.columns,
-        )
-        # data += np.random.normal(0, 0.1, size=data.shape)
-
-    environments = np.array(environments)
-    print(scm)
-    print("Target Variable:", target_var)
-    print("Actual Parents:", ", ".join(target_parents))
-    print("Candidate Parents:", ", ".join(possible_parents))
-
-    return (data, environments, scm, possible_parents, target_parents)
+#
+# def generate_data_from_scm(
+#     scm,
+#     target_var=None,
+#     intervention_style="markov",
+#     countify=False,
+#     sample_size=100,
+#     seed=None,
+# ):
+#     # scm = simulate(nr_genes, 2, seed=seed)
+#     rng = np.random.default_rng(seed + 10)
+#     # scm = build_scm_minimal(seed)
+#     variables = sorted(scm.get_variables())
+#     if target_var is None:
+#         target_var = rng.choice(variables[len(variables) // 2 :])
+#     other_variables = sorted(scm.get_variables())
+#     other_variables.remove(target_var)
+#     target_parents = sorted(scm.graph.predecessors(target_var))
+#
+#     possible_parents = sorted(scm.get_variables())
+#     possible_parents.remove(target_var)
+#
+#     scm.reseed(seed)
+#     environments = []
+#     sample_size_per_env = sample_size
+#     sample = scm.sample(sample_size_per_env)
+#     sample_data = [sample[variables]]
+#     environments += [0] * sample_size_per_env
+#     if intervention_style == "markov":
+#         interv_variables = set(target_parents)
+#         for child in scm.graph.successors(target_var):
+#             child_pars = set(scm.graph.predecessors(child))
+#             child_pars = child_pars.union([child])
+#             child_pars.remove(target_var)
+#             interv_variables = interv_variables.union(child_pars)
+#     elif intervention_style == "children":
+#         interv_variables = set([])
+#         for child in scm.graph.successors(target_var):
+#             child_pars = set(scm.graph.predecessors(child))
+#             child_pars = child_pars.union([child])
+#             child_pars.remove(target_var)
+#             interv_variables = interv_variables.union(child_pars)
+#     else:
+#         interv_variables = other_variables
+#
+#     # perform interventions on selected variables
+#     for parent in interv_variables:
+#         interv_value = rng.choice([-1, 1]) * rng.random(1) * 3
+#         # interv_value = 0
+#         scm.do_intervention([parent], [interv_value])
+#         print(
+#             f"Environment {environments[-1] + 1}: Intervention on variable {parent} for value {interv_value}."
+#         )
+#         sample_data.append(scm.sample(sample_size_per_env))
+#         environments += [environments[-1] + 1] * sample_size_per_env
+#         scm.undo_intervention()
+#     data = pd.concat(sample_data, sort=True)[variables].reset_index(drop=True)
+#
+#     if countify:
+#         data = pd.DataFrame(
+#             np.random.poisson(
+#                 torch.nn.Softplus(beta=1)(torch.as_tensor(data.to_numpy())).numpy()
+#             ),
+#             columns=data.columns,
+#         )
+#         # data += np.random.normal(0, 0.1, size=data.shape)
+#
+#     environments = np.array(environments)
+#     print(scm)
+#     print("Target Variable:", target_var)
+#     print("Actual Parents:", ", ".join(target_parents))
+#     print("Candidate Parents:", ", ".join(possible_parents))
+#
+#     return (data, environments, scm, possible_parents, target_parents)

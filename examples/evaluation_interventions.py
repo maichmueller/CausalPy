@@ -26,6 +26,7 @@ def run_scenario(
     nr_runs,
     epochs,
     scenario,
+    reach,
     step,
     **kwargs,
 ):
@@ -45,7 +46,9 @@ def run_scenario(
         scm,
         target_var="Y",
         intervention_style=scenario,
+        intervention_reach=reach,
         strength=strength,
+        fix_strength=True,
         sample_size=sample_size,
         seed=seed,
     )
@@ -55,7 +58,7 @@ def run_scenario(
 
     ap = Predictor(
         epochs=epochs,
-        batch_size=10000,
+        batch_size=5000,
         visualize_with_visdom=bool(use_visdom),
         masker_network_params=dict(monte_carlo_sample_size=1),
         device="cuda:0",
@@ -68,7 +71,7 @@ def run_scenario(
         nr_runs=nr_runs,
         normalize=True,
         save_results=True,
-        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}_step-{step+1}",
+        results_filename=f"{modelclass}_{test_name}_scenario-{scenario}_reach-{reach}_step-{step+1}",
         **kwargs,
     )
     s = f"{res_str}\n"
@@ -94,7 +97,7 @@ modelclass = None
 
 if __name__ == "__main__":
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -108,8 +111,8 @@ if __name__ == "__main__":
 
     steps = 11
     sample_size = 2048
-    nr_runs = 30
-    epochs = 2000
+    nr_runs = 20
+    epochs = 1500
     results = []
 
     scenarios = ["do", "meanshift", "scaling"]
@@ -159,12 +162,22 @@ if __name__ == "__main__":
         help="Step from which to start",
     )
 
+    parser.add_argument(
+        "reach",
+        metavar="reach",
+        type=str,
+        nargs="?",
+        default="markov",
+        help="Step from which to start",
+    )
+
     args = parser.parse_args()
     modelclass = args.modelclass[0]
     nr_work = args.nr_workers[0]
     start_step = args.start_step[0]
     end_step = args.end_step[0]
     scenario = args.scenario[0]
+    reach = args.reach
 
     if scenario is not None:
         scenarios = [scenario]
@@ -173,7 +186,6 @@ if __name__ == "__main__":
         PredictorClass = AgnosticPredictor
     elif modelclass == "multi":
         PredictorClass = MultiAgnosticPredictor
-        nr_work = min(nr_work, 3)
     elif modelclass == "density":
         PredictorClass = DensityBasedPredictor
     else:
@@ -192,10 +204,11 @@ if __name__ == "__main__":
                         run_scenario,
                         PredictorClass,
                         modelclass,
-                        strength,
+                        strength / 2,
                         nr_epochs=epochs,
                         nr_runs=nr_runs,
                         scenario=scenario,
+                        reach=reach,
                         epochs=epochs,
                         step=step,
                         sample_size=sample_size,

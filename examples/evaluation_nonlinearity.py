@@ -37,6 +37,7 @@ class CouplingBase(torch.nn.Module, ABC):
         dim_condition: int,
         nr_layers: int = 16,
         conditional_net: Optional[torch.nn.Module] = None,
+        seed: int = None,
         device: torch.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         ),
@@ -87,7 +88,7 @@ class CouplingBase(torch.nn.Module, ABC):
         else:
             # only in the case of no conditional neural network are these trainable parameters.
             # Otherwise their data will be provided by the condition generating network.
-            self.reset_parameters()
+            self.reset_parameters(seed)
             self.mat_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
@@ -101,7 +102,7 @@ class CouplingBase(torch.nn.Module, ABC):
                 ]
             ).to(device)
 
-    def reset_parameters(self):
+    def reset_parameters(self, seed=None):
         if self.is_conditional:
             with torch.no_grad():
                 if isinstance(self.conditional_net, torch.nn.Sequential):
@@ -113,10 +114,11 @@ class CouplingBase(torch.nn.Module, ABC):
                     # in case the net is external we expect it to have a reset parameters method.
                     self.conditional_net.reset_parameters()
         else:
-            self._reset_conditional_parameters()
+            self._reset_conditional_parameters(seed)
 
-    def _reset_conditional_parameters(self):
-        torch.manual_seed(5)
+    def _reset_conditional_parameters(self, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
         with torch.no_grad():
             for mat in self.mat_like_params:
                 mat.normal_(mean=0, std=1)
@@ -309,6 +311,7 @@ class CINN(torch.nn.Module):
         nr_layers: int = 16,
         normalize_forward: bool = True,
         conditional_net: Optional[torch.nn.Module] = None,
+        seed=None,
         device: Union[str, torch.device] = "cuda"
         if torch.cuda.is_available()
         else "cpu",
@@ -330,6 +333,7 @@ class CINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    seed=seed,
                     device=device,
                 )
             )
@@ -339,6 +343,7 @@ class CINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
+                    seed=seed,
                     device=device,
                 )
             )
@@ -407,6 +412,7 @@ class CINNFC(torch.nn.Module, Assignment):
         nr_layers: int = 0,
         nr_blocks: int = 1,
         strength: float = 0.0,
+        seed=None,
         device=None,
         **kwargs,
     ):
@@ -422,6 +428,7 @@ class CINNFC(torch.nn.Module, Assignment):
             dim_condition=0,
             nr_layers=nr_layers,
             nr_blocks=nr_blocks,
+            seed=seed,
             device="cuda",
         )
 
@@ -503,9 +510,9 @@ def run_scenario(
         "Y": (None, nets["Y"], None),
     }
     if scenario == "parents":
-        nonlinearities = {key: nonlinearities[key] for key in ["X_1", "X_2"]}
+        nonlinearities = {key: nonlinearities[key] for key in ["X_1", "X_2", "X_3"]}
     elif scenario == "children":
-        nonlinearities = {key: nonlinearities[key] for key in ["X_3", "X_6"]}
+        nonlinearities = {key: nonlinearities[key] for key in ["X_4", "X_6"]}
     elif scenario == "target":
         nonlinearities = {key: nonlinearities[key] for key in ["Y"]}
     elif scenario == "all":
@@ -553,7 +560,7 @@ def run_scenario(
 
     ap = Predictor(
         epochs=epochs,
-        batch_size=10000,
+        batch_size=5000,
         visualize_with_visdom=bool(use_visdom),
         masker_network_params=dict(monte_carlo_sample_size=1),
         device=device,
@@ -582,25 +589,44 @@ def run_scenario(
     }
 
 
-def fc_net(nr_layers: int, nr_hidden, strength: float, nr_blocks=1, device=None):
-    network_params = {
-        "nr_layers": nr_layers,
-        "nr_blocks": nr_blocks,
-        "nr_hidden": nr_hidden,
-        "strength": strength,
-        "device": device,
-    }
+def fc_net(
+    nr_layers: int, nr_hidden, strength: float, nr_blocks=1, seed=None, device=None
+):
+    if seed is not None:
+        network_params = [
+            {
+                "nr_layers": nr_layers,
+                "nr_blocks": nr_blocks,
+                "nr_hidden": nr_hidden,
+                "strength": strength,
+                "seed": seed,
+                "device": device,
+            }
+            for seed in range(seed + 1, seed + 1 + 10)
+        ]
+    else:
+        network_params = [
+            {
+                "nr_layers": nr_layers,
+                "nr_blocks": nr_blocks,
+                "nr_hidden": nr_hidden,
+                "strength": strength,
+                "seed": seed,
+                "device": device,
+            }
+            for _ in range(10)
+        ]
     nets = {
-        "X_0": CINNFC(dim_in=1, **network_params).to(device),
-        "X_1": CINNFC(dim_in=2, **network_params).to(device),
-        "X_2": CINNFC(dim_in=2, **network_params).to(device),
-        "X_3": CINNFC(dim_in=1, **network_params).to(device),
-        "X_4": CINNFC(dim_in=3, **network_params).to(device),
-        "X_5": CINNFC(dim_in=1, **network_params).to(device),
-        "X_6": CINNFC(dim_in=3, **network_params).to(device),
-        "X_7": CINNFC(dim_in=2, **network_params).to(device),
-        "X_8": CINNFC(dim_in=1, **network_params).to(device),
-        "Y": CINNFC(dim_in=4, **network_params).to(device),
+        "X_0": CINNFC(dim_in=1, **(network_params)[0]).to(device),
+        "X_1": CINNFC(dim_in=2, **(network_params)[1]).to(device),
+        "X_2": CINNFC(dim_in=2, **(network_params)[2]).to(device),
+        "X_3": CINNFC(dim_in=1, **(network_params)[3]).to(device),
+        "X_4": CINNFC(dim_in=2, **(network_params)[9]).to(device),
+        "X_5": CINNFC(dim_in=1, **(network_params)[5]).to(device),
+        "X_6": CINNFC(dim_in=3, **(network_params)[6]).to(device),
+        "X_7": CINNFC(dim_in=2, **(network_params)[7]).to(device),
+        "X_8": CINNFC(dim_in=1, **(network_params)[8]).to(device),
+        "Y": CINNFC(dim_in=4, **(network_params)[4]).to(device),
     }
     return nets
 
@@ -614,7 +640,7 @@ test_name = "nonlinearitytest"
 modelclass = None
 if __name__ == "__main__":
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -626,10 +652,12 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
+    seed = 0
+
     steps = 10
     sample_size = 2048
-    nr_runs = 30
-    epochs = 2000
+    nr_runs = 20
+    epochs = 1500
     results = []
     scenarios = ["target", "all", "children", "parents"]
 
@@ -642,8 +670,8 @@ if __name__ == "__main__":
         help="The model to evaluate",
     )
     parser.add_argument(
-        "nr_workers",
-        metavar="nr_workers",
+        "nr_work",
+        metavar="nr_work",
         type=int,
         nargs=1,
         default=5,
@@ -672,17 +700,17 @@ if __name__ == "__main__":
         "scenario",
         metavar="scenario",
         type=str,
-        nargs=1,
+        nargs="?",
         default=None,
         help="Step from which to start",
     )
 
     args = parser.parse_args()
     modelclass = args.modelclass[0]
-    nr_work = args.nr_workers[0]
+    nr_work = args.nr_work[0]
     start_step = args.start_step[0]
     end_step = args.end_step[0]
-    scenario = args.scenario[0]
+    scenario = args.scenario
     if scenario is not None:
         scenarios = [scenario]
 
@@ -690,7 +718,6 @@ if __name__ == "__main__":
         PredictorClass = AgnosticPredictor
     elif modelclass == "multi":
         PredictorClass = MultiAgnosticPredictor
-        nr_work = min(nr_work, 3)
     elif modelclass == "density":
         PredictorClass = DensityBasedPredictor
     else:
@@ -715,6 +742,7 @@ if __name__ == "__main__":
                             "nr_blocks": 10,
                             "nr_hidden": 128,
                             "strength": (strength + 1) / steps,
+                            "seed": seed,
                         },
                         nr_epochs=epochs,
                         nr_runs=nr_runs,

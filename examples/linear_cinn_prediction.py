@@ -22,7 +22,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
-from study_cases import study_scm
+from study_cases import *
 from linear_regression_eval import *
 
 
@@ -35,8 +35,9 @@ warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
 
-    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
+    dev = "cpu"
     np.random.seed(seed)
 
     ###################
@@ -53,7 +54,7 @@ if __name__ == "__main__":
             # (build_scm_medium, "Y", f"{pref}_medium"),
             # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
-            (study_scm, "Y", f"{pref}_study"),
+            (study_scm, "Y", f"{pref}_study6"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -70,9 +71,10 @@ if __name__ == "__main__":
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
             countify=False,
-            intervention_style="markov",
+            intervention_reach="markov",
+            intervention_style="do",
             target_var=target_var,
-            sample_size=4096,
+            sample_size=1024,
             seed=seed,
         )
         target_parents_indices = np.array(
@@ -80,17 +82,17 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 20
+        nr_runs = 50
 
-        epochs = 1000
+        epochs = 1500
         use_visdom = 0
 
         ap = AgnosticPredictor(
             epochs=epochs,
-            batch_size=5000,
+            batch_size=10000,
             visualize_with_visdom=bool(use_visdom),
             device="cuda:0",
-            masker_network_params=dict(monte_carlo_sample_size=50),
+            masker_network_params=dict(monte_carlo_sample_size=1),
         )
         results_mask, results_loss, res_str = ap.infer(
             complete_data,
