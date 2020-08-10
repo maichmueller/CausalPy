@@ -77,8 +77,8 @@ def init(l):
 
 
 test_name = "interventionstest"
-# modelclass = "pc"
-modelclass = "gies"
+modelclass = "pc"
+# modelclass = "gies"
 
 if __name__ == "__main__":
 
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    sample_size = 2048
+    sample_size = 1024
     scenarios = ["do", "meanshift", "scaling"]
     reach = ["markov", "children", "parents"]
     steps = 11

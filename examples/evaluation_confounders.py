@@ -185,35 +185,30 @@ if __name__ == "__main__":
     logger = logging.getLogger()  # get the root logger
 
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
-        "modelclass",
-        metavar="modelclass",
-        type=str,
-        nargs=1,
-        help="The model to evaluate",
+        "--model", type=str, nargs="?", help="The model to evaluate",
     )
 
     parser.add_argument(
-        "nr_workers",
-        metavar="nr_workers",
+        "--workers",
         type=int,
-        nargs=1,
+        nargs="?",
         default=2,
         help="The number of multiprocessing workers",
     )
 
     parser.add_argument(
-        "scenario",
-        metavar="scenario",
-        type=int,
+        "--scenario",
+        type=str,
         nargs="?",
-        default=-1,
+        default=None,
         help="Step from which to start",
     )
 
     args = parser.parse_args()
-    modelclass = args.modelclass[0]
-    nr_work = args.nr_workers[0]
+    modelclass = args.model
+    nr_work = args.workers
     scenario = args.scenario
 
     if modelclass == "single":
@@ -231,7 +226,7 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = 1
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 30
     epochs = 2000
     results = []

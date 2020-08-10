@@ -66,7 +66,7 @@ modelclass = None
 
 if __name__ == "__main__":
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    # device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    sample_size = 2048
+    sample_size = 1024
     scenarios = ["do", "meanshift", "scaling"]
 
     reach = ["markov", "children", "parents"]

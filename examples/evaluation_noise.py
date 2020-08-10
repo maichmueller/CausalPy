@@ -92,81 +92,10 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "modelclass",
-        metavar="modelclass",
-        type=str,
-        nargs=1,
-        help="The model to evaluate",
-    )
-
-    parser.add_argument(
-        "nr_workers",
-        metavar="nr_workers",
-        type=int,
-        nargs=1,
-        default=5,
-        help="The number of multiprocessing workers",
-    )
-
-    parser.add_argument(
-        "dist",
-        metavar="dist",
-        type=str,
-        nargs=1,
-        default="all",
-        help="Distribution to compute",
-    )
-
-    parser.add_argument(
-        "start_step",
-        metavar="start_step",
-        type=int,
-        nargs=1,
-        default=0,
-        help="Step from which to start",
-    )
-
-    parser.add_argument(
-        "end_step",
-        metavar="end_step",
-        type=int,
-        nargs=1,
-        default=0,
-        help="Step until which to compute",
-    )
-
-    parser.add_argument(
-        "scenario",
-        metavar="scenario",
-        type=str,
-        nargs="?",
-        default=None,
-        help="Step from which to start",
-    )
-
-    args = parser.parse_args()
-    modelclass = args.modelclass[0]
-    nr_work = args.nr_workers[0]
-    dist = args.dist[0]
-    start_step = args.start_step[0]
-    end_step = args.end_step[0]
-    scenario = args.scenario
-    if modelclass == "single":
-        PredictorClass = AgnosticPredictor
-    elif modelclass == "multi":
-        PredictorClass = MultiAgnosticPredictor
-    elif modelclass == "density":
-        PredictorClass = DensityBasedPredictor
-    else:
-        raise ValueError(
-            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
-        )
     multiprocessing.set_start_method("spawn")
     man = multiprocessing.Manager()
     steps = None
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 20
     epochs = 1500
     results = []
@@ -178,22 +107,67 @@ if __name__ == "__main__":
         ),
         "cauchy": ([dict(scale=i) for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], "scipy",),
     }
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model", type=str, nargs="?", help="The model to evaluate",
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        nargs="?",
+        default=2,
+        help="The number of multiprocessing workers",
+    )
+
+    parser.add_argument(
+        "--dist", type=str, nargs="?", default="all", help="Distribution to compute",
+    )
+
+    parser.add_argument(
+        "--start", type=int, nargs="?", default=1, help="Step from which to start",
+    )
+
+    parser.add_argument(
+        "--end", type=int, nargs="?", default=11, help="Step until which to compute",
+    )
+
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Step from which to start",
+    )
+
+    args = parser.parse_args()
+    modelclass = args.model
+    nr_work = args.workers
+    dist = args.dist
+    start_step = args.start - 1
+    end_step = args.end - 1
+    scenario = args.scenario
+
+    if modelclass == "single":
+        PredictorClass = AgnosticPredictor
+    elif modelclass == "multi":
+        PredictorClass = MultiAgnosticPredictor
+    elif modelclass == "density":
+        PredictorClass = DensityBasedPredictor
+    else:
+        raise ValueError(
+            f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
+        )
+
     if dist != "all":
         dists = {dist: dists[dist]}
-        if end_step != 0:
-            print(dists)
-            dists[dist] = dists[dist][0][start_step:end_step], dists[dist][1]
-        else:
-            dists[dist] = dists[dist][0][start_step:], dists[dist][1]
+        dists[dist] = dists[dist][0][start_step:end_step], dists[dist][1]
 
     scenarios = ["target", "all"]
     if scenario is not None:
         scenarios = [scenario]
-    # we test 4 scenarios:
-    # 1. increasing nonlinearity in the parents,
-    # 2. increasing nonlinearity in the children,
-    # 3. increasing nonlinearity on the target,
-    # 4. increasing nonlinearity on all
 
     for scenario in scenarios:
         for dist, package in dists.items():
@@ -217,7 +191,7 @@ if __name__ == "__main__":
                             sample_size=sample_size,
                             LOCK=lock,
                         )
-                        for step, param in enumerate(params)
+                        for step, param in zip(range(start_step, end_step), params)
                     )
                 )
                 for future in as_completed(futures):

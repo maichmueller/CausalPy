@@ -27,7 +27,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
 from build_scm_funcs import *
-from study_cases import study_scm
+from study_cases import *
 from linear_regression_eval import *
 
 
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     ###################
     # Data Generation #
     ###################
-    pref = "single"
+    pref = "density"
     for i, (scm_generator, target_var, fname) in enumerate(
         [
             # (build_scm_minimal, "Y", f"{pref}_min"),
@@ -58,7 +58,7 @@ if __name__ == "__main__":
             # (build_scm_medium, "Y", f"{pref}_medium"),
             # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
-            (study_scm, "Y", f"{pref}_study"),
+            (study_scm, "Y", f"{pref}_study9"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -75,9 +75,10 @@ if __name__ == "__main__":
         ) = generate_data_from_scm(
             scm=scm_generator(seed=seed),
             countify=False,
-            intervention_style="markov",
+            intervention_reach="markov",
+            intervention_style="do",
             target_var=target_var,
-            sample_size=4096,
+            sample_size=1024,
             seed=seed,
         )
         target_parents_indices = np.array(
@@ -85,14 +86,14 @@ if __name__ == "__main__":
         )
         nr_envs = np.unique(environments).max() + 1
 
-        nr_runs = 20
+        nr_runs = 30
 
-        epochs = 1000
+        epochs = 1500
         use_visdom = 0
 
         ap = DensityBasedPredictor(
             epochs=epochs,
-            batch_size=100000,
+            batch_size=10000,
             visualize_with_visdom=bool(use_visdom),
             device="cuda:0",
         )

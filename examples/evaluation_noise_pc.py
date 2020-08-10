@@ -68,8 +68,8 @@ def init(l):
 
 
 test_name = "noisetest"
-modelclass = "pc"
-# modelclass = "gies"
+# modelclass = "pc"
+modelclass = "gies"
 if __name__ == "__main__":
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     logger = logging.getLogger()  # get the root logger
 
     steps = None
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 30
     epochs = 2000
     results = {}

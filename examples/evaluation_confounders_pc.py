@@ -34,8 +34,8 @@ from cdt import SETTINGS
 import networkx as nx
 
 test_name = "confoundertest"
-modelclass = "pc"
-# modelclass = "gies"
+# modelclass = "pc"
+modelclass = "gies"
 
 
 def run_scenario(
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    sample_size = 2048
+    sample_size = 1024
 
     scenarios = [1, 2, 3]
 

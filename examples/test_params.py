@@ -1,3 +1,4 @@
+import argparse
 import itertools
 import os
 from functools import partial
@@ -17,7 +18,12 @@ from causalpy.neural_networks import CINN, L0InputGate
 import pandas as pd
 import numpy as np
 from examples.simulation_linear import simulate
-from causalpy.causal_prediction.interventional import ICPredictor, AgnosticPredictor
+from causalpy.causal_prediction.interventional import (
+    ICPredictor,
+    AgnosticPredictor,
+    MultiAgnosticPredictor,
+    DensityBasedPredictor,
+)
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.stats import wasserstein_distance
 from plotly import graph_objs as go
@@ -40,11 +46,47 @@ if __name__ == "__main__":
     dev = "cpu"
     np.random.seed(seed)
 
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--model", nargs="?", type=str, default="single")
+    parser.add_argument("--l0", nargs="?", type=float, default=0.6)
+    parser.add_argument("--inn", nargs="?", type=float, default=1)
+    parser.add_argument("--inne", nargs="?", type=float, default=1)
+    parser.add_argument("--res", nargs="?", type=float, default=1)
+    parser.add_argument("--ind", nargs="?", type=float, default=1)
+    parser.add_argument("--fname", nargs="?", type=str, default=None)
+
+    args = parser.parse_args()
+
+    model = args.model
+    l0 = args.l0
+    inn = args.inn
+    inne = args.inne
+    res = args.res
+    ind = args.ind
+    name = args.fname
+    if name is None:
+        name = f"{model}"
+    else:
+        name = f"{model}_{name}"
+
+    params = dict(l0=l0, inn=inn, inn_e=inne, residuals=res, independence=ind, l2=0)
+
+    for k, v in params.items():
+        name += f"_{k}-{v}"
+
+    if model == "single":
+        AP = AgnosticPredictor
+    elif model == "multi":
+        AP = MultiAgnosticPredictor
+    elif model == "density":
+        AP = DensityBasedPredictor
+    else:
+        raise ValueError("wrong model")
     ###################
     # Data Generation #
     ###################
-    pref = "single"
-    for i, (scm_generator, target_var, fname) in enumerate(
+    for i, (scm_generator, target_var, _) in enumerate(
         [
             # (build_scm_minimal, "Y", f"{pref}_min"),
             # (build_scm_minimal2, "Y", f"{pref}_min2"),
@@ -54,7 +96,7 @@ if __name__ == "__main__":
             # (build_scm_medium, "Y", f"{pref}_medium"),
             # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
-            (study_scm, "Y", f"{pref}_study9"),
+            (study_scm, "Y", f"_study"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -87,11 +129,12 @@ if __name__ == "__main__":
         epochs = 1500
         use_visdom = 0
 
-        ap = AgnosticPredictor(
+        ap = AP(
             epochs=epochs,
             batch_size=10000,
             visualize_with_visdom=bool(use_visdom),
             device="cuda:0",
+            hyperparams=params,
             masker_network_params=dict(monte_carlo_sample_size=1),
         )
         results_mask, results_loss, res_str = ap.infer(
@@ -101,7 +144,7 @@ if __name__ == "__main__":
             nr_runs=nr_runs,
             normalize=True,
             save_results=True,
-            results_filename=fname,
+            results_filename=name,
         )
         last_losses = [
             {key: results_loss[i][key][-1] for key in results_loss[0].keys()}

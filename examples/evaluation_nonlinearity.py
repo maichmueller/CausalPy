@@ -621,7 +621,7 @@ def fc_net(
         "X_1": CINNFC(dim_in=2, **(network_params)[1]).to(device),
         "X_2": CINNFC(dim_in=2, **(network_params)[2]).to(device),
         "X_3": CINNFC(dim_in=1, **(network_params)[3]).to(device),
-        "X_4": CINNFC(dim_in=2, **(network_params)[9]).to(device),
+        "X_4": CINNFC(dim_in=3, **(network_params)[9]).to(device),
         "X_5": CINNFC(dim_in=1, **(network_params)[5]).to(device),
         "X_6": CINNFC(dim_in=3, **(network_params)[6]).to(device),
         "X_7": CINNFC(dim_in=2, **(network_params)[7]).to(device),
@@ -655,50 +655,40 @@ if __name__ == "__main__":
     seed = 0
 
     steps = 10
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 20
     epochs = 1500
     results = []
     scenarios = ["target", "all", "children", "parents"]
 
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
-        "modelclass",
-        metavar="modelclass",
-        type=str,
-        nargs=1,
-        help="The model to evaluate",
+        "--model", type=str, nargs="?", help="The model to evaluate",
     )
+
     parser.add_argument(
-        "nr_work",
-        metavar="nr_work",
+        "--workers",
         type=int,
-        nargs=1,
-        default=5,
+        nargs="?",
+        default=2,
         help="The number of multiprocessing workers",
     )
 
     parser.add_argument(
-        "start_step",
-        metavar="start_step",
-        type=int,
-        nargs=1,
-        default=0,
-        help="Step from which to start",
+        "--start", type=int, nargs="?", default=1, help="Step from which to start",
     )
 
     parser.add_argument(
-        "end_step",
-        metavar="end_step",
+        "--end",
         type=int,
-        nargs=1,
-        default=steps,
+        nargs="?",
+        default=steps + 1,
         help="Step until which to compute",
     )
 
     parser.add_argument(
-        "scenario",
-        metavar="scenario",
+        "--scenario",
         type=str,
         nargs="?",
         default=None,
@@ -706,11 +696,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    modelclass = args.modelclass[0]
-    nr_work = args.nr_work[0]
-    start_step = args.start_step[0]
-    end_step = args.end_step[0]
+    modelclass = args.model
+    nr_work = args.workers
+    start_step = args.start - 1
+    end_step = args.end - 1
     scenario = args.scenario
+
     if scenario is not None:
         scenarios = [scenario]
 
@@ -753,8 +744,8 @@ if __name__ == "__main__":
                         LOCK=lock,
                         device=device,
                     )
-                    for step, (layers, strength) in enumerate(
-                        zip(range(steps), range(start_step, end_step)), start_step
+                    for step, strength in enumerate(
+                        range(start_step, end_step), start_step
                     )
                 )
             )

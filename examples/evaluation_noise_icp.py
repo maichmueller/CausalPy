@@ -69,7 +69,7 @@ if __name__ == "__main__":
     logger = logging.getLogger()  # get the root logger
 
     steps = None
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 30
     epochs = 2000
     results = {}

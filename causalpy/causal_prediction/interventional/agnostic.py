@@ -206,111 +206,107 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         **kwargs,
     ):
 
-        with TempFolder("./temp_model_folder", **kwargs) as temp_folder:
+        # with TempFolder("./temp_model_folder", **kwargs) as temp_folder:
 
-            results_masks = []
-            results_losses = []
+        results_masks = []
+        results_losses = []
 
-            batch_size = self.batch_size
-            if len(obs) < self.batch_size:
-                self.batch_size = len(obs)
-                self.logger.warn(
-                    f"Chosen batch size was {batch_size}, but data given has only {len(obs)} many samples. "
-                    f"Temporarily setting batch size to sample size."
-                )
-
-            (
-                obs,
-                target,
-                environments_map,
-                data_loader,
-                ground_truth_mask,
-                nr_masks,
-            ) = self._setup_infer(
-                obs, envs, target_variable, normalize, ground_truth_mask,
+        batch_size = self.batch_size
+        if len(obs) < self.batch_size:
+            self.batch_size = len(obs)
+            self.logger.warn(
+                f"Chosen batch size was {batch_size}, but data given has only {len(obs)} many samples. "
+                f"Temporarily setting batch size to sample size."
             )
 
-            if save_results:
-                if not os.path.isdir(results_folder):
-                    os.mkdir(results_folder)
+        (
+            obs,
+            target,
+            environments_map,
+            data_loader,
+            ground_truth_mask,
+            nr_masks,
+        ) = self._setup_infer(obs, envs, target_variable, normalize, ground_truth_mask,)
 
+        if save_results:
+            if not os.path.isdir(results_folder):
+                os.mkdir(results_folder)
+
+            with open(
+                os.path.join(results_folder, f"{results_filename}.csv"),
+                "w",
+                newline="",
+            ) as csvfile:
+                writer = csv.writer(csvfile, delimiter=",", quoting=csv.QUOTE_MINIMAL)
+                mask = self._mask_dict()
+                writer.writerow(list(mask.keys()))
+
+        for run in range(nr_runs):
+            final_mask, losses = self._infer(
+                obs=obs,
+                target=target,
+                environments_map=environments_map,
+                data_loader=data_loader,
+                show_epoch_progressbar=show_epoch_progressbar,
+                ground_truth_mask=ground_truth_mask,
+                nr_masks=nr_masks,
+                run=run,
+                nr_runs=nr_runs,
+            )
+            if save_results:
                 with open(
                     os.path.join(results_folder, f"{results_filename}.csv"),
-                    "w",
+                    "a",
                     newline="",
                 ) as csvfile:
                     writer = csv.writer(
                         csvfile, delimiter=",", quoting=csv.QUOTE_MINIMAL
                     )
-                    mask = self._mask_dict()
-                    writer.writerow(list(mask.keys()))
+                    writer.writerow(list(final_mask.values()))
 
-            for run in range(nr_runs):
-                final_mask, losses = self._infer(
-                    obs=obs,
-                    target=target,
-                    environments_map=environments_map,
-                    data_loader=data_loader,
-                    show_epoch_progressbar=show_epoch_progressbar,
-                    ground_truth_mask=ground_truth_mask,
-                    nr_masks=nr_masks,
-                    run=run,
-                    nr_runs=nr_runs,
-                )
-                if save_results:
-                    with open(
-                        os.path.join(results_folder, f"{results_filename}.csv"),
-                        "a",
-                        newline="",
-                    ) as csvfile:
-                        writer = csv.writer(
-                            csvfile, delimiter=",", quoting=csv.QUOTE_MINIMAL
-                        )
-                        writer.writerow(list(final_mask.values()))
+            results_masks.append(final_mask)
+            results_losses.append(losses)
+            # for i, network in enumerate(self.network_list):
+            #     torch.save(
+            #         network.state_dict(),
+            #         os.path.join(temp_folder, f"run_{run}_network_{i}.pt"),
+            #     )
+            # torch.save(
+            #     self.masker_net.state_dict(),
+            #     os.path.join(temp_folder, f"run_{run}_masker.pt"),
+            # )
 
-                results_masks.append(final_mask)
-                results_losses.append(losses)
-                # for i, network in enumerate(self.network_list):
-                #     torch.save(
-                #         network.state_dict(),
-                #         os.path.join(temp_folder, f"run_{run}_network_{i}.pt"),
-                #     )
-                # torch.save(
-                #     self.masker_net.state_dict(),
-                #     os.path.join(temp_folder, f"run_{run}_masker.pt"),
-                # )
-
-            best_run, lowest_loss, res_str, res_df = results_statistics(
-                target_variable,
-                self.get_parent_candidates(),
-                results_losses,
-                results_masks,
+        best_run, lowest_loss, res_str, res_df = results_statistics(
+            target_variable,
+            self.get_parent_candidates(),
+            results_losses,
+            results_masks,
+        )
+        # for i, network in enumerate(self.network_list):
+        #     network.load_state_dict(
+        #         torch.load(
+        #             os.path.join(temp_folder, f"run_{best_run}_network_{i}.pt")
+        #         )
+        #     )
+        # self.masker_net.load_state_dict(
+        #     torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
+        # )
+        if save_results:
+            res_df.to_csv(
+                os.path.join(results_folder, f"{results_filename}.csv"), index=False
             )
             # for i, network in enumerate(self.network_list):
-            #     network.load_state_dict(
-            #         torch.load(
-            #             os.path.join(temp_folder, f"run_{best_run}_network_{i}.pt")
-            #         )
+            #     torch.save(
+            #         network.state_dict(),
+            #         os.path.join(
+            #             results_folder, f"{results_filename}_network_{i}.pt"
+            #         ),
             #     )
-            # self.masker_net.load_state_dict(
-            #     torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
+            # torch.save(
+            #     self.masker_net.state_dict(),
+            #     os.path.join(results_folder, f"{results_filename}_masker.pt"),
             # )
-            if save_results:
-                res_df.to_csv(
-                    os.path.join(results_folder, f"{results_filename}.csv"), index=False
-                )
-                # for i, network in enumerate(self.network_list):
-                #     torch.save(
-                #         network.state_dict(),
-                #         os.path.join(
-                #             results_folder, f"{results_filename}_network_{i}.pt"
-                #         ),
-                #     )
-                # torch.save(
-                #     self.masker_net.state_dict(),
-                #     os.path.join(results_folder, f"{results_filename}_masker.pt"),
-                # )
-            self.batch_size = batch_size
+        self.batch_size = batch_size
         return results_masks, results_losses, res_str
 
     def _infer(
@@ -603,7 +599,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=10, l2=0.0)
+            "hyperparams", dict(l0=0.8, residuals=2.5, inn=1, independence=50, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -938,7 +934,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.55, residuals=1, inn=1, independence=10, l2=0.0)
+            "hyperparams", dict(l0=0.6, residuals=2.5, inn=1, independence=50, l2=0.0)
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1388,7 +1384,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         **base_kwargs,
     ):
         hyperparams = base_kwargs.pop(
-            "hyperparams", dict(l0=0.45, inn=1, inn_e=1, independence=0, l2=0.0),
+            "hyperparams", dict(l0=0.38, inn=1, inn_e=1, independence=0, l2=0.0),
         )
         super().__init__(
             masker_network_params=base_kwargs.pop(
@@ -1475,8 +1471,8 @@ class DensityBasedPredictor(AgnosticPredictorBase):
         nr_masks: int,
         run: int,
         nr_runs: int,
-        epochs_without_featuresel: int = 200,
-        epoch_switch: int = 60,
+        epochs_without_featuresel: int = 100,
+        epoch_switch: int = 40,
         **kwargs,
     ):
         self.reset()
@@ -1501,10 +1497,10 @@ class DensityBasedPredictor(AgnosticPredictorBase):
             batch_losses = {key: [] for key in epoch_losses.keys()}
 
             # this flips the mask training status after epoch_switch many epochs
-            change = int(not bool(epoch % epoch_switch))
+            change = not (epoch % epoch_switch)
 
             if epoch > epochs_without_featuresel:
-                if bool(change):
+                if change:
                     mask_training_activated = bool(
                         (mask_training_activated + change) % 2
                     )
@@ -1514,32 +1510,6 @@ class DensityBasedPredictor(AgnosticPredictorBase):
                     for network in self.network_list:
                         for param in network.parameters():
                             param.requires_grad = not mask_training_activated
-
-                # if reference_losses is None:
-                #     reference_losses = np.quantile(
-                #         np.asarray(epoch_losses["residuals"][-100:])
-                #         + np.asarray(epoch_losses["inn"][-100:]),
-                #         q=[0.01, 0.99],
-                #     )
-                #
-                # if epoch % incr_every_n_epoch == 0:
-                #     last_n = sum(
-                #         list(
-                #             map(
-                #                 np.array,
-                #                 (epoch_losses["inn"][-incr_every_n_epoch:]),
-                #                 epoch_losses["residuals"][-incr_every_n_epoch:],
-                #             )
-                #         )
-                #     )
-                #     if (
-                #         reference_losses[0] < last_n < reference_losses[1]
-                #     ).mean() > 0.4:
-                #         old = self.hyperparams["l0"]
-                #         self.hyperparams["l0"] += 0.02
-                #         new = self.hyperparams["l0"]
-                #         msg = f"Increasing hyperparam from {old} to {new}."
-                #         self.logger.info(msg)
 
             for batch_indices, env_info in data_loader:
                 self.optimizer.zero_grad()

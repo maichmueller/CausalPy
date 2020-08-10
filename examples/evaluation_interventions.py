@@ -110,7 +110,7 @@ if __name__ == "__main__":
     logger = logging.getLogger()  # get the root logger
 
     steps = 11
-    sample_size = 2048
+    sample_size = 1024
     nr_runs = 20
     epochs = 1500
     results = []
@@ -119,51 +119,39 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "modelclass",
-        metavar="modelclass",
-        type=str,
-        nargs=1,
-        help="The model to evaluate",
+        "--model", type=str, nargs="?", help="The model to evaluate",
     )
 
     parser.add_argument(
-        "nr_workers",
-        metavar="nr_workers",
+        "--workers",
         type=int,
-        nargs=1,
-        default=5,
+        nargs="?",
+        default=2,
         help="The number of multiprocessing workers",
     )
 
     parser.add_argument(
-        "start_step",
-        metavar="start_step",
-        type=int,
-        nargs=1,
-        default=0,
-        help="Step from which to start",
+        "--start", type=int, nargs="?", default=1, help="Step from which to start",
     )
 
     parser.add_argument(
-        "end_step",
-        metavar="end_step",
+        "--end",
         type=int,
-        nargs=1,
-        default=0,
+        nargs="?",
+        default=steps + 1,
         help="Step until which to compute",
     )
 
     parser.add_argument(
-        "scenario",
-        metavar="scenario",
+        "--scenario",
         type=str,
-        nargs=1,
+        nargs="?",
         default=None,
         help="Step from which to start",
     )
 
     parser.add_argument(
-        "reach",
+        "--reach",
         metavar="reach",
         type=str,
         nargs="?",
@@ -172,11 +160,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    modelclass = args.modelclass[0]
-    nr_work = args.nr_workers[0]
-    start_step = args.start_step[0]
-    end_step = args.end_step[0]
-    scenario = args.scenario[0]
+    modelclass = args.model
+    nr_work = args.workers
+    start_step = args.start - 1
+    end_step = args.end - 1
+    scenario = args.scenario
     reach = args.reach
 
     if scenario is not None:

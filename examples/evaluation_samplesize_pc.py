@@ -583,7 +583,7 @@ def fc_net(
         "X_1": CINNFC(dim_in=2, **(network_params)[1]).to(device),
         "X_2": CINNFC(dim_in=2, **(network_params)[2]).to(device),
         "X_3": CINNFC(dim_in=1, **(network_params)[3]).to(device),
-        "X_4": CINNFC(dim_in=2, **(network_params)[9]).to(device),
+        "X_4": CINNFC(dim_in=3, **(network_params)[9]).to(device),
         "X_5": CINNFC(dim_in=1, **(network_params)[5]).to(device),
         "X_6": CINNFC(dim_in=3, **(network_params)[6]).to(device),
         "X_7": CINNFC(dim_in=2, **(network_params)[7]).to(device),
