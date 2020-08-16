@@ -599,11 +599,11 @@ def init(l):
 
 
 test_name = "samplesizetest"
-modelclass = "pc"
-# modelclass = "gies"
+# modelclass = "pc"
+modelclass = "gies"
 if __name__ == "__main__":
 
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not os.path.isdir("./log"):
         os.mkdir("./log")
@@ -615,7 +615,7 @@ if __name__ == "__main__":
     )  # pass explicit filename here
     logger = logging.getLogger()  # get the root logger
 
-    steps = 12
+    steps = 13
     sample_size = lambda x: 2 ** (x + 1)
     results = {}
 

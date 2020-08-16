@@ -619,7 +619,7 @@ if __name__ == "__main__":
     for scenario in scenarios:
         for step, (layers, strength) in enumerate(zip(range(steps), range(steps))):
             results[
-                f"{modelclass}_{test_name}_scenario-{scenario}_step-{step}"
+                f"{modelclass}_{test_name}_scenario-{scenario}_step-{step+1}"
             ] = run_scenario(
                 {
                     "nr_layers": 1,

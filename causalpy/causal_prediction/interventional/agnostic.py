@@ -872,7 +872,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 estimate_gauss = gauss_sample[mask_nr]
                 loss_per_mask += wasserstein(estimate_gauss, true_gauss)
                 # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
-                loss_per_mask += moments(estimate_gauss, true_gauss)
+                # loss_per_mask += moments(estimate_gauss, true_gauss)
 
             resid_losses.append(loss_per_mask / nr_masks)
         return torch.max(torch.cat(resid_losses))
@@ -1264,7 +1264,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
                         estimate_gauss = gauss_sample[mask_nr]
                         loss_per_mask += wasserstein(estimate_gauss, true_gauss)
                         # loss_per_mask += mmd_multiscale(estimate_gauss, true_gauss)
-                        loss_per_mask += moments(estimate_gauss, true_gauss)
+                        # loss_per_mask += moments(estimate_gauss, true_gauss)
 
                     resid_losses.append(loss_per_mask / nr_masks)
             resid_losses_by_net.append(torch.max(torch.cat(resid_losses)).view(1))

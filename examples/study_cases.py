@@ -171,12 +171,13 @@ def generate_data_from_scm(
         interv_variables = set(target_parents)
 
     elif intervention_reach == "children":
-        interv_variables = set([])
-        for child in scm.graph.successors(target_var):
-            child_pars = set(scm.graph.predecessors(child))
-            child_pars = child_pars.union([child])
-            child_pars.remove(target_var)
-            interv_variables = interv_variables.union(child_pars)
+        interv_variables = set(scm.graph.successors(target_var))
+
+    elif intervention_reach == "parents-and-children":
+        interv_variables = set(scm.graph.successors(target_var)).union(
+            set(target_parents)
+        )
+
     else:
         interv_variables = other_variables
 

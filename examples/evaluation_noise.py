@@ -26,7 +26,24 @@ def run_scenario(
     seed = 0
     np.random.seed(seed)
     # print(coeffs)
-    scm = study_scm(seed=seed, noise_dists=dists)
+    if scenario == "all":
+        noise_dists = {
+            "X_0": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_1": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_2": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_3": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_4": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_5": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_6": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_7": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "X_8": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+            "Y": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+        }
+    elif scenario == "target":
+        noise_dists = {
+            "Y": {"dist": dists["dist"], "kwargs": dists["kwargs"]},
+        }
+    scm = study_scm(seed=seed, noise_dists=noise_dists)
     # scm.plot()
     # plt.show()
     (
@@ -131,7 +148,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--end", type=int, nargs="?", default=11, help="Step until which to compute",
+        "--end", type=int, nargs="?", default=10, help="Step until which to compute",
     )
 
     parser.add_argument(
@@ -147,7 +164,7 @@ if __name__ == "__main__":
     nr_work = args.workers
     dist = args.dist
     start_step = args.start - 1
-    end_step = args.end - 1
+    end_step = args.end
     scenario = args.scenario
 
     if modelclass == "single":

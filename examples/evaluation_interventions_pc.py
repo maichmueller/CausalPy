@@ -96,7 +96,8 @@ if __name__ == "__main__":
 
     sample_size = 1024
     scenarios = ["do", "meanshift", "scaling"]
-    reach = ["markov", "children", "parents"]
+    # reach = ["markov", "children", "parents", "parents-and-children"]
+    reach = ["children", "parents-and-children"]
     steps = 11
 
     results = {}
@@ -104,7 +105,7 @@ if __name__ == "__main__":
         for r in reach:
             for step, strength in enumerate([i for i in range(0, steps)]):
                 results[
-                    f"{modelclass}_{test_name}_scenario-{scenario}_reach-{r}_step-{step}"
+                    f"{modelclass}_{test_name}_scenario-{scenario}_reach-{r}_step-{step+1}"
                 ] = run_scenario(strength / 2, sample_size, r, scenario)
 
     for (title, res) in results.items():
