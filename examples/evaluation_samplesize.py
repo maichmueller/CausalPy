@@ -695,11 +695,35 @@ if __name__ == "__main__":
             f"Modelclass {modelclass} not recognized. Use one of 'single', 'multi', or 'density'"
         )
 
-    linearity_settings = [
-        {"nr_layers": 1, "nr_blocks": 10, "nr_hidden": 128, "strength": 0, "seed": 0},
-        {"nr_layers": 1, "nr_blocks": 10, "nr_hidden": 128, "strength": 0.5, "seed": 0},
-        {"nr_layers": 1, "nr_blocks": 10, "nr_hidden": 128, "strength": 1, "seed": 0},
-    ]
+    linearity_settings = {
+        key: params
+        for key, params in zip(
+            scenarios,
+            [
+                {
+                    "nr_layers": 1,
+                    "nr_blocks": 10,
+                    "nr_hidden": 128,
+                    "strength": 0,
+                    "seed": 0,
+                },
+                {
+                    "nr_layers": 1,
+                    "nr_blocks": 10,
+                    "nr_hidden": 128,
+                    "strength": 0.5,
+                    "seed": 0,
+                },
+                {
+                    "nr_layers": 1,
+                    "nr_blocks": 10,
+                    "nr_hidden": 128,
+                    "strength": 1,
+                    "seed": 0,
+                },
+            ],
+        )
+    }
 
     if scenario is not None:
         scenarios = [scenario]
@@ -709,7 +733,8 @@ if __name__ == "__main__":
     # 2. increasing nonlinearity in the children,
     # 3. increasing nonlinearity on the target,
     # 4. increasing nonlinearity on all
-    for scenario, params in zip(scenarios, linearity_settings):
+    for scenario in scenarios:
+        params = linearity_settings[scenario]
         lock = man.Lock()
         with ProcessPoolExecutor(max_workers=nr_work) as executor:
             futures = list(

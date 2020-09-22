@@ -94,6 +94,30 @@ def build_scm_basic(seed=0):
     return cn
 
 
+def build_scm_basicst(seed=0):
+    cn = SCM(
+        assignment_map={
+            "X_0": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("standard_normal", seed=seed),
+            ),
+            "X_1": (
+                [],
+                LinearAssignment(1),
+                NoiseGenerator("standard_normal", seed=seed + 1),
+            ),
+            "Y": (
+                ["X_0", "X_1"],
+                LinearAssignment(1, 0.0, 1, -1),
+                NoiseGenerator("standard_normal", seed=seed + 4),
+            ),
+        },
+        variable_tex_names={"X_0": "$X_0$", "X_1": "$X_1$"},
+    )
+    return cn
+
+
 def build_scm_polynomial(seed=0):
     cn = SCM(
         assignment_map={
@@ -169,7 +193,7 @@ def build_scm_exponential(seed=0):
 
 
 def build_scm_medium(seed=0):
-    scale = 0.5
+    scale = 1
     cn = SCM(
         assignment_map={
             "X_0": (

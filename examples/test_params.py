@@ -3,6 +3,8 @@ import itertools
 import os
 from functools import partial
 from typing import Union, Collection, Optional
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import multiprocessing
 
 # import visdom
 import torch
@@ -39,38 +41,123 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+
+def run_scenario(
+    AP,
+    batch_size,
+    runs,
+    params,
+    epochs,
+    sample_size,
+    scm_generator,
+    fname,
+    mcs=1,
+    seed=None,
+    target="Y",
+    device=None,
+    **kwargs,
+):
+    (
+        complete_data,
+        environments,
+        scm,
+        possible_parents,
+        target_parents,
+    ) = generate_data_from_scm(
+        scm=scm_generator(seed=seed),
+        countify=False,
+        intervention_reach="markov",
+        intervention_style="do",
+        target_var=target,
+        sample_size=sample_size,
+        seed=seed,
+    )
+    # target_parents_indices = np.array(
+    #     [possible_parents.index(par) for par in target_parents]
+    # )
+    # nr_envs = np.unique(environments).max() + 1
+    nr_runs = runs
+    use_visdom = 0
+
+    ap = AP(
+        epochs=epochs,
+        batch_size=batch_size,
+        visualize_with_visdom=bool(use_visdom),
+        device=device,
+        hyperparams=params,
+        masker_network_params=dict(monte_carlo_sample_size=mcs),
+    )
+    results_mask, results_loss, res_str = ap.infer(
+        complete_data,
+        environments,
+        target,
+        nr_runs=nr_runs,
+        normalize=True,
+        save_results=True,
+        results_filename=fname,
+        **kwargs,
+    )
+    print(res_str)
+
+
 if __name__ == "__main__":
 
-    # dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed = 0
-    dev = "cpu"
+    # dev = "cpu"
     np.random.seed(seed)
+    multiprocessing.set_start_method("spawn")
+    man = multiprocessing.Manager()
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", nargs="?", type=str, default="single")
-    parser.add_argument("--l0", nargs="?", type=float, default=0.6)
+    parser.add_argument("--l0", nargs="?", type=float, default=0.8)
     parser.add_argument("--inn", nargs="?", type=float, default=1)
     parser.add_argument("--inne", nargs="?", type=float, default=1)
-    parser.add_argument("--res", nargs="?", type=float, default=1)
-    parser.add_argument("--ind", nargs="?", type=float, default=1)
+    parser.add_argument("--res", nargs="?", type=float, default=2.5)
+    parser.add_argument("--ind", nargs="?", type=float, default=50)
+    parser.add_argument("--l2", nargs="?", type=float, default=0)
     parser.add_argument("--fname", nargs="?", type=str, default=None)
+    parser.add_argument("--samples", nargs="?", type=int, default=1024)
+    parser.add_argument("--batch_size", nargs="*", type=int, default=5000)
+    parser.add_argument("--runs", nargs="?", type=int, default=20)
+    parser.add_argument("--workers", nargs="?", type=int, default=1)
+    parser.add_argument("--epochs", nargs="?", type=int, default=1000)
+    parser.add_argument("--mcs", nargs="?", type=int, default=1)
 
     args = parser.parse_args()
 
     model = args.model
     l0 = args.l0
+    l2 = args.l2
     inn = args.inn
     inne = args.inne
     res = args.res
     ind = args.ind
     name = args.fname
+    samples = args.samples
+    batch_sizes = args.batch_size
+    runs = args.runs
+    workers = args.workers
+    epochs = args.epochs
+    mcs = args.mcs
     if name is None:
         name = f"{model}"
     else:
         name = f"{model}_{name}"
 
-    params = dict(l0=l0, inn=inn, inn_e=inne, residuals=res, independence=ind, l2=0)
+    params = dict(
+        l0=l0,
+        inn=inn,
+        inn_e=inne,
+        residuals=res,
+        independence=ind,
+        l2=l2,
+        samples=samples,
+        runs=runs,
+        mcs=mcs,
+    )
 
     for k, v in params.items():
         name += f"_{k}-{v}"
@@ -86,6 +173,8 @@ if __name__ == "__main__":
     ###################
     # Data Generation #
     ###################
+    pref = ""
+
     for i, (scm_generator, target_var, _) in enumerate(
         [
             # (build_scm_minimal, "Y", f"{pref}_min"),
@@ -93,10 +182,10 @@ if __name__ == "__main__":
             # (build_scm_basic, "Y", f"{pref}_basic"),
             # (build_scm_basic_discrete, "Y", f"{pref}_basic_disc"),
             # (build_scm_exponential, "Y", f"{pref}_exp"),
-            # (build_scm_medium, "Y", f"{pref}_medium"),
+            (build_scm_medium, "Y", f"{pref}_medium"),
             # (build_scm_large, "Y", f"{pref}_large"),
             # (build_scm_massive, "Y", f"{pref}_massive"),
-            (study_scm, "Y", f"_study"),
+            # (study_scm, "Y", f"_study"),
             # (build_scm_polynomial, "Y", f"{pref}_polynomial"),
             # (partial(simulate, nr_genes=100), "G_12", f"{pref}_sim100"),
             # (partial(simulate, nr_genes=20), "G_16", f"{pref}_sim20"),
@@ -104,54 +193,32 @@ if __name__ == "__main__":
             # (partial(simulate, nr_genes=30), "G_29", f"{pref}_sim30"),
         ]
     ):
-        (
-            complete_data,
-            environments,
-            scm,
-            possible_parents,
-            target_parents,
-        ) = generate_data_from_scm(
-            scm=scm_generator(seed=seed),
-            countify=False,
-            intervention_reach="markov",
-            intervention_style="do",
-            target_var=target_var,
-            sample_size=1024,
-            seed=seed,
-        )
-        target_parents_indices = np.array(
-            [possible_parents.index(par) for par in target_parents]
-        )
-        nr_envs = np.unique(environments).max() + 1
-
-        nr_runs = 50
-
-        epochs = 1500
-        use_visdom = 0
-
-        ap = AP(
-            epochs=epochs,
-            batch_size=10000,
-            visualize_with_visdom=bool(use_visdom),
-            device="cuda:0",
-            hyperparams=params,
-            masker_network_params=dict(monte_carlo_sample_size=1),
-        )
-        results_mask, results_loss, res_str = ap.infer(
-            complete_data,
-            environments,
-            target_var,
-            nr_runs=nr_runs,
-            normalize=True,
-            save_results=True,
-            results_filename=name,
-        )
-        last_losses = [
-            {key: results_loss[i][key][-1] for key in results_loss[0].keys()}
-            for i in range(len(results_loss))
-        ]
-        print(res_str)
-
+        lock = man.Lock()
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = list(
+                (
+                    executor.submit(
+                        run_scenario,
+                        AP,
+                        batch_size,
+                        runs,
+                        params,
+                        scm_generator=scm_generator,
+                        epochs=epochs,
+                        sample_size=samples,
+                        LOCK=lock,
+                        mcs=mcs,
+                        device=dev,
+                        seed=seed,
+                        target=target_var,
+                        fname=name + f"_batch_size-{batch_size}",
+                    )
+                    for batch_size in batch_sizes
+                )
+            )
+            for future in as_completed(futures):
+                if isinstance(future.exception(), Exception):
+                    raise future.exception()
         # evaluate(
         #     complete_data,
         #     ap,

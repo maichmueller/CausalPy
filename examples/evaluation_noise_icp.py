@@ -54,7 +54,7 @@ def run_scenario(dists, scenario, sample_size):
         target_parents,
     ) = generate_data_from_scm(scm, target_var="Y", sample_size=sample_size, seed=seed)
 
-    ap = LinPredictor(filter_variables=False)
+    ap = LinPredictor(filter_variables=False, residual_test="ks")
 
     parents, _ = ap.infer(data, "Y", environments)
     ps = pd.Series(0, index=sorted(possible_parents, key=lambda x: int(x[2:])))
