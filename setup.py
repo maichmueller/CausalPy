@@ -17,7 +17,8 @@ requirements = [
     "scipy>=1.3",
     "matplotlib>=3.0",
     "tqdm>=4.24.0",
-    "torch>=1.0"
+    "torch>=1.3",
+    "visdom"
 ]
 
 setup_requirements = ["pytest-runner"]
