@@ -1,15 +1,14 @@
 from functools import reduce
 from typing import Union, List
 
-from causalpy import *
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
+
+from scmodels import SCM
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
-from scipy import special
-import torch
 
 
 def chance_drop_per_level(level, max_chance):
@@ -111,7 +110,7 @@ def simulate(
 
         assignment_dict[gene] = [
             reduce(lambda x, y: x + y.tolist(), parents.values(), []),
-            LinearAssignment(noise_coeff, offset, *coeffs),
+            f"{offset} + {noise_coeff} * N + " + " + ".join(coeffs),
             NoiseGenerator(
                 "skewnorm",
                 scale=rs.random() * (nr_dep_levels - gene_level),
@@ -125,7 +124,7 @@ def simulate(
     }
     cn = SCM(assignment_dict, variable_tex_names=gene_tex_names)
     if seed is not None:
-        cn.reseed(seed + 10)
+        cn.seed(seed + 10)
     return cn
 
 

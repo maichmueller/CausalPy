@@ -29,14 +29,18 @@ from causalpy.neural_networks.utils import (
     moments,
     hsic,
 )
-from causalpy.utils import TempFolder
-from collections import namedtuple
 import csv
 
 import os
 import re
 
-go = None
+
+def load_plotly_module():
+    # load plotly submodule dynamically
+    global go
+    go = importlib.import_module("plotly").__dict__[
+        "graph_objs"
+    ]
 
 
 class AgnosticPredictorBase(ICPredictor, ABC):
@@ -58,7 +62,7 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         scheduler_type: Type[_LRScheduler] = torch.optim.lr_scheduler.StepLR,
         scheduler_params: Optional[Dict] = None,
         hyperparams: Optional[Dict[str, float]] = None,
-        visualize_with_visdom: bool = False,
+        visualize: bool = False,
         log_level: bool = True,
     ):
         super().__init__(log_level=log_level)
@@ -99,24 +103,20 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             else scheduler_params
         )
 
-        self.use_visdom = visualize_with_visdom
-        if self.use_visdom:
+        self.visualize = visualize
+        if self.visualize:
             try:
                 import visdom
-
-                # load plotly submodule dynamically
-                globals()["go"] = importlib.import_module("plotly").__dict__[
-                    "graph_objs"
-                ]
-
+                load_plotly_module()
                 self.viz = visdom.Visdom()
+
             except ImportError as e:
                 warnings.warn(
                     f"Packages Visdom and Plotly required for training visualization, but (at least one) was not found! "
                     f"Continuing without visualization.\n"
                     f"Exact error message was:\n{print(e)}"
                 )
-                self.use_visdom = True
+                self.visualize = False
 
     def _set_scheduler(self, force: bool = False):
         if self.scheduler is None or force:
@@ -135,7 +135,19 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         return self.scheduler
 
     def _set_optimizer(self, force: bool = False):
-        raise NotImplementedError
+        if self.optimizer is None or force:
+            self.optimizer = self.optimizer_type(
+                [
+                    {
+                        "params": self.masker_net.parameters(),
+                        "lr": self.optimizer_params.pop("mask_lr", 1e-2),
+                    },
+                    {"params": self.network_list[0].parameters()},
+                ],
+                lr=self.optimizer_params.pop("lr", 1e-3),
+                **self.optimizer_params,
+            )
+        return self.optimizer
 
     def parameters(self):
         """
@@ -178,17 +190,14 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             # a network per environment
             self.network_list = [None] * len(self.env_start_end)
 
-        cast_to_modulelist = False
         for i, network in enumerate(self.network_list):
-            cast_to_modulelist = True
             # self.network_list[i] = CINN(dim_condition=self.p, **self.network_params)
             if network is None:
-                cast_to_modulelist = True
                 self.network_list[i] = CINN(dim_condition=self.p, **self.network_params)
             else:
                 network.reset_parameters()
-        if cast_to_modulelist:
-            self.network_list = torch.nn.ModuleList(self.network_list)
+
+        self.network_list = torch.nn.ModuleList(self.network_list)
         self.network_list.to(self.device).train()
 
     def infer(
@@ -205,8 +214,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
         results_filename: str = "inference_result",
         **kwargs,
     ):
-
-        # with TempFolder("./temp_model_folder", **kwargs) as temp_folder:
 
         results_masks = []
         results_losses = []
@@ -266,15 +273,6 @@ class AgnosticPredictorBase(ICPredictor, ABC):
 
             results_masks.append(final_mask)
             results_losses.append(losses)
-            # for i, network in enumerate(self.network_list):
-            #     torch.save(
-            #         network.state_dict(),
-            #         os.path.join(temp_folder, f"run_{run}_network_{i}.pt"),
-            #     )
-            # torch.save(
-            #     self.masker_net.state_dict(),
-            #     os.path.join(temp_folder, f"run_{run}_masker.pt"),
-            # )
 
         best_run, lowest_loss, res_str, res_df = results_statistics(
             target_variable,
@@ -282,30 +280,30 @@ class AgnosticPredictorBase(ICPredictor, ABC):
             results_losses,
             results_masks,
         )
-        # for i, network in enumerate(self.network_list):
-        #     network.load_state_dict(
-        #         torch.load(
-        #             os.path.join(temp_folder, f"run_{best_run}_network_{i}.pt")
-        #         )
-        #     )
-        # self.masker_net.load_state_dict(
-        #     torch.load(os.path.join(temp_folder, f"run_{best_run}_masker.pt"))
-        # )
+        for i, network in enumerate(self.network_list):
+            network.load_state_dict(
+                torch.load(
+                    os.path.join(results_folder, f"run_{best_run}_network_{i}.pt")
+                )
+            )
+        self.masker_net.load_state_dict(
+            torch.load(os.path.join(results_folder, f"run_{best_run}_masker.pt"))
+        )
         if save_results:
             res_df.to_csv(
                 os.path.join(results_folder, f"{results_filename}.csv"), index=False
             )
-            # for i, network in enumerate(self.network_list):
-            #     torch.save(
-            #         network.state_dict(),
-            #         os.path.join(
-            #             results_folder, f"{results_filename}_network_{i}.pt"
-            #         ),
-            #     )
-            # torch.save(
-            #     self.masker_net.state_dict(),
-            #     os.path.join(results_folder, f"{results_filename}_masker.pt"),
-            # )
+            for i, network in enumerate(self.network_list):
+                torch.save(
+                    network.state_dict(),
+                    os.path.join(
+                        results_folder, f"{results_filename}_network_{i}.pt"
+                    ),
+                )
+            torch.save(
+                self.masker_net.state_dict(),
+                os.path.join(results_folder, f"{results_filename}_masker.pt"),
+            )
         self.batch_size = batch_size
         return results_masks, results_losses, res_str
 
@@ -617,21 +615,6 @@ class AgnosticPredictor(AgnosticPredictorBase):
                 nr_blocks=2, dim=1, nr_layers=32, device=self.device
             )
 
-    def _set_optimizer(self, force: bool = False):
-        if self.optimizer is None or force:
-            self.optimizer = self.optimizer_type(
-                [
-                    {
-                        "params": self.masker_net.parameters(),
-                        "lr": self.optimizer_params.pop("mask_lr", 1e-2),
-                    },
-                    {"params": self.network_list[0].parameters()},
-                ],
-                lr=self.optimizer_params.pop("lr", 1e-3),
-                **self.optimizer_params,
-            )
-        return self.optimizer
-
     @AgnosticPredictorBase.predict_input_validator
     def predict(
         self,
@@ -813,7 +796,7 @@ class AgnosticPredictor(AgnosticPredictorBase):
             # Visualizations #
             ##################
 
-            if self.use_visdom:
+            if self.visualize:
                 self._plot_mask(
                     self.get_mask(final=True).detach().cpu().numpy(),
                     self.get_parent_candidates(),
@@ -1160,7 +1143,7 @@ class MultiAgnosticPredictor(AgnosticPredictorBase):
             # Visualizations #
             ##################
 
-            if self.use_visdom:
+            if self.visualize:
                 self._plot_mask(
                     self.get_mask(final=True).detach().cpu().numpy(),
                     self.get_parent_candidates(),
@@ -1323,14 +1306,7 @@ def results_statistics(
     for i, (result_mask, result_loss) in enumerate(zip(results_masks, results_losses)):
         for var, mask in result_mask.items():
             full_results[var].append(mask)
-            # if (
-            #     result_loss["residuals"][-1] + result_loss["inn"][-1]
-            #     < lowest_invariance_loss
-            # ):
-            #     lowest_invariance_loss = (
-            #         result_loss["residuals"][-1] + result_loss["inn"][-1]
-            #     )
-            #     best_invariance_result = i
+
     statistics = dict()
     for var, values in full_results.items():
         stats_dict = dict()
@@ -1348,6 +1324,7 @@ def results_statistics(
             else:
                 stats_dict[func_str] = func(args).round(3)
         statistics[var] = stats_dict
+
     res_str = "\nLearning outcomes:\n"
     res_str += f"Target Variable was: {target_variable}\n"
     res_str += f"Potential Causal Parents: {', '.join(candidates)}\n"
@@ -1356,13 +1333,6 @@ def results_statistics(
         for func_str, value in stat_dict.items():
             res_str += f"\t{func_str}: {value}\n"
         res_str += f"\tresults: {full_results[var]}\n"
-    # res_str += "Best individual run by residuals loss:\n"
-    # res_str += f"\tRun: {best_invariance_result}\n"
-    # res_str += f"\tLoss: {lowest_invariance_loss}\n"
-    # val_str = ", ".join(
-    #     [f"{var}: {val}" for var, val in results_masks[best_invariance_result].items()]
-    # )
-    # res_str += f"\tMask: {val_str}\n\n"
 
     results_df = pd.DataFrame.from_dict(
         {var: values for (var, values) in full_results.items()}, orient="columns"
@@ -1402,21 +1372,6 @@ class DensityBasedPredictor(AgnosticPredictorBase):
             self.network_params = dict(
                 nr_blocks=2, dim=1, nr_layers=32, device=self.device
             )
-
-    def _set_optimizer(self, force: bool = False):
-        if self.optimizer is None or force:
-            self.optimizer = self.optimizer_type(
-                [
-                    {
-                        "params": self.masker_net.parameters(),
-                        "lr": self.optimizer_params.pop("mask_lr", 1e-2),
-                    },
-                    {"params": self.network_list[0].parameters()},
-                ],
-                lr=self.optimizer_params.pop("lr", 1e-3),
-                **self.optimizer_params,
-            )
-        return self.optimizer
 
     def _reset_networks(self):
         # this handling is for the multi-agnostic case. We will initialize as many network copies as there are
@@ -1628,7 +1583,7 @@ class DensityBasedPredictor(AgnosticPredictorBase):
             # Visualizations #
             ##################
 
-            if self.use_visdom:
+            if self.visualize:
                 self._plot_mask(
                     self.get_mask(final=True).detach().cpu().numpy(),
                     self.get_parent_candidates(),

@@ -190,27 +190,41 @@ def generate_data_from_scm(
 
         if intervention_style == "do":
 
-            scm.do_intervention([var], [interv_value])
+            scm.do_intervention([(var, interv_value)])
             print(
                 f"Environment {environments[-1] + 1}: Do-Intervention on variable {var} for value {interv_value}."
             )
 
         elif intervention_style == "meanshift":
-            old_assignment = scm[var][1][scm.function_key]
-            new_assignment = LinkerAssignment(
-                lambda x: x + interv_value, old_assignment
-            )
-            scm.intervention({var: (None, new_assignment, None)})
+            var_properties = scm[var]
+            old_assignment = var_properties[1][scm.function_key]
+            noise = var_properties[1][scm.noise_key]
+            if old_assignment.as_str is None:
+                new_assignment = (
+                    lambda *args, **kwargs: old_assignment(*args, **kwargs)
+                    + interv_value
+                )
+                scm.intervention({var: (var_properties[0], new_assignment, noise)})
+            else:
+                new_assignment = str(old_assignment) + f" + ({interv_value})"
+                scm.intervention({var: (new_assignment, noise)})
             print(
                 f"Environment {environments[-1] + 1}: Shift-Intervention on variable {var} for value {interv_value}."
             )
 
         elif intervention_style == "scaling":
-            old_assignment = scm[var][1][scm.function_key]
-            new_assignment = LinkerAssignment(
-                lambda x: x * interv_value, old_assignment
-            )
-            scm.intervention({var: (None, new_assignment, None)})
+            var_properties = scm[var]
+            old_assignment = var_properties[1][scm.function_key]
+            noise = var_properties[1][scm.noise_key]
+            if old_assignment.as_str is None:
+                new_assignment = (
+                    lambda *args, **kwargs: old_assignment(*args, **kwargs)
+                    + interv_value
+                )
+                scm.intervention({var: (var_properties[0], new_assignment, noise)})
+            else:
+                new_assignment = str(old_assignment) + f" * ({interv_value})"
+                scm.intervention({var: (new_assignment, noise)})
             print(
                 f"Environment {environments[-1] + 1}: Scale-Intervention on variable {var} for value {interv_value}."
             )
@@ -239,4 +253,4 @@ def generate_data_from_scm(
     print("Actual Parents:", ", ".join(target_parents))
     print("Candidate Parents:", ", ".join(possible_parents))
 
-    return (data, environments, scm, possible_parents, target_parents)
+    return data, environments, scm, possible_parents, target_parents

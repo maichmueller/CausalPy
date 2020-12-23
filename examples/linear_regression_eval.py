@@ -209,31 +209,11 @@ def scatter_plot_estimates(
     ax.scatter(
         data[x_vars[0]], data[x_vars[1]], y_reg, c=color_normal, s=1.5, cmap="Greens",
     )
-    # cmap = plt.get_cmap("Greens")
-    # cs = np.abs(residuals - y_reg)
-    # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
-    # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    # cs = sm.to_rgba(cs)
-    # ax.plot_surface(
-    #     complete_data[x_vars[0]],
-    #     complete_data[x_vars[1]],
-    #     y_reg,
-    #     c="green",
-    # )
+
     ax.scatter(
         data[x_vars[0]], data[x_vars[1]], y_reg_hat, c=color_approx, s=1.5, cmap="Reds",
     )
-    # cmap = plt.get_cmap("Reds")
-    # cs = np.abs(residuals_hat - y_reg_hat)
-    # norm = matplotlib.colors.Normalize(vmin=cs.min(), vmax=cs.max())
-    # sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    # cs = sm.to_rgba(cs)
-    # ax.plot_surface(
-    #     complete_data[x_vars[0]],
-    #     complete_data[x_vars[1]],
-    #     y_reg_hat,
-    #     c="red",
-    # )
+
     ax.set_xlabel(x_vars[0])
     ax.set_ylabel(x_vars[1])
     ax.set_zlabel("Y")

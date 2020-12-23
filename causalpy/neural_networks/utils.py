@@ -9,7 +9,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 
 class prohibit_model_grad(object):
     """
-    Context manager cutting of the passed model from the graph generation of the contained pytorch computations.
+    Context manager cutting off the passed model from the graph generation for gradient computation.
     """
 
     def __init__(self, model: torch.nn.Module):
@@ -99,29 +99,6 @@ def rbf(X: Tensor, Y: Optional[Tensor] = None, sigma: Optional[float] = None):
 
     gaussian_rbf = torch.exp(pairwise_norm * (-0.5 / (sigma ** 2)))
     return gaussian_rbf
-
-
-# def hsic(X, Y, batch_size):
-#     """ Hilbert Schmidt independence criterion -- kernel based measure for how dependent X and Y are"""
-#
-#     def centering(
-#         K: Tensor,
-#         device: Optional[torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
-#     ):
-#         n = K.shape[0]
-#         unit = torch.ones(n, n, device=device)
-#         I = torch.eye(n, device=device)
-#         Q = I - unit / n
-#         return torch.mm(torch.mm(Q, K), Q)
-#
-#     out = (
-#         torch.sum(
-#             centering(rbf(X, X), device=X.device)
-#             * centering(rbf(Y, Y), device=Y.device)
-#         )
-#         / batch_size
-#     )
-#     return out
 
 
 def kernel_matrix(x: torch.Tensor, sigma):
@@ -313,27 +290,3 @@ def get_jacobian(
             1,
         )
     return jacobian
-
-
-if __name__ == "__main__":
-
-    from causalpy.neural_networks import FCNet
-    from torch.utils.data import DataLoader, TensorDataset
-
-    from tqdm import tqdm
-
-    # x = torch.stack(
-    #     [
-    #         torch.linspace(-100, 100, 1000),
-    #         torch.linspace(-100, 100, 1000),
-    #     ],
-    #     dim=1
-    # )
-    def y(x):
-        return torch.stack(
-            [x[:, 0] ** 2 + x[:, 1], x[:, 1] - x[:, 0], x[:, 1]], dim=1
-        ).cuda()
-
-    print(
-        get_jacobian(y, torch.tensor([[1, 1]], dtype=torch.float), dim_in=2, dim_out=3)
-    )

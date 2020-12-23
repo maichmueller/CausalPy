@@ -1,5 +1,3 @@
-from copy import copy
-from functools import partial
 from typing import (
     Iterator,
     Union,
@@ -14,12 +12,9 @@ from typing import (
 )
 
 import torch
-from functools import reduce
-from torch.nn import Hardtanh, init
-from torch.distributions import RelaxedBernoulli, Distribution
+from torch.nn import Hardtanh
 import numpy as np
 from numpy.random import Generator
-from .basemodel import NeuralBaseNet
 
 
 class BinaryConcreteDist:

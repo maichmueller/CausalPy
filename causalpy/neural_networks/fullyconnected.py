@@ -1,15 +1,12 @@
-from typing import Iterable, Union, Optional, List
-
 import torch
-import numpy as np
-from .basemodel import NeuralBaseNet
 
 
-class FCNet(NeuralBaseNet):
+class FCNet(torch.nn.Module):
     """ Standard feed forward neural network with fully connected layers and ReLUs"""
 
     def __init__(self, *layer_nodes):
-        super().__init__(layer_nodes[0], layer_nodes[-1])
+        self.dim_in = layer_nodes[0]
+        self.dim_out = layer_nodes[-1]
         self.net = torch.nn.Sequential()
 
         # Skip Layer -- just a linear mapping
@@ -25,6 +22,24 @@ class FCNet(NeuralBaseNet):
             "Linear Layer {}".format(i),
             torch.nn.Linear(layer_nodes[-2], layer_nodes[-1]),
         )
+        super().__init__()
 
     def forward(self, x):
         return self.net(x)
+
+    @torch.no_grad()
+    def evaluate(self, data):
+        """
+        Function to evaluate the input in the neural net without accumulating gradients.
+
+        Parameters
+        ----------
+        data: Tensor,
+            the data to evaluate for the network
+
+        Returns
+        -------
+        Tensor,
+            the evaluated data.
+        """
+        return self(data)

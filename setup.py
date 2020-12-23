@@ -10,14 +10,15 @@ with open("HISTORY.md") as history_file:
     history = history_file.read()
 
 requirements = [
+    "scmodels",
     "numpy>=1.17.0",
     "networkx>=2.0",
-    "pandas>=0.2",
+    "pandas>=1.0",
     "scikit-learn>=0.2",
     "scipy>=1.3",
     "matplotlib>=3.0",
     "tqdm>=4.24.0",
-    "torch>=1.3",
+    "torch>=1.5",
     "visdom"
 ]
 
@@ -41,7 +42,7 @@ setup(
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: Microsoft :: Windows",
         "Operating System :: POSIX :: Linux",
-        "Topic :: Scientific/Engineering :: Informatics",
+        "Topic :: Scientific/Engineering :: Mathematics",
     ],
     description="Causality and Inference Methods",
     install_requires=requirements,
@@ -50,7 +51,7 @@ setup(
     include_package_data=True,
     keywords="causalpy causality invariant causal prediction bayesian graphs scm sem",
     name="CausalPy",
-    packages=find_packages(),
+    packages=find_packages(exclude=("test",)),
     setup_requires=setup_requirements,
     test_suite="test",
     tests_require=test_requirements,

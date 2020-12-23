@@ -3,7 +3,6 @@ import multiprocessing
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Optional, List, Collection
 
-from causalpy import Assignment, LinearAssignment, NoiseGenerator
 from causalpy.causal_prediction.interventional import (
     AgnosticPredictor,
     MultiAgnosticPredictor,
@@ -52,64 +51,41 @@ def run_scenario(
     # standard_sample = scm.sample(sample_size)
 
     if scenario == 1:
-        vars = {"X_9": ([], LinearAssignment(1, 0), NoiseGenerator("standard_normal"))}
-        scm.add_variables(vars)
+        vars = ["X_9 = N, N ~ Normal(0, 1)"]
+        scm.insert(vars)
         scm.intervention(
-            {
-                "X_2": (
-                    ["X_0", "X_9"],
-                    LinearAssignment(1, 0, 1, 1),
-                    NoiseGenerator("standard_normal"),
-                ),
-                "Y": (
-                    ["X_1", "X_2", "X_3", "X_9"],
-                    LinearAssignment(1, 0, 1, 1, 1, 1),
-                    NoiseGenerator("standard_normal"),
-                ),
-            }
+            [
+                "X_2 = N + X_0 + X_9, N ~ Normal(0, 1)",
+                "Y = N + "
+                + " + ".join(["X_1", "X_2", "X_3", "X_9"])
+                + ", N ~ Normal(0, 1)",
+            ]
         )
         scm.clear_intervention_backup()
         # scm.plot(alpha=1)
         # plt.show()
     elif scenario == 2:
-        vars = {"X_9": ([], LinearAssignment(1, 0), NoiseGenerator("standard_normal"))}
+        vars = {"X_9": ["N, N ~ Normal(0, 1)"]}
 
         scm.add_variables(vars)
         scm.intervention(
-            {
-                "X_2": (
-                    ["X_0", "X_9"],
-                    LinearAssignment(1, 0, 1, 1),
-                    NoiseGenerator("standard_normal"),
-                ),
-                "X_1": (
-                    ["X_0", "X_9"],
-                    LinearAssignment(1, 0, 1, 1),
-                    NoiseGenerator("standard_normal"),
-                ),
-            }
+            [
+                "X_2 = N + X_0 + X_9, N ~ Normal(0, 1)",
+                "X_1 = N + X_0 + X_9, N ~ Normal(0, 1)",
+            ]
         )
         scm.clear_intervention_backup()
         # scm.plot(alpha=1)
         # plt.show()
     elif scenario == 3:
-        vars = {
-            "X_9": ([], LinearAssignment(1, 0), NoiseGenerator("standard_normal")),
-            "X_10": (
-                ["X_9"],
-                LinearAssignment(1, 0, 1),
-                NoiseGenerator("standard_normal"),
-            ),
-        }
-        scm.add_variables(vars)
+        vars = ["X_9 = N, N ~ Normal(0, 1)", "X_10 = N + X_9, N ~ Normal(0, 1)"]
+        scm.insert(vars)
         scm.intervention(
-            {
-                "Y": (
-                    ["X_1", "X_2", "X_3", "X_9"],
-                    LinearAssignment(1, 0, 1, 1, 1, 1),
-                    NoiseGenerator("standard_normal"),
-                ),
-            }
+            [
+                "Y = N + "
+                + " + ".join(["X_1", "X_2", "X_3", "X_9"])
+                + ", N ~ Normal(0, 1)"
+            ]
         )
         scm.clear_intervention_backup()
         # scm.plot(alpha=1)
