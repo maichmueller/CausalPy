@@ -74,9 +74,7 @@ class GLMPredictor(LinPredictor):
         deviances_env = dict()
         for env, env_indices in envs.items():
             env_data = obs_S[env_indices]
-            env_fit = GLM(
-                target[env_indices], env_data, family=self.glm_family
-            ).fit()
+            env_fit = GLM(target[env_indices], env_data, family=self.glm_family).fit()
             deviances_env[env] = env_fit.deviance
             mu_pred[env_indices] = env_fit.predict(env_data)
 

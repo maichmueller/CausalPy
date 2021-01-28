@@ -1,6 +1,4 @@
-from .basemodel import NeuralBaseNet
-from .fullyconnected import FCNet, Linear3D, AgnosticModel, MatrixSampler
-from .regularization import L0Mask, L0InputGate
-from .singleDimINN import cINN
+from .fullyconnected import FCNet
+from .regularization import L0Mask, L0InputGate, HardConcreteDist, BinaryConcreteDist
+from .CINN import CINN
 from .utils import *
-from .CVAE import CVAE

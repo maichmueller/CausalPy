@@ -1,5 +1,3 @@
-from copy import copy
-from functools import partial
 from typing import (
     Iterator,
     Union,
@@ -10,14 +8,13 @@ from typing import (
     Any,
     Iterable,
     Collection,
+    Sequence,
 )
 
 import torch
 from torch.nn import Hardtanh
-from torch.distributions import RelaxedBernoulli, Distribution
 import numpy as np
 from numpy.random import Generator
-from .basemodel import NeuralBaseNet
 
 
 class BinaryConcreteDist:
@@ -26,6 +23,7 @@ class BinaryConcreteDist:
         log_alpha: Union[float, Iterable] = 0.0,
         beta: Union[float, Iterable] = 1.0,
         seed: Optional[int] = None,
+        device: Optional[Union[torch.device, str]] = None,
     ):
         if isinstance(log_alpha, torch.Tensor):
             pass  # preserve potential torch.nn.Parameter without copying them into standard Tensor
@@ -41,7 +39,7 @@ class BinaryConcreteDist:
         else:
             raise ValueError("Parameter 'beta' needs to be either float or iterable.")
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
 
         assert torch.all(
             torch.as_tensor(beta, device=self.device) > 0
@@ -63,20 +61,14 @@ class BinaryConcreteDist:
     def pdf(self, x: Union[np.ndarray, torch.Tensor, float]):
         if isinstance(x, np.ndarray):
             x = torch.as_tensor(x, dtype=torch.float, device=self.device)
-        beta_min_1 = -self.beta - 1
-        numerator = torch.pow(x, beta_min_1) * torch.pow(-x + 1, beta_min_1)
-        denominator = np.power(x, -self.beta) + np.power(1 - x, -self.beta)
-        return (
-            (self.beta / torch.exp(self.log_alpha))
-            * numerator
-            / torch.pow(denominator, 2)
-        )
+        alpha = torch.exp(self.log_alpha)
+        numerator = self.beta * alpha * torch.pow(x * (-x + 1), -self.beta - 1)
+        denominator = alpha * torch.pow(x, -self.beta) + torch.pow(1 - x, -self.beta)
+        return numerator / torch.pow(denominator, 2)
 
     def cdf(self, x: Union[torch.Tensor, np.ndarray, float]):
         if not isinstance(x, torch.Tensor):
             x = torch.as_tensor(x, dtype=torch.float, device=self.device)
-        # TODO check whether this needs numeric adaptation or you simply didnt fully understand the paper here for the
-        # TODO complexity loss!
         return torch.sigmoid(
             (torch.log(x) - torch.log(-x + 1)) * self.beta - self.log_alpha
         )
@@ -111,19 +103,24 @@ class HardConcreteDist:
         # the function h(x) = min(1, max(0, x)) is implemented in torch as Hardtanh(0, 1)(x)
         self.hard_tanh = Hardtanh(0, 1)
 
+    def _unstretch(self, s):
+        return (s - self.gamma) / (self.zeta - self.gamma)
+
+    def _stretch(self, s):
+        return s * (self.zeta - self.gamma) + self.gamma
+
     def rsample(self, size: Tuple = (1,)):
         s = self.bc_dist.rsample(size=size)
-        s_tilde = s * (self.zeta - self.gamma) + self.gamma
+        s_tilde = self._stretch(s)
         return self.hard_tanh(s_tilde)
 
     def pdf(self, x: Union[np.ndarray, torch.Tensor, float]):
         if 0 < x < 1:
-            edge_probs = self.bc_dist.quantile(np.ndarray([0.0, 1.0]))
-            return (edge_probs[1] - edge_probs[0]) * self.bc_dist.pdf(x)
+            return self.bc_dist.pdf(self._unstretch(x)) / abs(self.zeta - self.gamma)
         elif x == 1:
-            return -self.bc_dist.quantile(1.0) + 1
+            return -self.bc_dist.cdf(self._unstretch(1)) + 1
         elif x == 0:
-            return self.bc_dist.quantile(0.0)
+            return self.bc_dist.cdf(self._unstretch(0))
         else:
             return 0
 
@@ -147,6 +144,7 @@ class L0Mask(torch.nn.Module):
         module: torch.nn.Module,
         gamma: float = -0.1,
         zeta: float = 1.1,
+        sample_size: int = 1,
         initial_sparsity_rate: float = 0.5,
         device: Optional[torch.device] = None,
         seed: Optional[int] = None,
@@ -156,10 +154,11 @@ class L0Mask(torch.nn.Module):
             self.initial_sparsity_rate = initial_sparsity_rate
         else:
             self.initial_sparsity_rate = 0.5
-        if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = device
+
+        self.device = device
+
+        # the number of masks to draw
+        self.sample_size = sample_size
 
         # the log alpha locations are learnable parameters
         self.log_alphas = torch.nn.ParameterList()
@@ -173,7 +172,7 @@ class L0Mask(torch.nn.Module):
             2.0 / 3.0 * torch.ones(1, dtype=torch.float), requires_grad=True
         )
         self.nr_param_tensors = len(self.log_alphas)
-        self.backups = []
+        self._backups = tuple()
         # register the hooks for the wrapped module.
         self.masked_module = module
         self.handle_forward = module.register_forward_pre_hook(
@@ -203,6 +202,19 @@ class L0Mask(torch.nn.Module):
 
         self.random_state = np.random.default_rng(seed)
 
+    @property
+    def backup(self):
+        return self._backups
+
+    @backup.setter
+    def backup(self, backup):
+        if isinstance(backup, Sequence) and len(backup) == self.nr_param_tensors:
+            self._backups = tuple(backup)
+
+    def reset_backup(self):
+        # reset the backup
+        self._backups = tuple()
+
     def initialize_weights(self):
         for log_alpha in self.log_alphas:
             log_alpha.data.normal_(
@@ -211,9 +223,20 @@ class L0Mask(torch.nn.Module):
                 std=1e-2,
             )
 
-    def forward(self, batch_size: int):
-        z = self.sample_mask(batch_size, deterministic=self.training)
-        return z
+    # def forward(self, batch_size: int):
+    #     z = self.sample_mask(batch_size, deterministic=self.training)
+    #     return z
+
+    def forward(self, *input, batch_size=None, **kwargs):
+        # if batch_size is None:
+        #     # if no batch size info is provided we will assume input[0] is the
+        #     # input tensor to be forwarded and assume its first dim is the batch_size!
+        #     batch_size = input[0].size(0)
+        # z = self.sample_mask(batch_size)
+        # # mask the masked_modules's parameters before evaluation
+        # for mask, params in zip(z, self.masked_module.parameters()):
+        #     params.data = params.data * mask
+        return self.masked_module(*input, **kwargs)
 
     def remove_module_hooks(self):
         self.handle_backward.remove()
@@ -311,32 +334,40 @@ class L0Mask(torch.nn.Module):
     def forward_hook_factory(self):
         def hook(module: torch.nn.Module, _):
             masks = self.sample_mask()
-            if len(self.backups) != self.nr_param_tensors:
-                for layer_idx, weights in enumerate(module.parameters()):
-                    self.backups.append(
-                        weights.data.clone()
+            if len(self._backups) != self.nr_param_tensors:
+                backup = []
+                for layer_idx, params in enumerate(module.parameters()):
+                    backup.append(
+                        params.data.clone()
                     )  # store a backup for reassigning after evaluation.
-                    weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
+                    print(params.data)
+                    params.data = params.data * masks[layer_idx].squeeze(0)
+                self.backup = backup
             else:
-                for layer_idx, weights in enumerate(module.parameters()):
-                    weights.data = self.backups[layer_idx] * masks[layer_idx].squeeze(0)
+                for layer_idx, params in enumerate(module.parameters()):
+                    params.data = self._backups[layer_idx] * masks[layer_idx].squeeze(0)
 
         return hook
 
     def backward_hook_factory(self):
         def hook(module: torch.nn.Module, grad_input, grad_output):
-            for backup, weights in zip(self.backups, module.parameters()):
+            print("Grad input", grad_input)
+            print("Grad output", grad_output)
+            for backup, weights in zip(self._backups, module.parameters()):
+                # print(backup.data)
                 weights.data = backup.data
 
-        # reset the backup
-        self.backups = []
+            self.reset_backup()
+
+        self.reset_backup()
         return hook
 
     def estimate_loss(
         self,
-        data_in: torch.Tensor,
         target: torch.Tensor,
         loss_func: Callable,
+        outputs: Optional[List[torch.Tensor]] = None,
+        data_in: Optional[torch.Tensor] = None,
         mc_sample_size: int = 1,
         output_transformation: Optional[Callable] = lambda tensor: tensor,
     ):
@@ -359,11 +390,21 @@ class L0Mask(torch.nn.Module):
         output_transformation: (optional) Callable,
             a function to transform the model's output to an appropriate value (e.g. taking the argmax of the output).
         """
-        loss = 0
-        for mcs_run in range(mc_sample_size):
-            loss += loss_func(
-                output_transformation(self.masked_module(data_in)), target
+        if data_in is not None:
+            out_seq = (data_in for _ in range(mc_sample_size))
+        elif outputs is not None:
+            out_seq = outputs
+        else:
+            raise ValueError(
+                "Either input data tensor to evaluate or list of pre-computed outputs required."
             )
+        loss = torch.cat(
+            [
+                loss_func(output_transformation(self(out)), target).view(1)
+                for out in out_seq
+            ]
+        ).sum()
+
         return loss / mc_sample_size
 
     def l0_regularization(self):
@@ -428,11 +469,12 @@ class L0InputGate(torch.nn.Module):
             if device is None
             else device
         )
-
+        self.initial_gate_value = initial_sparsity_rate
         self.log_alpha = torch.nn.Parameter(
-            initial_sparsity_rate + 1e-2 * torch.randn(1, dim_input), requires_grad=True
+            torch.empty(1, dim_input), requires_grad=True
         )
-        self.beta = torch.nn.Parameter(0.5 * torch.ones(1), requires_grad=True)
+        self.beta = torch.nn.Parameter(torch.empty(1), requires_grad=True)
+        self.reset_parameters()
         self.gamma = gamma
         self.zeta = zeta
         self.mcs_size = monte_carlo_sample_size
@@ -441,12 +483,24 @@ class L0InputGate(torch.nn.Module):
         self.hardTanh = torch.nn.Hardtanh(0, 1)
         self.sigmoid = torch.nn.Sigmoid()
 
+    def reset_parameters(self):
+        with torch.no_grad():
+            self.log_alpha.normal_(mean=self.initial_gate_value, std=1e-2)
+            self.beta.fill_(0.66)
+
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None):
         batch_size = x.shape[0]
 
         if mask is None:
             self.gates = self.create_gates()
         else:
+            try:
+                mask = mask.view(-1, 1, self.n_dim)
+            except RuntimeError as e:
+                raise RuntimeError(
+                    f"{e}. Provided mask must be broad-castable to shape "
+                    f"([any > 0], 1, n_dim) with n_dim = {self.n_dim}"
+                )
             self.gates = mask
 
         x = x.repeat(self.mcs_size, 1).view(self.mcs_size, batch_size, self.n_dim)
@@ -481,7 +535,7 @@ class L0InputGate(torch.nn.Module):
 
     def create_gates(self, deterministic=False):
         """Creates input gates using parameters log_alpha, beta"""
-        if deterministic:
+        if deterministic or not self.training:
             return self.final_layer()
         dim = self.log_alpha.shape[0]
         m = torch.distributions.uniform.Uniform(

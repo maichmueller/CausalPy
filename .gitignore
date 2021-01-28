@@ -11,3 +11,15 @@
 plots/
 
 .DS_Store
+
+examples/.ipynb_checkpoints/
+
+examples/Untitled.ipynb
+
+*.png
+
+examples/results/
+
+*.log
+
+*.pt

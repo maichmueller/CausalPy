@@ -1,8 +1,11 @@
-import itertools
-from typing import Optional, Callable, Type, Tuple, List, Union
+from typing import Collection
+
+from causalpy import Assignment
+
+from typing import Optional, Union
 
 import torch
-from .utils import get_jacobian
+from causalpy.neural_networks.utils import get_jacobian
 from abc import ABC, abstractmethod
 import numpy as np
 
@@ -14,6 +17,7 @@ class CouplingBase(torch.nn.Module, ABC):
         dim_condition: int,
         nr_layers: int = 16,
         conditional_net: Optional[torch.nn.Module] = None,
+        seed: int = None,
         device: torch.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         ),
@@ -26,15 +30,17 @@ class CouplingBase(torch.nn.Module, ABC):
         self.nr_layers = nr_layers
         self.nr_inverse_iters = 10
 
+        # dummy buffers which become filled with parameters for the non conditional case.
+        # otherwise these will hold the values given by the conditional net.
         self.mat_like_params = [
-            torch.randn(1, dim, nr_layers, requires_grad=False),
-            torch.randn(1, dim, nr_layers, requires_grad=False),
-            torch.randn(1, dim, nr_layers, requires_grad=False),
+            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
+            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
+            torch.empty(1, self.dim, self.nr_layers, device=device).to(device),
         ]
         self.vec_like_params = [
-            torch.randn(1, dim, requires_grad=False),  # bias2
-            torch.ones(1, dim, requires_grad=False) * -1,  # eps
-            torch.zeros(1, dim, requires_grad=False),  # alpha
+            torch.empty(1, self.dim, device=device).to(device),  # bias2
+            torch.empty(1, self.dim, device=device).to(device),  # eps
+            torch.empty(1, self.dim, device=device).to(device),  # alpha
         ]
 
         self.is_conditional = dim_condition > 0
@@ -62,18 +68,44 @@ class CouplingBase(torch.nn.Module, ABC):
         else:
             # only in the case of no conditional neural network are these trainable parameters.
             # Otherwise their data will be provided by the condition generating network.
+            self.reset_parameters(seed)
             self.mat_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
                     for tensor in self.mat_like_params
                 ]
-            )
+            ).to(device)
             self.vec_like_params = torch.nn.ParameterList(
                 [
                     torch.nn.Parameter(tensor, requires_grad=True)
                     for tensor in self.vec_like_params
                 ]
-            )
+            ).to(device)
+
+    def reset_parameters(self, seed=None):
+        if self.is_conditional:
+            with torch.no_grad():
+                if isinstance(self.conditional_net, torch.nn.Sequential):
+                    for layer in self.conditional_net:
+                        if list(layer.parameters()):
+                            # true if the layer has any parameters (e.g. false for a ReLu)
+                            layer.reset_parameters()
+                else:
+                    # in case the net is external we expect it to have a reset parameters method.
+                    self.conditional_net.reset_parameters()
+        else:
+            self._reset_conditional_parameters(seed)
+
+    def _reset_conditional_parameters(self, seed=None):
+        if seed is not None:
+            torch.manual_seed(seed)
+        with torch.no_grad():
+            for mat in self.mat_like_params:
+                mat.normal_(mean=0, std=1)
+            # vec-like params
+            self.bias2.normal_(mean=0, std=1)
+            self.eps.fill_(value=1)
+            self.alpha.fill_(value=0)
 
     @property
     def mat1(self):
@@ -103,12 +135,12 @@ class CouplingBase(torch.nn.Module, ABC):
         self,
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
-        rev: bool = False,
+        reverse: bool = False,
     ):
         if self.is_conditional:
             self.set_conditional_params(condition)
 
-        if not rev:
+        if not reverse:
             self.log_jacobian_cache = torch.log(self.transform_deriv(x))
             return self.transform(x)
         else:
@@ -130,7 +162,7 @@ class CouplingBase(torch.nn.Module, ABC):
         """
         yn = y  # * torch.exp(-self.alpha) - self.bias2
         with torch.no_grad():
-            for i in range(nr_iters-1):
+            for i in range(nr_iters - 1):
                 yn = yn - (self.transform(yn) - y) / self.transform_deriv(yn)
         return yn - (self.transform(yn) - y) / self.transform_deriv(yn)
 
@@ -250,20 +282,29 @@ class CouplingGeneral(CouplingBase):
         )
 
 
-class cINN(torch.nn.Module):
+class CINN(torch.nn.Module):
     def __init__(
         self,
         dim: int,
         dim_condition,
         nr_blocks: int = 3,
         nr_layers: int = 16,
+        normalize_forward: bool = True,
         conditional_net: Optional[torch.nn.Module] = None,
-        device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu"
+        seed=None,
+        device: Union[str, torch.device] = "cuda"
+        if torch.cuda.is_available()
+        else "cpu",
     ):
         super().__init__()
         self.nr_blocks = nr_blocks
+
+        # whether we pass through the network in the forward or backward direction for normalizing.
+        self.normalize_forward = normalize_forward
+
         if conditional_net is not None:
             conditional_net = conditional_net.to(device)
+
         self.blocks = torch.nn.ModuleList([])
         for i in range(nr_blocks):
             self.blocks.append(
@@ -272,7 +313,8 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
-                    device=device
+                    seed=seed,
+                    device=device,
                 )
             )
             self.blocks.append(
@@ -281,7 +323,8 @@ class cINN(torch.nn.Module):
                     nr_layers=nr_layers,
                     dim_condition=dim_condition,
                     conditional_net=conditional_net,
-                    device=device
+                    seed=seed,
+                    device=device,
                 )
             )
         self.log_jacobian_cache = torch.zeros(dim)
@@ -290,16 +333,44 @@ class cINN(torch.nn.Module):
         self,
         x: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
-        rev: bool = False,
+        reverse: bool = False,
     ):
         self.log_jacobian_cache = 0.0
 
-        block_iter = self.blocks[::-1] if rev else self.blocks
+        block_iter = self.blocks[::-1] if reverse else self.blocks
         for block in block_iter:
-            x = block(x=x, condition=condition, rev=rev)
+            x = block(x=x, condition=condition, reverse=reverse)
             self.log_jacobian_cache += block.jacobian()
 
         return x
+
+    def normalizing_flow(
+        self, target: torch.Tensor, condition: Optional[torch.Tensor] = None,
+    ):
+        """
+        Transport the incoming target samples `x` under condition `condition` to the gauss distribution.
+        This is referred to as the normalizing flow direction.
+
+        Notes
+        -----
+        Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
+        in the parameter `normalize_forward`.
+        """
+        return self(target, condition=condition, reverse=not self.normalize_forward)
+
+    def generating_flow(
+        self, normals: torch.Tensor, condition: Optional[torch.Tensor] = None,
+    ):
+        """
+        Transport the incoming gaussian samples `x` under condition `condition` to the target distribution.
+        This is referred to as the generating flow direction.
+
+        Notes
+        -----
+        Whether normalizing is the forward pass or the inverse pass through the flow architecture is defined
+        in the parameter `normalize_forward`.
+        """
+        return self(normals, condition=condition, reverse=self.normalize_forward)
 
     def jacobian(self, x: Optional[torch.Tensor], rev: bool = False):
         if x is None:
@@ -309,164 +380,79 @@ class cINN(torch.nn.Module):
                 self, x, dim_in=1, dim_out=1, device=self.device, rev=rev
             )
 
-
-class CN(torch.nn.Module):
-    def __init__(self, n_blocks=1, n_dim=1, ls=16, n_condim=0, subnet_constructor=None):
-        super().__init__()
-        self.n_blocks = n_blocks
-        mods = []
-        for i in range(n_blocks):
-            # mods.append(GlowLikeCouplingBlock(dims_in=n_dim, subnet_constructor=subnet_constructor, net=PfndTanh))
-            mods.append(
-                GlowLikeCouplingBlock(
-                    dims_in=n_dim,
-                    subnet_constructor=subnet_constructor,
-                    net=CouplingMonotone,
-                )
-            )
-        self.blocks = torch.nn.ModuleList(mods)
-        self.log_jacobian = torch.zeros(n_dim)
-
-    def forward(self, x, y=None, rev=False):
-        self.log_jacobian = 0.0
-        if not rev:
-            for block in self.blocks:
-                x = block.forward(x, y)
-                self.log_jacobian += block.jacobian(x)
-            return x
-        else:
-            for block in self.blocks[::-1]:
-                x = block.forward(x, y, rev=True)
-                self.log_jacobian += block.jacobian(x)
-            return x
-
-    def jacobian(self, x):
-        return self.log_jacobian
+    def reset_parameters(self):
+        for block in self.blocks:
+            block.reset_parameters()
 
 
-class GlowLikeCouplingBlock(torch.nn.Module):
+class CINNFC(torch.nn.Module, Assignment):
     def __init__(
         self,
-        dims_in,
-        dims_c=[],
-        subnet_constructor=None,
-        clamp=5.0,
-        net=CouplingMonotone,
+        dim_in: int,
+        nr_layers: int = 0,
+        nr_blocks: int = 1,
+        strength: float = 0.0,
+        seed=None,
+        device=None,
+        **kwargs,
     ):
         super().__init__()
-        # channels = dims_in[0][0]
-        # self.ndims = len(dims_in[0])
-        channels = dims_in
-        self.split_len1 = channels // 2
-        self.split_len2 = channels - channels // 2
-        self.log_jacobian = torch.tensor([0])
-        self.clamp = clamp
-
-        self.conditional = len(dims_c) > 0
-        condition_length = sum([dims_c[i][0] for i in range(len(dims_c))])
-
-        self.s1 = net(
-            dim=self.split_len2,
-            ls=100,
-            subnet_constructor=subnet_constructor,
-            n_condim=self.split_len1 + condition_length,
-        )
-        self.s2 = net(
-            dim=self.split_len1,
-            ls=100,
-            subnet_constructor=subnet_constructor,
-            n_condim=self.split_len2 + condition_length,
+        Assignment.__init__(self)
+        self.nr_layers = nr_layers
+        self.dim_in = dim_in - 1
+        self.strength = strength
+        self.device = device
+        # -1 bc additive noise
+        self.cinn = CINN(
+            dim=dim_in - 1,
+            dim_condition=0,
+            nr_layers=nr_layers,
+            nr_blocks=nr_blocks,
+            seed=seed,
+            device="cuda",
         )
 
-    def forward(self, x, c=[], rev=False):
-        x1, x2 = (x[:, : self.split_len1], x[:, self.split_len1 :])
-
-        if not rev:
-            y1 = self.s1(x1, torch.cat([x2, *c], 1) if self.conditional else x2)
-            y2 = self.s2.forward(
-                x2, torch.cat([y1.detach(), *c], 1) if self.conditional else y1.detach()
+    def forward(self, *args, **kwargs):
+        with torch.no_grad():
+            noise = (
+                torch.from_numpy(np.array(list(args), dtype=np.float32).T)
+                .to(self.device)
+                .reshape(-1, 1)
             )
-            self.log_jacobian = torch.cat(
-                (self.s1.log_jacobian, self.s2.log_jacobian), dim=1
-            )
-
-        else:  # names of x and y are swapped!
-            y2 = self.s2.forward(
-                x2, torch.cat([x1, *c], 1) if self.conditional else x1, rev=True
-            )
-            y1 = self.s1(
-                x1, torch.cat([y2, *c], 1) if self.conditional else y2, rev=True
+            variables = (
+                torch.from_numpy(np.array(list(kwargs.values()), dtype=np.float32).T)
+                .squeeze(0)
+                .to(self.device)
+                .reshape(noise.shape[0], -1)
             )
 
-            self.log_jacobian = torch.cat(
-                (self.s1.log_jacobian, self.s2.log_jacobian), dim=1
-            )
-        return torch.cat((y1, y2), 1)
+            x = variables
+            #             print(noise.shape)
+            if self.dim_in > 0:
+                base = torch.cat((noise, variables), dim=1).to(self.device)
+            else:
+                base = noise
 
-    def jacobian(self, x, c=[], rev=False):
-        return self.log_jacobian
+            #             print("Baseshape", base.shape)
 
-    def output_dims(self, input_dims):
-        return input_dims
+            if self.dim_in == 0:
+                nonlin_part = noise
+            else:
+                ev = self.cinn(x)[:, 0].reshape(-1, 1)
+                #                 print("EV", ev.shape)
+                #                 print("NOise", noise.shape)
+                nonlin_part = ev + noise
 
+            #             print("nonlin", nonlin_part.shape)
 
-class bignet(torch.nn.Module):
-    def __init__(
-        self, n_dim=3, n_dimcon=0, n_blocks=1, ls=32, net=cINN, subnet_constructor=None
-    ):
-        super(bignet, self).__init__()
-        self.con = n_dimcon > 0
-        self.nets = []
-        self.n_dim = n_dim
-        self.n_dimcon = n_dimcon
-        self.log_jacobian = 0
-        for i in range(n_dim):
-            self.nets.append(
-                net(
-                    n_dim=1,
-                    ls=ls,
-                    n_condim=i + n_dimcon,
-                    n_blocks=n_blocks,
-                    subnet_constructor=subnet_constructor,
-                )
-            )
-        self.nets = torch.nn.ModuleList(self.nets)
+            base_sum = torch.sum(base, dim=1).view(-1, 1)
 
-    def forward(self, x, y=None, rev=False):
-        z = torch.zeros_like(x)
-        # baaaaad
-        if y is None:
-            y = torch.zeros_like(x[:, :1])
-        if self.con:
-            data = torch.cat((y, x), dim=1)
-        else:
-            data = x
-        self.log_jacobian = 0
-        z[:, 0] = (
-            self.nets[0]
-            .forward(x=data[:, self.n_dimcon].unsqueeze(1), y=y, rev=rev)
-            .squeeze()
-        )
-        self.log_jacobian += self.nets[0].log_jacobian
-        for i in range(1, self.n_dim):
-            if rev:
-                if self.con:
-                    data[:, : self.n_dimcon + i] = torch.cat((y, z[:, :i]), dim=1)
-                else:
-                    data[:, :i] = z[:, :i]
-            z[:, i] = (
-                self.nets[i]
-                .forward(
-                    x=data[:, self.n_dimcon + i].unsqueeze(1),
-                    y=data[:, : self.n_dimcon + i],
-                    rev=rev,
-                )
-                .squeeze()
-            )
-            self.log_jacobian = torch.cat(
-                (self.log_jacobian, self.nets[i].log_jacobian), dim=1
-            )
-        return z
+            x = nonlin_part * self.strength + (1 - self.strength) * base_sum
 
-    def jacobian(self, x):
-        return torch.sum(self.log_jacobian, dim=1)
+            return x.cpu().numpy().reshape(-1)
+
+    def __len__(self):
+        raise 2
+
+    def function_str(self, variable_names: Optional[Collection[str]] = None):
+        return f"CINN({', '.join(variable_names)})"
